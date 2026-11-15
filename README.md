@@ -2,4 +2,4 @@
 
 ## Know before it hits.
 
-Silver Skies is a suite of weather forecasting, and radar applications.
+Silver Skies is a suite of weather forecasting and radar applications.
