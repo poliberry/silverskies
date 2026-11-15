@@ -1,0 +1,32 @@
+[package]
+name = "silverskies"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Silver Skies — a simple, calm weather forecast app with search, summaries, radar and alerts."
+default-run = "silverskies"
+
+[[bin]]
+name = "silverskies"
+path = "src/main.rs"
+
+[dependencies]
+ss-core.workspace = true
+ss-net.workspace = true
+ss-store.workspace = true
+ss-map.workspace = true
+ss-assets.workspace = true
+egui.workspace = true
+eframe.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+chrono-tz.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+parking_lot.workspace = true
+crossbeam-channel.workspace = true
+uuid.workspace = true

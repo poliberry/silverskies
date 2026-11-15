@@ -529,6 +529,9 @@ pub struct PolygonLayer {
     pub name: String,
     pub items: Vec<PolyItem>,
     pub visible: bool,
+    /// Draw item labels only while the pointer is over that item (default).
+    /// When false every label is drawn at its polygon's centre.
+    pub labels_on_hover: bool,
     tri_cache: HashMap<String, TriData>,
 }
 
@@ -538,6 +541,7 @@ impl PolygonLayer {
             name: name.into(),
             items: Vec::new(),
             visible: true,
+            labels_on_hover: true,
             tri_cache: HashMap::new(),
         }
     }
@@ -582,6 +586,19 @@ impl Layer for PolygonLayer {
         let vis = vp.visible_bbox(ctx.rect);
         let pulse = (ctx.time * 4.0).sin() as f32; // -1..1
         let mut any_pulse = false;
+        // Items under the pointer (hover labels), topmost first.
+        let hover_pos = painter
+            .ctx()
+            .pointer_hover_pos()
+            .filter(|p| ctx.rect.contains(*p) && painter.clip_rect().contains(*p));
+        let hovered: Vec<(String, String, Color32)> = match (self.labels_on_hover, hover_pos) {
+            (true, Some(pos)) => self
+                .hit_test(pos, vp, ctx.rect)
+                .into_iter()
+                .filter_map(|it| Some((it.id.clone(), it.label.clone()?, it.stroke)))
+                .collect(),
+            _ => Vec::new(),
+        };
         for it in &self.items {
             let Some(bb) = geometry_bbox(&it.geometry) else {
                 continue;
@@ -644,7 +661,7 @@ impl Layer for PolygonLayer {
                 }
                 Geometry::Other => {}
             }
-            if let Some(label) = &it.label {
+            if let (false, Some(label)) = (self.labels_on_hover, &it.label) {
                 let c = vp.screen_from_lonlat(
                     (bb.west + bb.east) / 2.0,
                     (bb.south + bb.north) / 2.0,
@@ -661,11 +678,64 @@ impl Layer for PolygonLayer {
                 }
             }
         }
+        if let Some(pos) = hover_pos {
+            draw_hover_labels(painter, pos, &hovered, ctx.dark);
+        }
         if any_pulse {
             painter
                 .ctx()
                 .request_repaint_after(Duration::from_millis(33));
         }
+    }
+}
+
+/// Labels for the polygons under the pointer, stacked beside it on a
+/// readable backing (at most five, then "+N more").
+fn draw_hover_labels(
+    painter: &Painter,
+    pos: Pos2,
+    items: &[(String, String, Color32)],
+    dark: bool,
+) {
+    if items.is_empty() {
+        return;
+    }
+    let bg = if dark {
+        Color32::from_black_alpha(220)
+    } else {
+        Color32::from_white_alpha(235)
+    };
+    let mut y = pos.y + 14.0;
+    let shown = items.len().min(5);
+    let mut lines: Vec<(String, Color32)> = items[..shown]
+        .iter()
+        .map(|(_, l, c)| (l.clone(), *c))
+        .collect();
+    if items.len() > shown {
+        let more = if dark {
+            Color32::LIGHT_GRAY
+        } else {
+            Color32::DARK_GRAY
+        };
+        lines.push((format!("+{} more", items.len() - shown), more));
+    }
+    for (text, color) in lines {
+        let galley = painter.layout_no_wrap(text, FontId::monospace(11.0), color);
+        let size = galley.size() + egui::vec2(10.0, 4.0);
+        let mut min = Pos2::new(pos.x + 14.0, y);
+        // Keep it on screen: flip left of the pointer near the right edge.
+        if min.x + size.x > painter.clip_rect().right() {
+            min.x = pos.x - 14.0 - size.x;
+        }
+        let r = Rect::from_min_size(min, size);
+        painter.rect_filled(r, 0.0, bg);
+        painter.rect_filled(
+            Rect::from_min_size(r.min, egui::vec2(3.0, r.height())),
+            0.0,
+            color,
+        );
+        painter.galley(r.min + egui::vec2(6.0, 2.0), galley, color);
+        y += size.y + 2.0;
     }
 }
 
@@ -939,7 +1009,7 @@ impl Layer for RangeRingLayer {
             .viewport
             .screen_from_lonlat(self.lon, self.lat, ctx.rect);
         let r = (self.radius_m / ctx.viewport.meters_per_px(self.lat)) as f32;
-        if !r.is_finite() || r < 1.0 || r > 20_000.0 {
+        if !r.is_finite() || !(1.0..=20_000.0).contains(&r) {
             return;
         }
         painter.circle(

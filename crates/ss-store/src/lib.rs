@@ -12,6 +12,10 @@ pub const LOCATIONS_FILE: &str = "locations.json";
 pub const SESSION_FILE: &str = "session.json";
 pub const DEDUPE_FILE: &str = "dedupe.json";
 
+/// Config directory names of the two apps.
+pub const APP_SILVER_SKIES: &str = "Silver Skies";
+pub const APP_PRO: &str = "Silver Skies Pro";
+
 /// Default dedupe retention: 7 days.
 pub const DEFAULT_DEDUPE_MAX_AGE_SECS: i64 = 7 * 24 * 60 * 60;
 
@@ -81,9 +85,35 @@ pub struct Store {
 impl Store {
     /// Open the per-user config directory (`.../Silver Skies/config`), creating it.
     pub fn open() -> Result<Store> {
-        let dirs = directories::ProjectDirs::from("com", "silverskies", "Silver Skies")
+        Self::open_app(APP_SILVER_SKIES)
+    }
+
+    /// Open the config directory of a named app (`.../<app>/config`). Each
+    /// app in the suite keeps its own files.
+    pub fn open_app(app: &str) -> Result<Store> {
+        Self::with_dir(Self::app_dir(app)?)
+    }
+
+    /// The config directory an app uses, without creating it.
+    pub fn app_dir(app: &str) -> Result<PathBuf> {
+        let dirs = directories::ProjectDirs::from("com", "silverskies", app)
             .ok_or(StoreError::NoConfigDir)?;
-        Self::with_dir(dirs.config_dir().to_path_buf())
+        Ok(dirs.config_dir().to_path_buf())
+    }
+
+    /// Copy config, locations and session from another app's directory when
+    /// this one has none yet (first run of Silver Skies Pro after the split
+    /// keeps the user's setup). Never overwrites existing files.
+    pub fn import_from(&self, other_dir: &Path) {
+        for name in [CONFIG_FILE, LOCATIONS_FILE, SESSION_FILE] {
+            let (src, dst) = (other_dir.join(name), self.path(name));
+            if src.is_file() && !dst.exists() {
+                match std::fs::copy(&src, &dst) {
+                    Ok(_) => tracing::info!("imported {name} from {}", other_dir.display()),
+                    Err(e) => tracing::warn!("import of {name} failed: {e}"),
+                }
+            }
+        }
     }
 
     /// Use an explicit directory (tests); created if missing.
@@ -197,6 +227,35 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn import_copies_missing_files_only() {
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        let from = Store::with_dir(a.path().to_path_buf()).unwrap();
+        let to = Store::with_dir(b.path().to_path_buf()).unwrap();
+        let c = Config {
+            auto_refresh_minutes: 42,
+            ..Default::default()
+        };
+        from.save_config(&c).unwrap();
+        from.save_locations(&LocationsFile::default()).unwrap();
+        let mine = Config {
+            auto_refresh_minutes: 7,
+            ..Default::default()
+        };
+        to.save_config(&mine).unwrap();
+        to.import_from(a.path());
+        assert_eq!(
+            to.load_config().auto_refresh_minutes,
+            7,
+            "existing file kept"
+        );
+        assert!(
+            b.path().join(LOCATIONS_FILE).is_file(),
+            "missing file imported"
+        );
+    }
     use ss_core::types::{SavedLocation, UnitPref};
 
     fn store() -> (tempfile::TempDir, Store) {

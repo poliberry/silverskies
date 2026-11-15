@@ -1,0 +1,11 @@
+[package]
+name = "render-icons"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Renders each app's brand iconmark SVG into the square PNG app icons used by the window, installers and bundles."
+
+[dependencies]
+resvg = { workspace = true, features = ["raster-images"] }
+anyhow.workspace = true

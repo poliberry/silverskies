@@ -1,7 +1,8 @@
 name: Release
 
 # Push a tag matching v* (keep it in sync with the workspace version in
-# Cargo.toml) to build real installers for all three platforms and publish
+# Cargo.toml) to build real installers of both apps — Silver Skies and
+# Silver Skies Pro — for all three platforms and publish
 # (or update) the GitHub Release for that tag, with notes generated from
 # every commit since the previous release. `workflow_dispatch` builds the
 # same matrix and uploads the installers as workflow artifacts instead, so
@@ -21,19 +22,33 @@ concurrency:
 
 jobs:
   build:
+    name: build (${{ matrix.app.name }}, ${{ matrix.platform.asset_key }})
     strategy:
       fail-fast: false
       matrix:
-        include:
+        # Every app is built for every platform.
+        app:
+          - name: Silver Skies
+            dir: apps/silverskies
+            package: silverskies
+            bin: silverskies
+            file: SilverSkies
+            deb_desc: Calm weather forecast with search, summaries, radar and alerts
+          - name: Silver Skies Pro
+            dir: apps/pro
+            package: silverskies-pro
+            bin: silverskies-pro
+            file: SilverSkiesPro
+            deb_desc: Composite forecast, meteorology and radar workstation
+        platform:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             asset_key: windows
-            bin: silverskies.exe
+            exe: ".exe"
           - os: macos-latest
             target: aarch64-apple-darwin
             asset_key: macos-arm64
             dmg_arch: arm64
-            bin: silverskies
           # Both macOS architectures build on the same (Apple Silicon)
           # runner: rustup cross-targets x86_64 with no extra setup, which
           # avoids depending on the retired Intel-only macos-13 image.
@@ -41,20 +56,26 @@ jobs:
             target: x86_64-apple-darwin
             asset_key: macos-x86_64
             dmg_arch: x86_64
-            bin: silverskies
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             asset_key: linux
-            bin: silverskies
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.platform.os }}
+    env:
+      APP_NAME: ${{ matrix.app.name }}
+      APP_DIR: ${{ matrix.app.dir }}
+      APP_BIN: ${{ matrix.app.bin }}
+      APP_FILE: ${{ matrix.app.file }}
+      TARGET: ${{ matrix.platform.target }}
     steps:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: ${{ matrix.platform.target }}
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.app.package }}
 
       # eframe (glow/winit) and rodio/tts need these system libraries on Linux.
       - name: Install Linux build dependencies
@@ -80,7 +101,7 @@ jobs:
           fi
 
       - name: Build
-        run: cargo build --release --locked --target ${{ matrix.target }} -p silverskies
+        run: cargo build --release --locked --target ${{ matrix.platform.target }} -p ${{ matrix.app.package }}
 
       # --- Windows: portable zip + Inno Setup installer ---------------------
       - name: Package portable zip (Windows)
@@ -88,9 +109,9 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force stage | Out-Null
-          Copy-Item target/${{ matrix.target }}/release/${{ matrix.bin }} stage/
-          Copy-Item README.md stage/
-          Compress-Archive -Path stage/* -DestinationPath "SilverSkies-$env:VERSION-windows-x86_64.zip"
+          Copy-Item "target/$env:TARGET/release/$env:APP_BIN.exe" stage/
+          Copy-Item "$env:APP_DIR/README.md" stage/
+          Compress-Archive -Path stage/* -DestinationPath "$env:APP_FILE-$env:VERSION-windows-x86_64.zip"
 
       - name: Install Inno Setup (Windows)
         if: runner.os == 'Windows'
@@ -100,45 +121,44 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppVersion=$env:VERSION /O"$PWD" /F"SilverSkies-Setup-$env:VERSION" dist\windows\installer.iss
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppVersion=$env:VERSION /O"$PWD" /F"$env:APP_FILE-Setup-$env:VERSION" "$env:APP_DIR\dist\windows\installer.iss"
 
       # --- macOS: .app bundle, .dmg and .zip --------------------------------
       - name: Package app bundle and disk image (macOS)
         if: runner.os == 'macOS'
         run: |
           set -euo pipefail
-          APP="dist/Silver Skies.app"
+          APP="build/$APP_NAME.app"
+          ICON="$APP_DIR/assets/icon-dark.png"
           rm -rf "$APP" AppIcon.iconset
           mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" AppIcon.iconset
-          cp "target/${{ matrix.target }}/release/${{ matrix.bin }}" "$APP/Contents/MacOS/silverskies"
-          cp dist/macos/Info.plist "$APP/Contents/Info.plist"
-          chmod +x "$APP/Contents/MacOS/silverskies"
+          cp "target/$TARGET/release/$APP_BIN" "$APP/Contents/MacOS/$APP_BIN"
+          cp "$APP_DIR/dist/macos/Info.plist" "$APP/Contents/Info.plist"
+          chmod +x "$APP/Contents/MacOS/$APP_BIN"
           /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist"
           /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" "$APP/Contents/Info.plist"
           # Icon set from the 512px source (no 1024px @2x available).
-          sips -z 16 16     assets/icon-dark.png --out AppIcon.iconset/icon_16x16.png >/dev/null
-          sips -z 32 32     assets/icon-dark.png --out AppIcon.iconset/icon_16x16@2x.png >/dev/null
-          sips -z 32 32     assets/icon-dark.png --out AppIcon.iconset/icon_32x32.png >/dev/null
-          sips -z 64 64     assets/icon-dark.png --out AppIcon.iconset/icon_32x32@2x.png >/dev/null
-          sips -z 128 128   assets/icon-dark.png --out AppIcon.iconset/icon_128x128.png >/dev/null
-          sips -z 256 256   assets/icon-dark.png --out AppIcon.iconset/icon_128x128@2x.png >/dev/null
-          sips -z 256 256   assets/icon-dark.png --out AppIcon.iconset/icon_256x256.png >/dev/null
-          sips -z 512 512   assets/icon-dark.png --out AppIcon.iconset/icon_256x256@2x.png >/dev/null
-          sips -z 512 512   assets/icon-dark.png --out AppIcon.iconset/icon_512x512.png >/dev/null
+          for spec in 16:16x16 32:16x16@2x 32:32x32 64:32x32@2x 128:128x128 256:128x128@2x 256:256x256 512:256x256@2x 512:512x512; do
+            px="${spec%%:*}"; name="${spec#*:}"
+            sips -z "$px" "$px" "$ICON" --out "AppIcon.iconset/icon_${name}.png" >/dev/null
+          done
           iconutil -c icns AppIcon.iconset -o "$APP/Contents/Resources/AppIcon.icns"
-          DMG="SilverSkies-${VERSION}-macos-${{ matrix.dmg_arch }}.dmg"
-          ZIP="SilverSkies-${VERSION}-macos-${{ matrix.dmg_arch }}.zip"
-          hdiutil create -volname "Silver Skies" -srcfolder "$APP" -ov -format UDZO "$DMG"
+          DMG="$APP_FILE-${VERSION}-macos-${{ matrix.platform.dmg_arch }}.dmg"
+          ZIP="$APP_FILE-${VERSION}-macos-${{ matrix.platform.dmg_arch }}.zip"
+          hdiutil create -volname "$APP_NAME" -srcfolder "$APP" -ov -format UDZO "$DMG"
           ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
 
       # --- Linux: AppImage + .deb --------------------------------------------
       - name: Build AppImage and .deb (Linux)
         if: runner.os == 'Linux'
+        env:
+          DEB_DESC: ${{ matrix.app.deb_desc }}
         run: |
           set -euo pipefail
-          BIN="target/${{ matrix.target }}/release/${{ matrix.bin }}"
+          BIN="target/$TARGET/release/$APP_BIN"
+          DESKTOP="$APP_DIR/dist/linux/$APP_BIN.desktop"
           mkdir -p stage AppDir
-          cp assets/icon-dark.png stage/silverskies.png
+          cp "$APP_DIR/assets/icon-dark.png" "stage/$APP_BIN.png"
           # linuxdeploy has no FUSE on these runners: extract and run AppRun directly.
           echo "Downloading linuxdeploy..."
           wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage -O linuxdeploy.AppImage
@@ -149,39 +169,37 @@ jobs:
           ./linuxdeploy-plugin-appimage.AppImage --appimage-extract >/dev/null && mv squashfs-root ld-plugin-root
           export PATH="$PWD/ld-plugin-root/usr/bin:$PATH"
           VERSION="$VERSION" ./ld-root/AppRun --appdir AppDir \
-            -e "$BIN" -d dist/linux/silverskies.desktop -i stage/silverskies.png \
+            -e "$BIN" -d "$DESKTOP" -i "stage/$APP_BIN.png" \
             --output appimage
           BUILT="$(ls ./*.AppImage | grep -vi linuxdeploy | head -n 1)"
-          mv "$BUILT" "SilverSkies-${VERSION}-x86_64.AppImage"
+          mv "$BUILT" "$APP_FILE-${VERSION}-x86_64.AppImage"
           # Hand-rolled .deb (no extra tooling needed on the runner).
           PKG=deb-root
           mkdir -p "$PKG/DEBIAN" "$PKG/usr/bin" "$PKG/usr/share/applications" \
             "$PKG/usr/share/icons/hicolor/512x512/apps"
-          cp "$BIN" "$PKG/usr/bin/silverskies"
-          cp dist/linux/silverskies.desktop "$PKG/usr/share/applications/"
-          cp assets/icon-dark.png "$PKG/usr/share/icons/hicolor/512x512/apps/silverskies.png"
+          cp "$BIN" "$PKG/usr/bin/$APP_BIN"
+          cp "$DESKTOP" "$PKG/usr/share/applications/"
+          cp "$APP_DIR/assets/icon-dark.png" "$PKG/usr/share/icons/hicolor/512x512/apps/$APP_BIN.png"
           cat > "$PKG/DEBIAN/control" <<EOF
-          Package: silverskies
+          Package: $APP_BIN
           Version: $VERSION
           Architecture: amd64
           Maintainer: Silver Skies <e993372@staff.poliberry.com>
-          Description: Blazing-fast terminal-styled radar and weather desktop app
-           Silver Skies renders a native GPU window with a monospace, boxed,
-           terminal aesthetic and an embedded command line that drives
-           locations, layout, radar layers, alerts and theming.
+          Description: $DEB_DESC
+           $APP_NAME, part of the Silver Skies suite of weather apps.
           EOF
-          dpkg-deb --build "$PKG" "silverskies_${VERSION}_amd64.deb"
+          dpkg-deb --build "$PKG" "${APP_BIN}_${VERSION}_amd64.deb"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: release-${{ matrix.asset_key }}
+          name: release-${{ matrix.app.package }}-${{ matrix.platform.asset_key }}
           path: |
-            SilverSkies-*.exe
-            SilverSkies-*.zip
-            SilverSkies-*.dmg
-            SilverSkies-*.AppImage
-            silverskies_*.deb
+            ${{ matrix.app.file }}-*.exe
+            ${{ matrix.app.file }}-*.zip
+            ${{ matrix.app.file }}-*.dmg
+            ${{ matrix.app.file }}-*.AppImage
+            ${{ matrix.app.bin }}_*.deb
           if-no-files-found: error
 
   release:
@@ -246,7 +264,7 @@ jobs:
               cat changelog-section.md >> "$NOTES_TMP"
             else
               {
-                echo "## Silver Skies $VERSION"
+                echo "## Silver Skies & Silver Skies Pro $VERSION"
                 echo ""
                 cat changelog-section.md
               } > "$NOTES_TMP"
@@ -255,11 +273,11 @@ jobs:
             gh release upload "$TAG" release-assets/* --clobber
           else
             {
-              echo "## Silver Skies $VERSION"
+              echo "## Silver Skies & Silver Skies Pro $VERSION"
               echo ""
               cat changelog-section.md
             } > "$NOTES_TMP"
             gh release create "$TAG" release-assets/* \
-              --title "Silver Skies $VERSION" --notes-file "$NOTES_TMP" --latest
+              --title "Silver Skies & Silver Skies Pro $VERSION" --notes-file "$NOTES_TMP" --latest
           fi
           echo "Published ${TAG} with $(ls release-assets | wc -l) assets."

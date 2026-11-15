@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Silver Skies Pro
+Comment=Composite forecast, meteorology and radar workstation
+Exec=silverskies-pro
+Icon=silverskies-pro
+Terminal=false
+Type=Application
+Categories=Science;Utility;
+StartupWMClass=silverskies-pro

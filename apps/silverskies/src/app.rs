@@ -1,0 +1,982 @@
+//! Application state, background events and top-level layout.
+
+use std::collections::{HashMap, HashSet};
+use std::time::{Duration, Instant};
+
+use chrono::NaiveDateTime;
+use crossbeam_channel::Receiver;
+use egui::{Align, CornerRadius, Layout, Margin, RichText, Ui};
+use ss_core::geo::haversine_km;
+use ss_core::theme::{resolve_palette, Palette};
+use ss_core::weather::wmo::accent_for;
+use ss_core::{
+    Alert, Config, Location, LocationsFile, SavedLocation, UnitPref, Weather, WeatherMaps,
+};
+use ss_map::TileCache;
+use ss_net::Net;
+use ss_store::Store;
+
+use crate::ai::AiTask;
+use crate::prefs::Prefs;
+use crate::radar::Radar;
+use crate::search::{self, DayRef, Intent, Parsed, Topic};
+use crate::searchbar::SearchBar;
+use crate::summary;
+use crate::theme::{self, c32, c32a};
+use crate::worker::{Event, Worker};
+
+const MAPS_EVERY: Duration = Duration::from_secs(5 * 60);
+/// Treat a picked place this close to a saved one as the same place.
+const SAME_PLACE_KM: f64 = 3.0;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tab {
+    Forecast,
+    Radar,
+    Alerts,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum AiState {
+    Idle,
+    /// Waiting for the forecast before asking.
+    Waiting,
+    Loading(u64),
+    Done(String),
+    Failed(String),
+}
+
+/// A question the user asked in the search bar.
+#[derive(Debug, Clone)]
+pub struct Answer {
+    pub question: String,
+    pub location_id: String,
+    pub topic: Topic,
+    pub day: Option<DayRef>,
+    pub ai: AiState,
+}
+
+/// Something the UI asked for; applied after drawing.
+#[derive(Debug, Clone)]
+pub enum Action {
+    Select(String),
+    Remove(String),
+    AddPlace(Location),
+    Intent(Intent),
+    /// Free text submitted from the search bar.
+    Query(String),
+    AiSummary,
+    DismissAnswer,
+    FocusDay(Option<usize>),
+    Tab(Tab),
+    OpenSettings,
+}
+
+pub struct App {
+    ctx: egui::Context,
+    worker: Worker,
+    rx: Receiver<Event>,
+    store: Store,
+    pub config: Config,
+    pub locations: LocationsFile,
+    pub prefs: Prefs,
+    pub weather: HashMap<String, Weather>,
+    pub alerts: HashMap<String, Vec<Alert>>,
+    pub errors: HashMap<String, String>,
+    pub loading: HashSet<String>,
+    pub maps: Option<WeatherMaps>,
+    maps_at: Option<Instant>,
+    pub tab: Tab,
+    /// Scroll the forecast view to this section on the next frame.
+    pub scroll_to: Option<search::View>,
+    pub focus_day: Option<usize>,
+    search: SearchBar,
+    /// A submitted query waiting for its place to be geocoded.
+    pending_query: Option<(String, Parsed)>,
+    pub answer: Option<Answer>,
+    /// AI summary per location id.
+    pub ai_summary: HashMap<String, AiState>,
+    ai_seq: u64,
+    /// What each in-flight AI request is for: `Some(loc)` = summary, `None` = answer.
+    ai_targets: HashMap<u64, Option<String>>,
+    radar: Radar,
+    pub settings_open: bool,
+    pub palette: Palette,
+    last_system_dark: Option<bool>,
+    last_refresh: Option<Instant>,
+    pub locating: bool,
+    pub notice: Option<(String, Instant)>,
+    /// Locally generated alerts from Settings → Developer (never persisted).
+    pub demo_alerts: Vec<Alert>,
+}
+
+impl App {
+    pub fn new(
+        cc: &eframe::CreationContext<'_>,
+        rt: tokio::runtime::Handle,
+        store: Store,
+    ) -> anyhow::Result<App> {
+        let ctx = cc.egui_ctx.clone();
+        theme::install_fonts(&ctx);
+        let config = store.load_config();
+        let locations = store.load_locations();
+        let prefs = Prefs::load(&store);
+        let net = Net::new(&config.libre_wxr_host)?;
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let worker = Worker::new(rt.clone(), net, tx, ctx.clone());
+        let http = reqwest::Client::builder()
+            .user_agent(ss_net::USER_AGENT)
+            .build()?;
+        let tiles = TileCache::new(http, rt, Some(store.dir().join("tiles")), ctx.clone());
+        let palette = resolve_palette(&config, [0x7f, 0xb4, 0xff], true);
+        theme::apply_palette(&ctx, &palette);
+
+        let mut app = App {
+            ctx,
+            worker,
+            rx,
+            store,
+            config,
+            locations,
+            prefs,
+            weather: HashMap::new(),
+            alerts: HashMap::new(),
+            errors: HashMap::new(),
+            loading: HashSet::new(),
+            maps: None,
+            maps_at: None,
+            tab: Tab::Forecast,
+            scroll_to: None,
+            focus_day: None,
+            search: SearchBar::default(),
+            pending_query: None,
+            answer: None,
+            ai_summary: HashMap::new(),
+            ai_seq: 0,
+            ai_targets: HashMap::new(),
+            radar: Radar::new(tiles),
+            settings_open: false,
+            palette,
+            last_system_dark: None,
+            last_refresh: None,
+            locating: false,
+            notice: None,
+            demo_alerts: Vec::new(),
+        };
+        if app.locations.saved_locations.is_empty() {
+            app.locating = true;
+            app.worker.ip_locate();
+        } else if app.active().is_none() {
+            app.locations.active_location_id =
+                app.locations.saved_locations.first().map(|l| l.id.clone());
+        }
+        app.refresh_all();
+        Ok(app)
+    }
+
+    // ----- accessors ------------------------------------------------------
+
+    pub fn active(&self) -> Option<&SavedLocation> {
+        let id = self.locations.active_location_id.as_deref()?;
+        self.locations.saved_locations.iter().find(|l| l.id == id)
+    }
+
+    pub fn active_id(&self) -> Option<String> {
+        self.active().map(|l| l.id.clone())
+    }
+
+    pub fn active_weather(&self) -> Option<&Weather> {
+        self.weather
+            .get(self.locations.active_location_id.as_deref()?)
+    }
+
+    /// Alerts for the active place, with any demo alerts first.
+    pub fn active_alerts(&self) -> Vec<Alert> {
+        let real = self
+            .locations
+            .active_location_id
+            .as_deref()
+            .and_then(|id| self.alerts.get(id))
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        self.demo_alerts.iter().chain(real).cloned().collect()
+    }
+
+    /// "Now" in the forecast's own time zone (hourly times are local, no offset).
+    pub fn now_for(w: &Weather) -> NaiveDateTime {
+        match w.timezone.parse::<chrono_tz::Tz>() {
+            Ok(tz) => chrono::Utc::now().with_timezone(&tz).naive_local(),
+            Err(_) => chrono::Local::now().naive_local(),
+        }
+    }
+
+    // ----- persistence & refresh ---------------------------------------
+
+    fn save_locations(&self) {
+        if let Err(e) = self.store.save_locations(&self.locations) {
+            tracing::warn!("saving locations: {e}");
+        }
+    }
+
+    pub fn save_config(&self) {
+        if let Err(e) = self.store.save_config(&self.config) {
+            tracing::warn!("saving config: {e}");
+        }
+    }
+
+    pub fn save_prefs(&self) {
+        self.prefs.save(&self.store);
+    }
+
+    pub fn store_dir(&self) -> String {
+        self.store.dir().display().to_string()
+    }
+
+    fn refresh_location(&mut self, id: &str) {
+        let Some(l) = self.locations.saved_locations.iter().find(|l| l.id == id) else {
+            return;
+        };
+        self.loading.insert(l.id.clone());
+        self.worker.forecast(l.id.clone(), l.lat, l.lon);
+        self.worker.alerts(l.id.clone(), l.lat, l.lon);
+    }
+
+    pub fn refresh_all(&mut self) {
+        let ids: Vec<String> = self
+            .locations
+            .saved_locations
+            .iter()
+            .map(|l| l.id.clone())
+            .collect();
+        for id in ids {
+            self.refresh_location(&id);
+        }
+        self.worker.weather_maps();
+        self.maps_at = Some(Instant::now());
+        self.last_refresh = Some(Instant::now());
+    }
+
+    fn tick_timers(&mut self) {
+        // 0 = auto-refresh off (radar frames still update).
+        let every = match self.config.auto_refresh_minutes {
+            0 => Duration::from_secs(u64::MAX / 4),
+            m => Duration::from_secs(u64::from(m.max(5)) * 60),
+        };
+        if self.last_refresh.is_none_or(|t| t.elapsed() >= every) {
+            self.refresh_all();
+        } else if self.maps_at.is_none_or(|t| t.elapsed() >= MAPS_EVERY) {
+            self.worker.weather_maps();
+            self.maps_at = Some(Instant::now());
+        }
+        let next = every.saturating_sub(self.last_refresh.map(|t| t.elapsed()).unwrap_or_default());
+        self.ctx.request_repaint_after(next.min(MAPS_EVERY));
+    }
+
+    fn update_palette(&mut self) {
+        let system_dark = self
+            .ctx
+            .input(|i| i.raw.system_theme)
+            .map(|t| t == egui::Theme::Dark)
+            .unwrap_or(true);
+        if self.last_system_dark != Some(system_dark) {
+            self.last_system_dark = Some(system_dark);
+            self.ctx
+                .send_viewport_cmd(egui::ViewportCommand::Icon(Some(crate::app_icon(
+                    system_dark,
+                ))));
+        }
+        let accent = self
+            .active_weather()
+            .map(|w| {
+                accent_for(
+                    w.current.weather_code,
+                    w.current.is_day,
+                    w.current.temperature_c,
+                    w.current.wind_speed_kmh,
+                )
+            })
+            .unwrap_or([0x7f, 0xb4, 0xff]);
+        let p = resolve_palette(&self.config, accent, system_dark);
+        if p != self.palette {
+            self.palette = p;
+            theme::apply_palette(&self.ctx, &p);
+        }
+    }
+
+    // ----- places ---------------------------------------------------------
+
+    /// Select a place, adding it to the saved list unless one is already there.
+    pub fn add_place(&mut self, loc: Location) -> String {
+        if let Some(l) = self
+            .locations
+            .saved_locations
+            .iter()
+            .find(|l| haversine_km(l.lat, l.lon, loc.lat, loc.lon) < SAME_PLACE_KM)
+        {
+            let id = l.id.clone();
+            self.select(&id);
+            return id;
+        }
+        let id = uuid::Uuid::new_v4().to_string();
+        self.locations.saved_locations.push(SavedLocation {
+            id: id.clone(),
+            label: loc.label,
+            lat: loc.lat,
+            lon: loc.lon,
+            accu_weather_location_key: None,
+        });
+        self.select(&id);
+        self.refresh_location(&id);
+        id
+    }
+
+    pub fn select(&mut self, id: &str) {
+        if self.locations.active_location_id.as_deref() != Some(id) {
+            self.locations.active_location_id = Some(id.to_string());
+            self.focus_day = None;
+            self.save_locations();
+        }
+    }
+
+    fn remove(&mut self, id: &str) {
+        self.locations.saved_locations.retain(|l| l.id != id);
+        self.weather.remove(id);
+        self.alerts.remove(id);
+        self.ai_summary.remove(id);
+        if self.locations.active_location_id.as_deref() == Some(id) {
+            self.locations.active_location_id =
+                self.locations.saved_locations.first().map(|l| l.id.clone());
+        }
+        self.save_locations();
+    }
+
+    // ----- AI ---------------------------------------------------------------
+
+    fn digest_for(&self, id: &str) -> Option<String> {
+        let w = self.weather.get(id)?;
+        let l = self.locations.saved_locations.iter().find(|l| l.id == id)?;
+        let mut d = summary::forecast_digest(
+            w,
+            &l.label,
+            self.config.units,
+            self.config.time_format,
+            Self::now_for(w),
+        );
+        let alerts = self.alerts.get(id).map(Vec::as_slice).unwrap_or(&[]);
+        if alerts.is_empty() {
+            d.push_str("Active alerts: none\n");
+        } else {
+            d.push_str("Active alerts:\n");
+            for a in alerts.iter().take(5) {
+                d.push_str(&format!(
+                    "  {} ({}){}\n",
+                    a.display_event,
+                    a.severity.label(),
+                    a.headline
+                        .as_deref()
+                        .map(|h| format!(": {h}"))
+                        .unwrap_or_default()
+                ));
+            }
+        }
+        Some(d)
+    }
+
+    fn start_ai(&mut self, task: AiTask, target: Option<String>, loc_id: &str) -> Option<u64> {
+        let key = self.prefs.ai_key()?.to_string();
+        let digest = self.digest_for(loc_id)?;
+        self.ai_seq += 1;
+        let seq = self.ai_seq;
+        self.ai_targets.insert(seq, target);
+        self.worker
+            .ai(seq, key, self.prefs.model().to_string(), task, digest);
+        Some(seq)
+    }
+
+    pub fn request_ai_summary(&mut self) {
+        let Some(id) = self.active_id() else { return };
+        if self.prefs.ai_key().is_none() {
+            self.settings_open = true;
+            return;
+        }
+        let state = match self.start_ai(AiTask::Summarize, Some(id.clone()), &id) {
+            Some(seq) => AiState::Loading(seq),
+            None => AiState::Waiting,
+        };
+        self.ai_summary.insert(id, state);
+    }
+
+    fn ask_ai_for_answer(&mut self) {
+        let Some(a) = self.answer.clone() else { return };
+        if self.prefs.ai_key().is_none() || !matches!(a.ai, AiState::Waiting) {
+            return;
+        }
+        if let Some(seq) = self.start_ai(AiTask::Ask(a.question.clone()), None, &a.location_id) {
+            if let Some(ans) = &mut self.answer {
+                ans.ai = AiState::Loading(seq);
+            }
+        }
+    }
+
+    // ----- queries ------------------------------------------------------------
+
+    fn submit_query(&mut self, text: String) {
+        let parsed = search::parse(&text);
+        if let Some(place) = parsed.place.clone() {
+            // An exact-ish saved place wins without a network round trip.
+            let best = search::rank(
+                &place,
+                self.locations
+                    .saved_locations
+                    .iter()
+                    .map(|l| l.label.as_str()),
+            )
+            .into_iter()
+            .next();
+            let saved = best.and_then(|(i, s)| {
+                let label = &self.locations.saved_locations[i].label;
+                let head = label.split(',').next().unwrap_or(label).trim();
+                (s >= 60 && head.eq_ignore_ascii_case(place.trim()))
+                    .then(|| self.locations.saved_locations[i].id.clone())
+            });
+            match saved {
+                Some(id) => {
+                    self.select(&id);
+                    self.finish_query(text, parsed);
+                }
+                None => {
+                    self.worker.geocode(place.clone());
+                    self.pending_query = Some((text, parsed));
+                    self.notice = Some((format!("Looking up “{place}”…"), Instant::now()));
+                }
+            }
+        } else {
+            self.finish_query(text, parsed);
+        }
+    }
+
+    /// The query's place (if any) is now active; apply day / question parts.
+    fn finish_query(&mut self, text: String, parsed: Parsed) {
+        self.tab = Tab::Forecast;
+        if let Some(day) = parsed.day {
+            self.focus_day = self
+                .active_weather()
+                .and_then(|w| summary::day_index(&w.daily, day))
+                .or(match day {
+                    DayRef::Today => Some(0),
+                    DayRef::Tomorrow => Some(1),
+                    DayRef::Weekday(_) => None,
+                });
+            if self.focus_day.is_some_and(|i| i > 0) && parsed.topic.is_none() {
+                self.scroll_to = Some(search::View::Week);
+            }
+        }
+        let topic = parsed
+            .topic
+            .or((parsed.is_question).then_some(Topic::General));
+        if let (Some(topic), Some(id)) = (topic, self.active_id()) {
+            self.answer = Some(Answer {
+                question: text,
+                location_id: id,
+                topic,
+                day: parsed.day,
+                ai: if self.prefs.ai_key().is_some() {
+                    AiState::Waiting
+                } else {
+                    AiState::Idle
+                },
+            });
+            self.scroll_to = Some(search::View::Forecast);
+            self.ask_ai_for_answer();
+        }
+    }
+
+    fn apply_intent(&mut self, intent: Intent) {
+        match intent {
+            Intent::View(v) => match v {
+                search::View::Radar => self.tab = Tab::Radar,
+                search::View::Alerts => self.tab = Tab::Alerts,
+                v => {
+                    self.tab = Tab::Forecast;
+                    self.scroll_to = Some(v);
+                }
+            },
+            Intent::Refresh => self.refresh_all(),
+            Intent::Settings => self.settings_open = true,
+            Intent::UseMyLocation => {
+                self.locating = true;
+                self.worker.ip_locate();
+            }
+            Intent::Units(u) => {
+                self.config.units = match u {
+                    search::Units::Celsius => UnitPref::C,
+                    search::Units::Fahrenheit => UnitPref::F,
+                };
+                self.save_config();
+            }
+            Intent::Summarize => {
+                self.tab = Tab::Forecast;
+                self.scroll_to = Some(search::View::Forecast);
+                if self.prefs.ai_key().is_some() {
+                    self.request_ai_summary();
+                }
+            }
+        }
+    }
+
+    fn apply(&mut self, action: Action) {
+        match action {
+            Action::Select(id) => self.select(&id),
+            Action::Remove(id) => self.remove(&id),
+            Action::AddPlace(loc) => {
+                self.add_place(loc);
+                self.tab = Tab::Forecast;
+            }
+            Action::Intent(i) => self.apply_intent(i),
+            Action::Query(q) => self.submit_query(q),
+            Action::AiSummary => self.request_ai_summary(),
+            Action::DismissAnswer => self.answer = None,
+            Action::FocusDay(d) => self.focus_day = d,
+            Action::Tab(t) => self.tab = t,
+            Action::OpenSettings => self.settings_open = true,
+        }
+    }
+
+    // ----- events ---------------------------------------------------------------
+
+    fn drain_events(&mut self) {
+        while let Ok(ev) = self.rx.try_recv() {
+            match ev {
+                Event::Weather {
+                    location_id,
+                    result,
+                } => {
+                    self.loading.remove(&location_id);
+                    match result {
+                        Ok(w) => {
+                            self.weather.insert(location_id.clone(), w);
+                            self.errors.remove(&location_id);
+                            let is_active =
+                                self.locations.active_location_id.as_deref() == Some(&location_id);
+                            if is_active
+                                && self.prefs.ai_auto_summary
+                                && self.prefs.ai_key().is_some()
+                                && !matches!(
+                                    self.ai_summary.get(&location_id),
+                                    Some(AiState::Loading(_))
+                                )
+                            {
+                                self.request_ai_summary();
+                            }
+                            if matches!(self.ai_summary.get(&location_id), Some(AiState::Waiting)) {
+                                self.request_ai_summary();
+                            }
+                            if self
+                                .answer
+                                .as_ref()
+                                .is_some_and(|a| a.location_id == location_id)
+                            {
+                                // A weekday focus can only resolve once the days are known.
+                                self.ask_ai_for_answer();
+                            }
+                        }
+                        Err(e) => {
+                            self.errors.insert(location_id, friendly_error(&e));
+                        }
+                    }
+                }
+                Event::Alerts {
+                    location_id,
+                    result,
+                } => match result {
+                    Ok(a) => {
+                        self.alerts.insert(location_id, a);
+                    }
+                    Err(e) => tracing::warn!("alerts for {location_id}: {e}"),
+                },
+                Event::Geocoded { query, results } => {
+                    let pending = self
+                        .pending_query
+                        .as_ref()
+                        .is_some_and(|(_, p)| p.place.as_deref() == Some(query.as_str()));
+                    if pending {
+                        let (text, parsed) = self.pending_query.take().expect("checked");
+                        match results.into_iter().next() {
+                            Some(loc) => {
+                                self.add_place(loc);
+                                self.notice = None;
+                                self.finish_query(text, parsed);
+                            }
+                            None => {
+                                self.notice =
+                                    Some((format!("Couldn't find “{query}”."), Instant::now()));
+                            }
+                        }
+                    } else {
+                        self.search.set_results(query, results);
+                    }
+                }
+                Event::IpLocated(loc) => {
+                    self.locating = false;
+                    match loc {
+                        Some(l) => {
+                            let id = self.add_place(l.clone());
+                            if l.label.trim().is_empty() {
+                                self.worker.reverse_geocode(id, l.lat, l.lon);
+                            }
+                        }
+                        None => {
+                            self.notice = Some((
+                                "Couldn't detect your location — search for a place instead."
+                                    .into(),
+                                Instant::now(),
+                            ));
+                        }
+                    }
+                }
+                Event::ReverseGeocoded { location_id, label } => {
+                    if let Some(l) = self
+                        .locations
+                        .saved_locations
+                        .iter_mut()
+                        .find(|l| l.id == location_id)
+                    {
+                        l.label = label;
+                        self.save_locations();
+                    }
+                }
+                Event::Maps(r) => match r {
+                    Ok(m) => self.maps = Some(m),
+                    Err(e) => tracing::warn!("weather maps: {e}"),
+                },
+                Event::Ai { seq, result } => {
+                    let Some(target) = self.ai_targets.remove(&seq) else {
+                        continue;
+                    };
+                    let state = match result {
+                        Ok(t) => AiState::Done(t),
+                        Err(e) => AiState::Failed(e),
+                    };
+                    match target {
+                        Some(loc) => {
+                            if self.ai_summary.get(&loc) == Some(&AiState::Loading(seq)) {
+                                self.ai_summary.insert(loc, state);
+                            }
+                        }
+                        None => {
+                            if let Some(a) = &mut self.answer {
+                                if a.ai == AiState::Loading(seq) {
+                                    a.ai = state;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ----- UI -------------------------------------------------------------------
+
+    fn top_bar(&mut self, ui: &mut Ui, actions: &mut Vec<Action>) {
+        let p = self.palette;
+        ui.horizontal_centered(|ui| {
+            let tex = ss_assets::svg_texture(
+                ui.ctx(),
+                "ss-iconmark",
+                include_str!("../assets/brand/iconmark.svg"),
+                36,
+            );
+            ui.add(egui::Image::from_texture(&tex).fit_to_exact_size(egui::vec2(36.0, 36.0)));
+            ui.label(
+                RichText::new("Silver Skies")
+                    .size(19.0)
+                    .strong()
+                    .color(c32(p.text)),
+            );
+            ui.add_space(18.0);
+
+            let right_w = 330.0;
+            let search_w = (ui.available_width() - right_w - 40.0).clamp(220.0, 560.0);
+            let places = &self.locations.saved_locations;
+            if let Some(a) =
+                self.search
+                    .show(ui, &p, search_w, places, self.prefs.ai_key().is_some())
+            {
+                actions.push(a);
+            }
+            if let Some(q) = self.search.wants_geocode() {
+                self.worker.geocode(q);
+            }
+
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if ui
+                    .add(egui::Button::new(
+                        RichText::new("Settings").color(c32(p.text)),
+                    ))
+                    .clicked()
+                {
+                    actions.push(Action::OpenSettings);
+                }
+                let unit = match self.config.units {
+                    UnitPref::F => "°F",
+                    UnitPref::C => "°C",
+                };
+                if ui
+                    .add(egui::Button::new(unit))
+                    .on_hover_text("Switch units")
+                    .clicked()
+                {
+                    actions.push(Action::Intent(Intent::Units(match self.config.units {
+                        UnitPref::F => search::Units::Celsius,
+                        UnitPref::C => search::Units::Fahrenheit,
+                    })));
+                }
+                ui.add_space(6.0);
+                let tf = self.config.time_format;
+                let clock_fmt = match tf {
+                    ss_core::TimeFormat::H12 => "%-I:%M %p",
+                    ss_core::TimeFormat::H24 => "%H:%M",
+                };
+                let now = match self.active_weather() {
+                    Some(w) => App::now_for(w),
+                    None => chrono::Local::now().naive_local(),
+                };
+                ui.allocate_ui_with_layout(
+                    egui::vec2(118.0, 40.0),
+                    Layout::top_down(Align::Max),
+                    |ui| {
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        ui.label(
+                            RichText::new(now.format(clock_fmt).to_string())
+                                .size(15.0)
+                                .color(c32(p.text)),
+                        );
+                        let stamp = self
+                            .last_refresh
+                            .map(|t| {
+                                // Same zone as the clock above it.
+                                let at = now
+                                    - chrono::Duration::from_std(t.elapsed()).unwrap_or_default();
+                                format!("Updated {}", at.format(clock_fmt))
+                            })
+                            .unwrap_or_else(|| "Not updated yet".into());
+                        ui.label(RichText::new(stamp).size(11.0).color(c32a(p.text3)));
+                    },
+                );
+                ui.add_space(6.0);
+                let spinning = !self.loading.is_empty();
+                if spinning {
+                    ui.add(egui::Spinner::new().size(16.0).color(c32(p.a0)));
+                } else if ui.button("↻").on_hover_text("Refresh").clicked() {
+                    actions.push(Action::Intent(Intent::Refresh));
+                }
+            });
+        });
+    }
+
+    fn tabs(&self, ui: &mut Ui, actions: &mut Vec<Action>) {
+        let p = self.palette;
+        let n = self.active_alerts().len();
+        ui.horizontal(|ui| {
+            for (tab, label) in [
+                (Tab::Forecast, "Forecast".to_string()),
+                (Tab::Radar, "Radar".to_string()),
+                (
+                    Tab::Alerts,
+                    if n > 0 {
+                        format!("Alerts · {n}")
+                    } else {
+                        "Alerts".into()
+                    },
+                ),
+            ] {
+                let on = self.tab == tab;
+                let text = RichText::new(label).size(15.0).color(if on {
+                    c32(p.text)
+                } else {
+                    c32a(p.text2)
+                });
+                let btn = egui::Button::new(text)
+                    .fill(if on {
+                        theme::alpha(p.a0, 70)
+                    } else {
+                        egui::Color32::TRANSPARENT
+                    })
+                    .corner_radius(CornerRadius::same(255));
+                if ui.add(btn).clicked() {
+                    actions.push(Action::Tab(tab));
+                }
+            }
+        });
+    }
+}
+
+impl eframe::App for App {
+    fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
+        self.drain_events();
+        self.tick_timers();
+        self.update_palette();
+        let p = self.palette;
+        let mut actions: Vec<Action> = Vec::new();
+
+        egui::Panel::top("top")
+            .exact_size(64.0)
+            .resizable(false)
+            .frame(
+                egui::Frame::NONE
+                    .fill(c32(p.bg))
+                    .inner_margin(Margin::symmetric(18, 10)),
+            )
+            .show(ui, |ui| self.top_bar(ui, &mut actions));
+
+        // Top glow: a soft accent line under the header that pulses in the
+        // alert's colour while a severe alert is active.
+        {
+            let alerts = self.active_alerts();
+            let pulse = ss_core::alerts::colors::active_pulse_color(&alerts);
+            let r = ui.ctx().content_rect();
+            let y = r.top() + 64.0;
+            let (rgb, a) = match pulse {
+                Some(c) => {
+                    let t = ui.input(|i| i.time);
+                    ui.ctx().request_repaint_after(Duration::from_millis(40));
+                    (c, (150.0 + 100.0 * (t * 3.0).sin()) as u8)
+                }
+                None => (p.a0, 120),
+            };
+            let painter = ui.ctx().layer_painter(egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::unique("top_glow"),
+            ));
+            let line = egui::Rect::from_min_max(
+                egui::pos2(r.left(), y - 1.0),
+                egui::pos2(r.right(), y + 1.0),
+            );
+            let mut mesh = egui::Mesh::default();
+            let c_edge = theme::alpha(rgb, 0);
+            let c_mid = theme::alpha(rgb, a);
+            let xs = [line.left(), line.center().x, line.right()];
+            let cols = [c_edge, c_mid, c_edge];
+            for (x, c) in xs.iter().zip(cols) {
+                mesh.colored_vertex(egui::pos2(*x, line.top()), c);
+                mesh.colored_vertex(egui::pos2(*x, line.bottom()), c);
+            }
+            for i in 0..2u32 {
+                let b = i * 2;
+                mesh.add_triangle(b, b + 1, b + 2);
+                mesh.add_triangle(b + 1, b + 3, b + 2);
+            }
+            painter.add(mesh);
+        }
+
+        egui::Panel::left("places")
+            .exact_size(250.0)
+            .resizable(false)
+            .frame(egui::Frame::NONE.fill(c32(p.bg)).inner_margin(Margin {
+                left: 16,
+                right: 8,
+                top: 6,
+                bottom: 16,
+            }))
+            .show(ui, |ui| crate::views::places(ui, self, &mut actions));
+
+        egui::CentralPanel::default()
+            .frame(egui::Frame::NONE.fill(c32(p.bg)).inner_margin(Margin {
+                left: 8,
+                right: 18,
+                top: 6,
+                bottom: 0,
+            }))
+            .show(ui, |ui| {
+                self.tabs(ui, &mut actions);
+                ui.add_space(4.0);
+                match self.tab {
+                    Tab::Forecast => crate::views::forecast(ui, self, &mut actions),
+                    Tab::Alerts => crate::views::alerts(ui, self, &mut actions),
+                    Tab::Radar => {
+                        let place = self.active().map(|l| (l.lat, l.lon, l.label.clone()));
+                        let alerts = self.active_alerts();
+                        let tz = self.active_weather().map(|w| w.timezone.clone());
+                        let frame = egui::Frame::new()
+                            .corner_radius(CornerRadius::same(theme::RADIUS))
+                            .inner_margin(Margin::ZERO);
+                        frame.show(ui, |ui| {
+                            ui.set_min_size(ui.available_size() - egui::vec2(0.0, 18.0));
+                            self.radar.show(
+                                ui,
+                                &p,
+                                self.maps.as_ref(),
+                                place.as_ref().map(|(a, b, c)| (*a, *b, c.as_str())),
+                                &alerts,
+                                tz.as_deref(),
+                            );
+                        });
+                    }
+                }
+            });
+
+        // Transient notice, bottom centre.
+        if let Some((msg, at)) = &self.notice {
+            if at.elapsed() < Duration::from_secs(6) || self.pending_query.is_some() {
+                let msg = msg.clone();
+                egui::Area::new(egui::Id::unique("notice"))
+                    .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -24.0))
+                    .show(ui.ctx(), |ui| {
+                        theme::card_frame(&p)
+                            .inner_margin(Margin::symmetric(16, 10))
+                            .show(ui, |ui| {
+                                ui.label(RichText::new(msg).color(c32(p.text)));
+                            });
+                    });
+                ui.ctx().request_repaint_after(Duration::from_millis(500));
+            } else {
+                self.notice = None;
+            }
+        }
+
+        if self.settings_open {
+            crate::settings::window(ui.ctx(), self);
+        }
+
+        for a in actions {
+            self.apply(a);
+        }
+    }
+
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.save_locations();
+    }
+}
+
+/// A short, human message for a network error string from `ss-net`.
+pub fn friendly_error(e: &str) -> String {
+    if e.contains("status 429") {
+        "The forecast service is busy right now. Silver Skies will try again shortly.".into()
+    } else if let Some(code) = e
+        .strip_prefix("unexpected status ")
+        .and_then(|r| r.split_whitespace().next())
+    {
+        format!("The forecast service returned an error ({code}). Try refreshing in a minute.")
+    } else if e.contains("http error") || e.contains("error sending request") {
+        "Couldn't reach the forecast service. Check your connection.".into()
+    } else {
+        e.split(" from http").next().unwrap_or(e).to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::friendly_error;
+
+    #[test]
+    fn errors_are_humanized() {
+        assert!(friendly_error("unexpected status 429 from https://x?y").contains("busy"));
+        assert!(friendly_error("unexpected status 500 from https://x").contains("(500)"));
+        assert!(friendly_error("http error: dns").contains("connection"));
+        assert_eq!(
+            friendly_error("parse error: bad from https://x"),
+            "parse error: bad"
+        );
+    }
+}

@@ -6,14 +6,17 @@ members = [
     "crates/ss-store",
     "crates/ss-audio",
     "crates/ss-map",
-    "crates/silverskies",
+    "crates/ss-assets",
+    "apps/silverskies",
+    "apps/pro",
+    "tools/render-icons",
 ]
 
 [workspace.package]
 version = "2.0.0"
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/poliberry/silverskies-desktop"
+repository = "https://github.com/poliberry/silverskies"
 
 [workspace.dependencies]
 ss-core = { path = "crates/ss-core" }
@@ -21,6 +24,7 @@ ss-net = { path = "crates/ss-net" }
 ss-store = { path = "crates/ss-store" }
 ss-audio = { path = "crates/ss-audio" }
 ss-map = { path = "crates/ss-map" }
+ss-assets = { path = "crates/ss-assets" }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

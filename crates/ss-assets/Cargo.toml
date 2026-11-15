@@ -1,0 +1,12 @@
+[package]
+name = "ss-assets"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Silver Skies shared UI assets: bundled fonts, Pixel Weather icons recoloured to a palette, SVG rasterizing and texture caching for egui."
+
+[dependencies]
+ss-core.workspace = true
+egui.workspace = true
+resvg = { workspace = true, features = ["raster-images"] }
+image.workspace = true
