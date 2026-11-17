@@ -70,6 +70,12 @@ pub fn window(ctx: &Context, app: &mut App) {
                     });
                     ui.end_row();
 
+                    ui.label(RichText::new("Top glow").color(c32a(p.text2)));
+                    config_changed |= ui
+                        .checkbox(&mut app.config.top_glow_enabled, "Accent glow along the top")
+                        .changed();
+                    ui.end_row();
+
                     ui.label(RichText::new("Refresh every").color(c32a(p.text2)));
                     egui::ComboBox::from_id_salt("refresh")
                         .selected_text(refresh_label(app.config.auto_refresh_minutes))

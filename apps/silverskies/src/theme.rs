@@ -330,9 +330,34 @@ pub fn font_definitions() -> FontDefinitions {
     fonts
 }
 
+const LOGOMARK_DARK: &[u8] = include_bytes!("../assets/brand/logomark-dark.png");
+const LOGOMARK_LIGHT: &[u8] = include_bytes!("../assets/brand/logomark-light.png");
+
+/// The Silver Skies logomark (icon + SILVER SKIES wordmark) for the current
+/// theme, `height` points tall.
+pub fn logomark(ui: &Ui, p: &Palette, height: f32) -> egui::Image<'static> {
+    let (key, png) = if is_dark(p) {
+        ("ss-logomark-dark", LOGOMARK_DARK)
+    } else {
+        ("ss-logomark-light", LOGOMARK_LIGHT)
+    };
+    let tex = ss_assets::png_texture(ui.ctx(), key, png);
+    let s = tex.size_vec2();
+    egui::Image::from_texture(&tex)
+        .fit_to_exact_size(egui::vec2(height * s.x / s.y.max(1.0), height))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn logomarks_decode() {
+        for png in [LOGOMARK_DARK, LOGOMARK_LIGHT] {
+            let img = image::load_from_memory(png).unwrap();
+            assert_eq!((img.width(), img.height()), (150, 60));
+        }
+    }
 
     #[test]
     fn visuals_follow_palette_brightness() {

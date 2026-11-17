@@ -269,6 +269,11 @@ impl App {
         self.ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
 
+    /// Take focus out of the search field (a dialog opened).
+    pub fn blur_search(&mut self) {
+        self.search.blur();
+    }
+
     /// Put focus in the search field on the next frame (Ctrl+F).
     pub fn focus_search(&mut self) {
         self.search.focus_next = true;
@@ -583,8 +588,14 @@ impl App {
             Action::AiSummary => self.request_ai_summary(),
             Action::DismissAnswer => self.answer = None,
             Action::FocusDay(d) => self.focus_day = d,
-            Action::Tab(t) => self.tab = t,
-            Action::OpenSettings => self.settings_open = true,
+            Action::Tab(t) => {
+                self.tab = t;
+                self.search.blur();
+            }
+            Action::OpenSettings => {
+                self.settings_open = true;
+                self.search.blur();
+            }
         }
     }
 
@@ -746,23 +757,8 @@ impl App {
                 Layout::top_down(Align::Min),
                 |ui| {
                     ui.spacing_mut().item_spacing.y = 2.0;
-                    ui.horizontal(|ui| {
-                        let tex = ss_assets::svg_texture(
-                            ui.ctx(),
-                            "ss-iconmark",
-                            include_str!("../assets/brand/iconmark.svg"),
-                            30,
-                        );
-                        ui.add(
-                            egui::Image::from_texture(&tex)
-                                .fit_to_exact_size(egui::vec2(30.0, 30.0)),
-                        );
-                        ui.label(
-                            RichText::new("Silver Skies")
-                                .font(theme::light_font(25.0))
-                                .color(theme::accent2(&p)),
-                        );
-                    });
+                    let logo = theme::logomark(ui, &p, 38.0);
+                    ui.add(logo);
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 6.0;
                         let (dot, _) =
@@ -788,8 +784,9 @@ impl App {
             );
             ui.add_space(8.0);
 
+            // Fill the space up to the right-hand controls.
             let right_w = 300.0;
-            let search_w = (ui.available_width() - right_w).clamp(240.0, 720.0);
+            let search_w = (ui.available_width() - right_w - 8.0).clamp(240.0, 980.0);
             let places = &self.locations.saved_locations;
             if let Some(a) =
                 self.search
@@ -997,46 +994,37 @@ impl eframe::App for App {
                     .inner_margin(Margin::symmetric(20, 10)),
             )
             .show(ui, |ui| self.top_bar(ui, &mut actions));
-        let header_bottom = header.response.rect.bottom();
+        let header_rect = header.response.rect;
+        let header_bottom = header_rect.bottom();
 
-        // Top glow: a soft accent line under the header that pulses in the
-        // alert's colour while a severe alert is active.
+        // A hairline under the header, then the shared top glow along the
+        // header's top edge (below an open menu bar): the sky accent, pulsing
+        // in the alert's colour while a severe alert is active.
         {
-            let alerts = self.active_alerts();
-            let pulse = ss_core::alerts::colors::active_pulse_color(&alerts);
             let r = ui.ctx().content_rect();
-            let y = header_bottom;
-            let (rgb, a) = match pulse {
-                Some(c) => {
-                    let t = ui.input(|i| i.time);
-                    ui.ctx().request_repaint_after(Duration::from_millis(40));
-                    (c, (150.0 + 100.0 * (t * 3.0).sin()) as u8)
-                }
-                None => (p.a0, 120),
-            };
-            let painter = ui.ctx().layer_painter(egui::LayerId::new(
-                egui::Order::Foreground,
-                egui::Id::unique("top_glow"),
-            ));
-            let line = egui::Rect::from_min_max(
-                egui::pos2(r.left(), y - 1.0),
-                egui::pos2(r.right(), y + 1.0),
-            );
-            let mut mesh = egui::Mesh::default();
-            let c_edge = theme::alpha(rgb, 0);
-            let c_mid = theme::alpha(rgb, a);
-            let xs = [line.left(), line.center().x, line.right()];
-            let cols = [c_edge, c_mid, c_edge];
-            for (x, c) in xs.iter().zip(cols) {
-                mesh.colored_vertex(egui::pos2(*x, line.top()), c);
-                mesh.colored_vertex(egui::pos2(*x, line.bottom()), c);
+            ui.ctx()
+                .layer_painter(egui::LayerId::new(
+                    egui::Order::Middle,
+                    egui::Id::unique("header_rule"),
+                ))
+                .hline(
+                    r.x_range(),
+                    header_bottom - 0.5,
+                    egui::Stroke::new(1.0, c32a(p.border)),
+                );
+            if self.config.top_glow_enabled {
+                let alerts = self.active_alerts();
+                let pulse = ss_core::alerts::colors::active_pulse_color(&alerts);
+                let params = ss_assets::glow::GlowParams {
+                    color: pulse.unwrap_or(p.a0),
+                    pulsing: pulse.is_some(),
+                    dark: theme::is_dark(&p),
+                };
+                let t = ui.input(|i| i.time);
+                let painter = ss_assets::glow::glow_painter(ui.ctx());
+                ss_assets::glow::draw_top_glow(&painter, header_rect, &params, t);
+                ui.ctx().request_repaint_after(Duration::from_millis(33));
             }
-            for i in 0..2u32 {
-                let b = i * 2;
-                mesh.add_triangle(b, b + 1, b + 2);
-                mesh.add_triangle(b + 1, b + 3, b + 2);
-            }
-            painter.add(mesh);
         }
 
         egui::Panel::left("places")

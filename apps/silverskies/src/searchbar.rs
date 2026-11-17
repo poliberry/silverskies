@@ -28,6 +28,10 @@ pub struct SearchBar {
     open: bool,
     /// Take keyboard focus on the next frame (Edit → Find, Ctrl+F).
     pub focus_next: bool,
+    /// Where the dropdown was drawn last frame.
+    dropdown_rect: Option<egui::Rect>,
+    /// Give up focus and close the dropdown on the next frame.
+    blur_next: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -40,6 +44,11 @@ struct Suggestion {
 }
 
 impl SearchBar {
+    /// Leave the field (a dialog opened or the view changed).
+    pub fn blur(&mut self) {
+        self.blur_next = true;
+    }
+
     /// The text the geocoder should look up for the current input.
     fn geocode_text(&self) -> Option<String> {
         let parsed = search::parse(&self.text);
@@ -165,44 +174,63 @@ impl SearchBar {
         } else {
             "Search city or keyword… (e.g. Tucson, AZ · radar · weather in Paris tomorrow)"
         };
+        // A fixed-height square field: magnifier, text, SEARCH button, all
+        // vertically centred; the outline turns accent while typing.
+        let field_h = 40.0;
+        let (field_rect, _) = ui.allocate_exact_size(egui::vec2(width, field_h), Sense::hover());
+        ui.painter().rect_filled(field_rect, 0.0, c32(p.surface));
+        let btn_w = 92.0;
+        let text_w = (width - 12.0 - 18.0 - 8.0 - btn_w - 4.0 - 8.0).max(80.0);
         let edit = egui::TextEdit::singleline(&mut self.text)
             .hint_text(RichText::new(hint).color(c32a(p.text3)))
-            .desired_width(width - 150.0)
-            .margin(Margin::symmetric(12, 11))
+            .desired_width(text_w)
+            .min_size(egui::vec2(text_w, field_h - 8.0))
+            .align(egui::Align2::LEFT_CENTER)
+            .margin(Margin::symmetric(4, 0))
             .frame(egui::Frame::NONE);
-        let frame = egui::Frame::new()
-            .fill(c32(p.surface))
-            .stroke(egui::Stroke::new(1.0, c32a(p.border)))
-            .corner_radius(CornerRadius::ZERO)
-            .inner_margin(Margin {
-                left: 14,
-                right: 4,
-                top: 0,
-                bottom: 0,
-            });
-        let mut resp = None;
         let mut search_clicked = false;
-        let outer = frame.show(ui, |ui| {
-            ui.horizontal_centered(|ui| {
-                // Magnifier, painted (no font has a reliable glyph for it).
-                let (r, _) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), Sense::hover());
-                let stroke = egui::Stroke::new(1.8, c32a(p.text2));
-                let c = r.center() - egui::vec2(2.0, 2.0);
-                ui.painter().circle_stroke(c, 5.5, stroke);
-                ui.painter()
-                    .line_segment([c + egui::vec2(4.0, 4.0), c + egui::vec2(8.5, 8.5)], stroke);
-                resp = Some(ui.add(edit));
-                // The design's square SEARCH button.
-                let btn =
-                    egui::Button::new(crate::theme::caps("Search", 11.0, crate::theme::accent2(p)))
-                        .fill(crate::theme::glow(p))
-                        .stroke(egui::Stroke::new(1.0, alpha(p.a0, 128)))
-                        .min_size(egui::vec2(96.0, 34.0));
-                search_clicked = ui.add(btn).clicked();
-            });
+        let mut child = ui.new_child(
+            egui::UiBuilder::new()
+                .id_salt("search_field")
+                .max_rect(field_rect.shrink2(egui::vec2(0.0, 4.0)))
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        );
+        child.spacing_mut().item_spacing.x = 4.0;
+        child.add_space(12.0);
+        // Magnifier, painted (no font has a reliable glyph for it).
+        let (r, _) = child.allocate_exact_size(egui::vec2(18.0, 18.0), Sense::hover());
+        let stroke = egui::Stroke::new(1.6, c32a(p.text2));
+        let c = r.center() - egui::vec2(1.5, 1.5);
+        child.painter().circle_stroke(c, 5.5, stroke);
+        child
+            .painter()
+            .line_segment([c + egui::vec2(4.0, 4.0), c + egui::vec2(8.0, 8.0)], stroke);
+        child.add_space(4.0);
+        let resp = child.add(edit);
+        // The design's square SEARCH button, flush right inside the field.
+        child.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.add_space(4.0);
+            let btn =
+                egui::Button::new(crate::theme::caps("Search", 11.0, crate::theme::accent2(p)))
+                    .fill(crate::theme::glow(p))
+                    .stroke(egui::Stroke::new(1.0, alpha(p.a0, 128)))
+                    .min_size(egui::vec2(btn_w, field_h - 10.0));
+            search_clicked = ui.add(btn).clicked();
         });
-        let resp = resp.expect("text edit drawn");
-        let field_rect = outer.response.rect;
+        let focused_now = resp.has_focus();
+        ui.painter().rect_stroke(
+            field_rect,
+            0.0,
+            egui::Stroke::new(
+                1.0,
+                if focused_now {
+                    alpha(p.a0, 160)
+                } else {
+                    c32a(p.border)
+                },
+            ),
+            egui::StrokeKind::Inside,
+        );
 
         if resp.changed() {
             self.edited_at = Some(Instant::now());
@@ -212,6 +240,10 @@ impl SearchBar {
         }
         if std::mem::take(&mut self.focus_next) {
             resp.request_focus();
+        }
+        if std::mem::take(&mut self.blur_next) {
+            resp.surrender_focus();
+            self.open = false;
         }
         if resp.gained_focus() {
             self.open = true;
@@ -245,7 +277,16 @@ impl SearchBar {
         }
 
         // --- dropdown ---
-        let show_dropdown = self.open && !items.is_empty() && (focused || chosen.is_none());
+        // Visible while typing, or while the pointer is on it (a click on a
+        // row takes focus from the field before the click lands).
+        let over_dropdown = self.dropdown_rect.is_some_and(|r| {
+            ui.input(|i| i.pointer.hover_pos())
+                .is_some_and(|p| r.contains(p))
+        });
+        let show_dropdown = self.open && !items.is_empty() && (focused || over_dropdown);
+        if !show_dropdown {
+            self.dropdown_rect = None;
+        }
         if show_dropdown && chosen.is_none() {
             let area = egui::Area::new(egui::Id::unique("search_dropdown"))
                 .order(egui::Order::Foreground)
@@ -318,6 +359,7 @@ impl SearchBar {
                         }
                     });
             });
+            self.dropdown_rect = Some(inner.response.rect);
             // Close when clicking anywhere outside the field and dropdown.
             if ui.input(|i| i.pointer.any_pressed())
                 && !inner.response.hovered()

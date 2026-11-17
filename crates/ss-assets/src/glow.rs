@@ -2,7 +2,7 @@
 //! background pulse. Pure drawing and maths: no app state.
 
 use egui::epaint::{Mesh, Vertex};
-use egui::{pos2, Color32, Painter, Rect};
+use egui::{pos2, Color32, Context, Id, LayerId, Order, Painter, Rect};
 
 pub struct GlowParams {
     pub color: [u8; 3],
@@ -10,7 +10,10 @@ pub struct GlowParams {
     pub dark: bool,
 }
 
-const BAR_H: f32 = 4.0;
+/// Height of the solid bar. Kept thin so it reads as a hairline of light.
+const BAR_H: f32 = 2.0;
+/// How far the soft haze reaches below the bar.
+const HAZE_H: f32 = 14.0;
 const SWEEP_LOOP: f64 = 5.0;
 const SWEEP_W: f32 = 0.4;
 
@@ -70,7 +73,7 @@ fn vgrad(painter: &Painter, x: (f32, f32), y: (f32, f32), top: Color32, bottom: 
 
 /// Horizontal sweep gradient over `x` between `y`.
 fn sweep_quad(painter: &Painter, x: (f32, f32), y: (f32, f32), color: [u8; 3], a: f32) {
-    let white = [0, 1, 2].map(|i| (255.0 * 0.7 + color[i] as f32 * 0.3).round() as u8);
+    let white = [0, 1, 2].map(|i| (255.0 * 0.5 + color[i] as f32 * 0.5).round() as u8);
     let stops = [
         (0.0, col(color, 0.0)),
         (0.3, col(color, 0.9 * a)),
@@ -92,6 +95,14 @@ fn sweep_quad(painter: &Painter, x: (f32, f32), y: (f32, f32), color: [u8; 3], a
     painter.add(m);
 }
 
+/// A painter for the glow: above the panels, below menus and popups (so the
+/// Alt menu bar and its menus are never covered).
+pub fn glow_painter(ctx: &Context) -> Painter {
+    ctx.layer_painter(LayerId::new(Order::Middle, Id::unique("ss_top_glow")))
+}
+
+/// Draw the glow along the top edge of `rect_top` (pass the header's rect,
+/// so it starts below an open menu bar).
 pub fn draw_top_glow(painter: &Painter, rect_top: Rect, params: &GlowParams, t: f64) {
     let c = params.color;
     let (x0, x1, y0) = (rect_top.left(), rect_top.right(), rect_top.top());
@@ -102,31 +113,24 @@ pub fn draw_top_glow(painter: &Painter, rect_top: Rect, params: &GlowParams, t: 
     vgrad(
         painter,
         (x0, x1),
-        (by, by + 26.0),
-        col(c, 0.28 * k * gk),
-        col(c, 0.0),
-    );
-    vgrad(
-        painter,
-        (x0, x1),
-        (by, by + 8.0),
-        col(c, 0.5 * k * gk),
+        (by, by + HAZE_H),
+        col(c, 0.14 * k * gk),
         col(c, 0.0),
     );
     painter.rect_filled(
         Rect::from_min_max(pos2(x0, y0), pos2(x1, by)),
         0.0,
-        col(c, k),
+        col(c, 0.75 * k),
     );
 
     let phase = ((t % SWEEP_LOOP) / SWEEP_LOOP) as f32;
-    let op = sweep_opacity(phase) * k;
+    let op = sweep_opacity(phase) * k * 0.7;
     if op > 0.0 {
         let sx0 = x0 + sweep_left(phase) * w;
         let sx1 = sx0 + SWEEP_W * w;
         sweep_quad(painter, (sx0, sx1), (y0, by), c, op);
         let mid = y0 + BAR_H / 2.0;
-        sweep_quad(painter, (sx0, sx1), (mid - 7.0, mid + 7.0), c, op * 0.35);
+        sweep_quad(painter, (sx0, sx1), (mid - 4.0, mid + 4.0), c, op * 0.2);
     }
 }
 

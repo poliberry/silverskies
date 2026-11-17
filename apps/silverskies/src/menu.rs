@@ -179,6 +179,12 @@ pub fn bar(ui: &mut Ui, app: &mut App, actions: &mut Vec<Action>) {
                     });
                     ui.separator();
                     if ui
+                        .checkbox(&mut app.config.top_glow_enabled, "Top Glow")
+                        .changed()
+                    {
+                        changed = true;
+                    }
+                    if ui
                         .checkbox(&mut app.config.menu_bar_always, "Always Show Menu Bar")
                         .changed()
                     {
@@ -191,6 +197,7 @@ pub fn bar(ui: &mut Ui, app: &mut App, actions: &mut Vec<Action>) {
                 ui.menu_button("Help", |ui| {
                     if item(ui, "About Silver Skies", None) {
                         app.about_open = true;
+                        app.blur_search();
                         chose = true;
                     }
                     if item(ui, "Silver Skies Pro…", None) {
@@ -221,23 +228,13 @@ pub fn about(ctx: &Context, app: &mut App) {
         .resizable(false)
         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
         .show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                let tex = ss_assets::svg_texture(
-                    ui.ctx(),
-                    "ss-iconmark",
-                    include_str!("../assets/brand/iconmark.svg"),
-                    56,
-                );
-                ui.add(egui::Image::from_texture(&tex).fit_to_exact_size(egui::vec2(56.0, 56.0)));
-                ui.vertical(|ui| {
-                    ui.label(RichText::new("Silver Skies").font(crate::theme::light_font(26.0)));
-                    ui.label(crate::theme::caps(
-                        &format!("Version {}", env!("CARGO_PKG_VERSION")),
-                        10.0,
-                        c32a(p.text3),
-                    ));
-                });
-            });
+            let logo = crate::theme::logomark(ui, &p, 56.0);
+            ui.add(logo);
+            ui.label(crate::theme::caps(
+                &format!("Version {}", env!("CARGO_PKG_VERSION")),
+                10.0,
+                c32a(p.text3),
+            ));
             ui.add_space(6.0);
             ui.label("A simple, calm weather forecast.");
             ui.label(

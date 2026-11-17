@@ -3739,6 +3739,7 @@ dependencies = [
  "crossbeam-channel",
  "eframe",
  "egui",
+ "image",
  "parking_lot 0.12.5",
  "reqwest",
  "serde",

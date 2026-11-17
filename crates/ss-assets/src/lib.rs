@@ -2,6 +2,7 @@
 //! V1 weather icon set (light and dark variants), SVG
 //! rasterizing via resvg, egui texture caching and window-icon decoding.
 
+pub mod glow;
 pub mod menubar;
 
 use egui::{ColorImage, Context, Id, TextureHandle, TextureOptions};
@@ -227,6 +228,25 @@ pub fn weather_image(
 ) -> egui::Image<'static> {
     let tex = weather_texture(ctx, code, is_day, dark, px);
     egui::Image::from_texture(&tex).fit_to_exact_size(egui::vec2(px as f32, px as f32))
+}
+
+/// Cached texture of an embedded PNG (e.g. a raster logo). `key` must be
+/// unique per image.
+pub fn png_texture(ctx: &Context, key: &str, png: &[u8]) -> TextureHandle {
+    let id = Id::unique(("ss-png", key));
+    if let Some(t) = ctx.data_mut(|d| d.get_temp::<TextureHandle>(id)) {
+        return t;
+    }
+    let image = image::load_from_memory(png)
+        .map(|i| {
+            let rgba = i.to_rgba8();
+            let size = [rgba.width() as usize, rgba.height() as usize];
+            ColorImage::from_rgba_unmultiplied(size, rgba.as_raw())
+        })
+        .unwrap_or_else(|_| ColorImage::filled([1, 1], egui::Color32::TRANSPARENT));
+    let tex = ctx.load_texture(format!("png-{key}"), image, TextureOptions::LINEAR);
+    ctx.data_mut(|d| d.insert_temp(id, tex.clone()));
+    tex
 }
 
 /// Decode a PNG window icon.

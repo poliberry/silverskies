@@ -779,7 +779,7 @@ impl eframe::App for App {
             let dark = sh.palette.bg.iter().map(|&v| v as u32).sum::<u32>() < 384;
             self.refresh_pulse(&sh);
             let pulse = self.pulse_color;
-            let bg = theme::c32(crate::glow::pulse_bg(sh.palette.bg, pulse, dark, t));
+            let bg = theme::c32(ss_assets::glow::pulse_bg(sh.palette.bg, pulse, dark, t));
             let now = chrono::Local::now();
             // Native title bar names the place; the menu bar appears with Alt.
             let title = match sh.active_location() {
@@ -795,7 +795,7 @@ impl eframe::App for App {
             {
                 self.menu.close();
             }
-            egui::Panel::top("header")
+            let header_rect = egui::Panel::top("header")
                 .exact_size(40.0)
                 .resizable(false)
                 .frame(egui::Frame::NONE.fill(bg).inner_margin(egui::Margin {
@@ -810,7 +810,9 @@ impl eframe::App for App {
                     {
                         main_cmds.push(Command::Asteroid);
                     }
-                });
+                })
+                .response
+                .rect;
             crate::chrome::function_keys(ui, &sh, &mut main_cmds);
             crate::chrome::ticker(ui, &sh);
             let cmd_h = self.cmdbar.panel_height(h);
@@ -912,17 +914,14 @@ impl eframe::App for App {
                     });
             }
             if sh.config.top_glow_enabled {
-                let params = crate::glow::GlowParams {
+                let params = ss_assets::glow::GlowParams {
                     color: pulse.unwrap_or(sh.palette.a0),
                     pulsing: pulse.is_some(),
                     dark,
                 };
-                let painter = ctx.layer_painter(egui::LayerId::new(
-                    egui::Order::Foreground,
-                    egui::Id::unique("top_glow"),
-                ));
-                let top = ctx.content_rect();
-                crate::glow::draw_top_glow(&painter, top, &params, t);
+                // Starts at the header, so an open Alt menu bar sits above it.
+                let painter = ss_assets::glow::glow_painter(&ctx);
+                ss_assets::glow::draw_top_glow(&painter, header_rect, &params, t);
             }
             if sh.config.top_glow_enabled || pulse.is_some() {
                 ctx.request_repaint_after(Duration::from_millis(33));

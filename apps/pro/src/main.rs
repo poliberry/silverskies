@@ -4,7 +4,6 @@ mod chrome;
 mod cmdbar;
 mod commands;
 mod events;
-mod glow;
 mod header;
 mod icons;
 mod layout;
