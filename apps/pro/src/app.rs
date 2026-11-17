@@ -57,6 +57,10 @@ pub struct App {
     pub(crate) audio: AudioState,
     /// Logo click counter for the asteroid easter egg.
     logo_clicks: (u8, Instant),
+    /// The Alt-revealed menu bar.
+    menu: ss_assets::menubar::AltMenuBar,
+    /// Native window title last sent.
+    last_title: String,
     last_system_dark: Option<bool>,
     /// Cached severe-alert pulse colour and the alerts revision it was built for.
     pulse_color: Option<[u8; 3]>,
@@ -126,6 +130,8 @@ impl App {
             req: PanelRequests::default(),
             audio,
             logo_clicks: (0, Instant::now()),
+            menu: Default::default(),
+            last_title: String::new(),
             last_system_dark: None,
             pulse_color: None,
             pulse_key: None,
@@ -755,8 +761,22 @@ impl eframe::App for App {
             let pulse = self.pulse_color;
             let bg = theme::c32(crate::glow::pulse_bg(sh.palette.bg, pulse, dark, t));
             let now = chrono::Local::now();
+            // Native title bar names the place; the menu bar appears with Alt.
+            let title = match sh.active_location() {
+                Some(l) => format!("{} — Silver Skies Pro", l.label),
+                None => "Silver Skies Pro".to_string(),
+            };
+            if title != self.last_title {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
+                self.last_title = title;
+            }
+            if self.menu.update(&ctx, sh.config.menu_bar_always)
+                && crate::chrome::alt_menu(ui, &mut sh, &mut main_cmds)
+            {
+                self.menu.close();
+            }
             egui::Panel::top("header")
-                .exact_size(46.0)
+                .exact_size(40.0)
                 .resizable(false)
                 .frame(egui::Frame::NONE.fill(bg).inner_margin(egui::Margin {
                     left: 12,
@@ -771,7 +791,8 @@ impl eframe::App for App {
                         main_cmds.push(Command::Asteroid);
                     }
                 });
-            crate::chrome::menu_and_toolbar(ui, &sh, &mut main_cmds);
+            crate::chrome::function_keys(ui, &sh, &mut main_cmds);
+            crate::chrome::ticker(ui, &sh);
             let cmd_h = self.cmdbar.panel_height(h);
             let phase = sh
                 .asteroid
@@ -849,7 +870,7 @@ impl eframe::App for App {
                         ui.painter().vline(
                             rect.left() + 1.5,
                             rect.y_range(),
-                            egui::Stroke::new(3.0, theme::c32(theme::PRO_PURPLE)),
+                            egui::Stroke::new(3.0, theme::c32(theme::PRO_BLUE)),
                         );
                         // Registered before the content so the map never sees the press.
                         ui.interact(

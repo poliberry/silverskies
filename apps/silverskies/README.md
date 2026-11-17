@@ -4,6 +4,18 @@ A simple, calm weather forecast app for the desktop, written in Rust. Part of th
 [Silver Skies](../../README.md) suite — for the full composite forecast, meteorology and radar
 workstation, see [Silver Skies Pro](../pro/README.md).
 
+## Look
+
+A native window and title bar (which names the current place), a top header with search, the
+places sidebar and the forecast as a bento grid of tiles. Styling follows the Silver Skies web
+design: near-black (or soft white) surfaces, square tiles with hairline borders, spaced
+uppercase captions in Google Sans Code, a huge thin temperature in Google Sans Flex, Google's V1
+weather icons, and an accent that follows the sky. Press **Alt** for the menu bar (File, Edit,
+View, Help); View → Always Show Menu Bar pins it.
+
+Shortcuts: F5 or Ctrl+R refresh, Ctrl+F search, Ctrl+1/2/3 Forecast/Radar/Alerts, Ctrl+,
+settings, Ctrl+Q quit.
+
 ## Features
 
 - **Forecast at a glance** — current conditions with a large temperature and the sky's icon,
@@ -27,6 +39,7 @@ workstation, see [Silver Skies Pro](../pro/README.md).
 - **Optional AI** — turn it on in Settings with your own Anthropic API key and Silver Skies adds
   a written AI summary and AI answers to questions you type. Only the selected place's forecast
   is sent. It is off by default and nothing changes without a key.
+- **Works offline** — the last good forecast for each place is kept and shown if a refresh fails.
 - **Tinted by the sky** — the accent follows current conditions; light, dark or system theme;
   °F/°C, 12/24-hour time and auto-refresh from 5 minutes to 2 hours (or off).
 
@@ -43,7 +56,8 @@ See the [root README](../../README.md) for system libraries.
 ## Local data
 
 JSON files live in the OS config directory (`Silver Skies`): the shared `config.json` and
-`locations.json`, plus `simple.json` for settings only this app has (AI on/off, API key, model).
+`locations.json`, plus `simple.json` for settings only this app has (AI on/off, API key, model)
+and `forecast-cache.json` (the last good forecast per place).
 The API key is stored only on this computer.
 
 ## Data sources

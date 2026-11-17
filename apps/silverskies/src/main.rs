@@ -6,6 +6,7 @@
 
 mod ai;
 mod app;
+mod menu;
 mod prefs;
 mod radar;
 mod search;

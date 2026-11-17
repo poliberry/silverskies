@@ -1,5 +1,4 @@
 use egui::{vec2, RichText, ScrollArea, Ui};
-use ss_core::weather::icons::pixel_icon;
 use ss_core::weather::units::{fmt_temp, fmt_time};
 use ss_core::{HourlyPoint, PanelKind};
 
@@ -55,8 +54,9 @@ impl Panel for HourlyPanel {
                                 );
                                 ui.add(weather_image(
                                     ui.ctx(),
-                                    pixel_icon(h.weather_code, h.is_day),
-                                    &p,
+                                    h.weather_code,
+                                    h.is_day,
+                                    crate::theme::is_dark(&p),
                                     16,
                                 ));
                                 ui.label(

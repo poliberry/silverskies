@@ -1,5 +1,6 @@
-//! Palette -> egui visuals, fonts and spacing for the Pro look: hard-edged
-//! black/white blocks with electric blue and violet accents.
+//! Palette -> egui visuals, fonts and spacing for the Pro look, modelled on a
+//! financial terminal: black, amber labels, white data, blue highlights,
+//! green/red for up/down, and dense monospace everywhere.
 
 use std::sync::Arc;
 
@@ -10,46 +11,53 @@ use egui::{
 use ss_core::theme::{brightness, resolve_palette, with_alpha, Palette};
 use ss_core::{Config, ThemePref};
 
-/// Electric blue: the Pro accent (`a0` of the default Pro palettes).
-pub const PRO_BLUE: [u8; 3] = [0x3d, 0x6b, 0xff];
-/// Violet: the Pro secondary — title blocks while dragging, selections,
-/// the block shadow under floating cards.
-pub const PRO_PURPLE: [u8; 3] = [0x8e, 0x4d, 0xff];
+/// Bloomberg-style amber: labels, headings and the primary accent.
+pub const PRO_AMBER: [u8; 3] = [0xff, 0x9f, 0x1c];
+/// Highlight blue: selection, hover and active input fields.
+pub const PRO_BLUE: [u8; 3] = [0x1f, 0x5f, 0xe0];
+/// Function-key yellow (the command line's security field).
+pub const PRO_YELLOW: [u8; 3] = [0xff, 0xd4, 0x00];
+/// Up / good and down / bad, as on a quote screen.
+pub const PRO_UP: [u8; 3] = [0x2e, 0xd5, 0x73];
+pub const PRO_DOWN: [u8; 3] = [0xff, 0x45, 0x45];
+/// Pane title-bar grey.
+pub const PRO_BAR: [u8; 3] = [0x26, 0x26, 0x2b];
 
-/// Pure black / white base with the blue accent.
+/// Terminal black with amber labels and white data.
 pub fn pro_dark() -> Palette {
     Palette {
-        a0: PRO_BLUE,
+        a0: PRO_AMBER,
         bg: [0, 0, 0],
-        surface: [0x05, 0x05, 0x09],
-        surface3: [0x12, 0x14, 0x24],
-        border: with_alpha([0x5a, 0x7d, 0xff], 0.38),
-        // White for primary text, blue for secondary, violet for tertiary.
-        text: [0xff, 0xff, 0xff],
-        text2: [0x9d, 0xb6, 0xff, 0xff],
-        text3: [0xa8, 0x86, 0xf0, 0xd0],
-        danger: [0xff, 0x3b, 0x5c],
-        safe: [0x4d, 0xff, 0xa6],
+        surface: [0x05, 0x05, 0x06],
+        surface3: [0x16, 0x16, 0x1a],
+        border: with_alpha([0x55, 0x55, 0x5c], 0.9),
+        // White for data, amber for labels, dim amber for chrome.
+        text: [0xee, 0xee, 0xee],
+        text2: [0xff, 0x9f, 0x1c, 0xff],
+        text3: [0xb0, 0x7a, 0x30, 0xff],
+        danger: PRO_DOWN,
+        safe: PRO_UP,
     }
 }
 
+/// A light variant for people who insist (paper terminal).
 pub fn pro_light() -> Palette {
     Palette {
-        a0: [0x1f, 0x4f, 0xf0],
+        a0: [0xc2, 0x5e, 0x00],
         bg: [0xff, 0xff, 0xff],
         surface: [0xff, 0xff, 0xff],
-        surface3: [0xec, 0xec, 0xf2],
-        border: with_alpha([0, 0, 0], 0.32),
+        surface3: [0xec, 0xec, 0xf0],
+        border: with_alpha([0, 0, 0], 0.35),
         text: [0, 0, 0],
-        text2: with_alpha([0, 0, 0], 0.72),
-        text3: with_alpha([0, 0, 0], 0.45),
+        text2: [0xa8, 0x50, 0x00, 0xff],
+        text3: [0x80, 0x60, 0x40, 0xff],
         danger: [0xd4, 0x16, 0x3c],
         safe: [0x0a, 0x8f, 0x55],
     }
 }
 
 /// The palette Pro renders with. The `"default"` theme is the fixed Pro
-/// black/white/blue look (it does not tint with the sky like Silver Skies);
+/// terminal look (it does not tint with the sky like Silver Skies);
 /// builtin and custom themes still apply as before.
 pub fn pro_palette(cfg: &Config, condition_accent: [u8; 3], system_dark: bool) -> Palette {
     if cfg.theme_id != "default" {
@@ -107,8 +115,8 @@ pub fn visuals_for(p: &Palette) -> Visuals {
     v.faint_bg_color = c32(p.surface);
     v.code_bg_color = c32(p.surface3);
     v.selection.bg_fill =
-        Color32::from_rgba_unmultiplied(PRO_PURPLE[0], PRO_PURPLE[1], PRO_PURPLE[2], 110);
-    v.selection.stroke = Stroke::new(1.5, c32(PRO_PURPLE));
+        Color32::from_rgba_unmultiplied(PRO_BLUE[0], PRO_BLUE[1], PRO_BLUE[2], 110);
+    v.selection.stroke = Stroke::new(1.5, c32(PRO_BLUE));
     v.hyperlink_color = a0;
     v.warn_fg_color = c32(p.a0);
     v.error_fg_color = c32(p.danger);
@@ -132,15 +140,16 @@ pub fn visuals_for(p: &Palette) -> Visuals {
     w.inactive.bg_stroke = Stroke::new(1.0, c32a(p.border));
     w.inactive.fg_stroke = Stroke::new(1.0, c32(p.text));
 
+    // Hover = the terminal's blue highlight; press = amber.
     for s in [&mut w.hovered, &mut w.active, &mut w.open] {
-        s.bg_fill = a0;
-        s.weak_bg_fill = a0;
-        s.fg_stroke = Stroke::new(1.5, on(p.a0));
-        s.bg_stroke = Stroke::new(1.5, c32(p.text));
+        s.bg_fill = c32(PRO_BLUE);
+        s.weak_bg_fill = c32(PRO_BLUE);
+        s.fg_stroke = Stroke::new(1.5, Color32::WHITE);
+        s.bg_stroke = Stroke::new(1.0, c32(PRO_BLUE));
     }
-    w.active.bg_fill = c32(PRO_PURPLE);
-    w.active.weak_bg_fill = c32(PRO_PURPLE);
-    w.active.fg_stroke = Stroke::new(1.5, on(PRO_PURPLE));
+    w.active.bg_fill = a0;
+    w.active.weak_bg_fill = a0;
+    w.active.fg_stroke = Stroke::new(1.5, on(p.a0));
     w.open.bg_fill = c32(p.surface3);
     w.open.weak_bg_fill = c32(p.surface3);
     w.open.fg_stroke = Stroke::new(1.0, c32(p.text));

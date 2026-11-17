@@ -1,40 +1,129 @@
-//! Shared UI assets for every Silver Skies app: the bundled DejaVu fonts, the
-//! Pixel Weather SVG icon set (recoloured to the active palette), SVG
+//! Shared UI assets for every Silver Skies app: the bundled fonts, Google's
+//! V1 weather icon set (light and dark variants), SVG
 //! rasterizing via resvg, egui texture caching and window-icon decoding.
 
-use egui::{ColorImage, Context, Id, TextureHandle, TextureOptions};
-use ss_core::theme::Palette;
-use ss_core::weather::icons::PixelIcon;
+pub mod menubar;
 
-/// Bundled fonts (Bitstream Vera licence, see `assets/fonts/LICENSE`).
+use egui::{ColorImage, Context, Id, TextureHandle, TextureOptions};
+use ss_core::weather::icons::v1_icon;
+
+/// Bundled fonts. DejaVu: Bitstream Vera licence (`assets/fonts/LICENSE`).
+/// Google Sans, Google Sans Flex and Google Sans Code: SIL Open Font
+/// Licence (`assets/fonts/google-sans/OFL-*.txt`), as static instances
+/// subset to Latin + punctuation by hand from the variable fonts.
 pub mod fonts {
     pub const DEJAVU_SANS_MONO: &[u8] = include_bytes!("../assets/fonts/DejaVuSansMono.ttf");
     pub const DEJAVU_SANS: &[u8] = include_bytes!("../assets/fonts/DejaVuSans.ttf");
+    pub const GOOGLE_SANS: &[u8] =
+        include_bytes!("../assets/fonts/google-sans/GoogleSans-Regular.ttf");
+    pub const GOOGLE_SANS_SEMIBOLD: &[u8] =
+        include_bytes!("../assets/fonts/google-sans/GoogleSans-SemiBold.ttf");
+    /// Flex at normal width, weight 300: light headings and numbers.
+    pub const GOOGLE_SANS_FLEX_LIGHT: &[u8] =
+        include_bytes!("../assets/fonts/google-sans/GoogleSansFlex-Light.ttf");
+    /// Flex at width 125, weight 250: the big temperature.
+    pub const GOOGLE_SANS_FLEX_WIDE_THIN: &[u8] =
+        include_bytes!("../assets/fonts/google-sans/GoogleSansFlex-WideThin.ttf");
+    /// Flex at width 125, weight 500: compact temperatures.
+    pub const GOOGLE_SANS_FLEX_WIDE_MEDIUM: &[u8] =
+        include_bytes!("../assets/fonts/google-sans/GoogleSansFlex-WideMedium.ttf");
+    pub const GOOGLE_SANS_CODE: &[u8] =
+        include_bytes!("../assets/fonts/google-sans/GoogleSansCode-Regular.ttf");
+    pub const GOOGLE_SANS_CODE_MEDIUM: &[u8] =
+        include_bytes!("../assets/fonts/google-sans/GoogleSansCode-Medium.ttf");
 }
 
-/// Raw Pixel Weather SVG source for an icon.
-pub fn svg_source(icon: PixelIcon) -> &'static str {
-    match icon {
-        PixelIcon::Sunny => include_str!("../assets/pixel-weather/sunny.svg"),
-        PixelIcon::ClearNight => include_str!("../assets/pixel-weather/clear_night.svg"),
-        PixelIcon::MostlySunny => include_str!("../assets/pixel-weather/mostly_sunny.svg"),
-        PixelIcon::MostlyClearNight => {
-            include_str!("../assets/pixel-weather/mostly_clear_night.svg")
+/// Raw SVG of a Google V1 weather icon by name (see
+/// `ss_core::weather::icons::V1_ICONS`), in its dark-theme or light-theme
+/// variant. Unknown names fall back to `not_available`.
+pub fn v1_svg(name: &str, dark: bool) -> &'static str {
+    match (name, dark) {
+        ("clear_day", false) => include_str!("../assets/weather-v1/light/clear_day.svg"),
+        ("clear_day", true) => include_str!("../assets/weather-v1/dark/clear_day.svg"),
+        ("clear_night", false) => include_str!("../assets/weather-v1/light/clear_night.svg"),
+        ("clear_night", true) => include_str!("../assets/weather-v1/dark/clear_night.svg"),
+        ("partly_cloudy_day", false) => {
+            include_str!("../assets/weather-v1/light/partly_cloudy_day.svg")
         }
-        PixelIcon::PartlyCloudy => include_str!("../assets/pixel-weather/partly_cloudy.svg"),
-        PixelIcon::PartlyCloudyNight => {
-            include_str!("../assets/pixel-weather/partly_cloudy_night.svg")
+        ("partly_cloudy_day", true) => {
+            include_str!("../assets/weather-v1/dark/partly_cloudy_day.svg")
         }
-        PixelIcon::Cloudy => include_str!("../assets/pixel-weather/cloudy.svg"),
-        PixelIcon::Drizzle => include_str!("../assets/pixel-weather/drizzle.svg"),
-        PixelIcon::WintryMix => include_str!("../assets/pixel-weather/wintry_mix.svg"),
-        PixelIcon::SleetHail => include_str!("../assets/pixel-weather/sleet_hail.svg"),
-        PixelIcon::HeavyRain => include_str!("../assets/pixel-weather/heavy_rain.svg"),
-        PixelIcon::Flurries => include_str!("../assets/pixel-weather/flurries.svg"),
-        PixelIcon::HeavySnow => include_str!("../assets/pixel-weather/heavy_snow.svg"),
-        PixelIcon::StrongThunderstorms => {
-            include_str!("../assets/pixel-weather/strong_thunderstorms.svg")
+        ("partly_cloudy_night", false) => {
+            include_str!("../assets/weather-v1/light/partly_cloudy_night.svg")
         }
+        ("partly_cloudy_night", true) => {
+            include_str!("../assets/weather-v1/dark/partly_cloudy_night.svg")
+        }
+        ("mostly_clear_night", false) => {
+            include_str!("../assets/weather-v1/light/mostly_clear_night.svg")
+        }
+        ("mostly_clear_night", true) => {
+            include_str!("../assets/weather-v1/dark/mostly_clear_night.svg")
+        }
+        ("cloudy", false) => include_str!("../assets/weather-v1/light/cloudy.svg"),
+        ("cloudy", true) => include_str!("../assets/weather-v1/dark/cloudy.svg"),
+        ("haze_fog", false) => include_str!("../assets/weather-v1/light/haze_fog.svg"),
+        ("haze_fog", true) => include_str!("../assets/weather-v1/dark/haze_fog.svg"),
+        ("drizzle", false) => include_str!("../assets/weather-v1/light/drizzle.svg"),
+        ("drizzle", true) => include_str!("../assets/weather-v1/dark/drizzle.svg"),
+        ("icy", false) => include_str!("../assets/weather-v1/light/icy.svg"),
+        ("icy", true) => include_str!("../assets/weather-v1/dark/icy.svg"),
+        ("rain_showers", false) => include_str!("../assets/weather-v1/light/rain_showers.svg"),
+        ("rain_showers", true) => include_str!("../assets/weather-v1/dark/rain_showers.svg"),
+        ("heavy_rain", false) => include_str!("../assets/weather-v1/light/heavy_rain.svg"),
+        ("heavy_rain", true) => include_str!("../assets/weather-v1/dark/heavy_rain.svg"),
+        ("flurries", false) => include_str!("../assets/weather-v1/light/flurries.svg"),
+        ("flurries", true) => include_str!("../assets/weather-v1/dark/flurries.svg"),
+        ("snow_showers", false) => include_str!("../assets/weather-v1/light/snow_showers.svg"),
+        ("snow_showers", true) => include_str!("../assets/weather-v1/dark/snow_showers.svg"),
+        ("heavy_snow", false) => include_str!("../assets/weather-v1/light/heavy_snow.svg"),
+        ("heavy_snow", true) => include_str!("../assets/weather-v1/dark/heavy_snow.svg"),
+        ("scattered_rain_showers_day", false) => {
+            include_str!("../assets/weather-v1/light/scattered_rain_showers_day.svg")
+        }
+        ("scattered_rain_showers_day", true) => {
+            include_str!("../assets/weather-v1/dark/scattered_rain_showers_day.svg")
+        }
+        ("scattered_rain_showers_night", false) => {
+            include_str!("../assets/weather-v1/light/scattered_rain_showers_night.svg")
+        }
+        ("scattered_rain_showers_night", true) => {
+            include_str!("../assets/weather-v1/dark/scattered_rain_showers_night.svg")
+        }
+        ("scattered_snow_showers_day", false) => {
+            include_str!("../assets/weather-v1/light/scattered_snow_showers_day.svg")
+        }
+        ("scattered_snow_showers_day", true) => {
+            include_str!("../assets/weather-v1/dark/scattered_snow_showers_day.svg")
+        }
+        ("scattered_snow_showers_night", false) => {
+            include_str!("../assets/weather-v1/light/scattered_snow_showers_night.svg")
+        }
+        ("scattered_snow_showers_night", true) => {
+            include_str!("../assets/weather-v1/dark/scattered_snow_showers_night.svg")
+        }
+        ("thunderstorms_day", false) => {
+            include_str!("../assets/weather-v1/light/thunderstorms_day.svg")
+        }
+        ("thunderstorms_day", true) => {
+            include_str!("../assets/weather-v1/dark/thunderstorms_day.svg")
+        }
+        ("thunderstorms_night", false) => {
+            include_str!("../assets/weather-v1/light/thunderstorms_night.svg")
+        }
+        ("thunderstorms_night", true) => {
+            include_str!("../assets/weather-v1/dark/thunderstorms_night.svg")
+        }
+        ("strong_thunderstorms", false) => {
+            include_str!("../assets/weather-v1/light/strong_thunderstorms.svg")
+        }
+        ("strong_thunderstorms", true) => {
+            include_str!("../assets/weather-v1/dark/strong_thunderstorms.svg")
+        }
+        ("not_available", false) => include_str!("../assets/weather-v1/light/not_available.svg"),
+        ("not_available", true) => include_str!("../assets/weather-v1/dark/not_available.svg"),
+        (_, true) => include_str!("../assets/weather-v1/dark/not_available.svg"),
+        (_, false) => include_str!("../assets/weather-v1/light/not_available.svg"),
     }
 }
 
@@ -51,42 +140,6 @@ pub fn lighten(c: [u8; 3], t: f32) -> [u8; 3] {
 pub fn over(fg: [u8; 4], bg: [u8; 3]) -> [u8; 3] {
     let a = fg[3] as f32 / 255.0;
     [0, 1, 2].map(|i| (fg[i] as f32 * a + bg[i] as f32 * (1.0 - a)).round() as u8)
-}
-
-/// Recolour the Pixel Weather source palette to the app palette.
-pub fn reskin(svg: &str, p: &Palette) -> String {
-    let sun = hex(p.a0);
-    let precip_light = hex(lighten(p.a0, 0.35));
-    let cloud = hex(over(p.text2, p.bg));
-    let light = hex(p.text);
-
-    let mut out = String::with_capacity(svg.len());
-    let mut rest = svg;
-    while let Some(i) = rest.find('#') {
-        out.push_str(&rest[..i]);
-        let after = &rest[i + 1..];
-        let n = after.bytes().take_while(|b| b.is_ascii_hexdigit()).count();
-        let token = after[..n].to_ascii_lowercase();
-        // The whole hex run is compared, so "#fff" never touches longer
-        // colours such as "#fffa00".
-        let repl = match token.as_str() {
-            "fcbd00" | "619dff" => Some(&sun),
-            "8ab4f8" => Some(&precip_light),
-            "bdc1c6" => Some(&cloud),
-            "e8eaed" | "fff" | "ffffff" => Some(&light),
-            _ => None,
-        };
-        match repl {
-            Some(r) => out.push_str(r),
-            None => {
-                out.push('#');
-                out.push_str(&after[..n]);
-            }
-        }
-        rest = &after[n..];
-    }
-    out.push_str(rest);
-    out
 }
 
 /// Render an SVG to fit `width_px` x `height_px` (uniform scale, centred).
@@ -142,27 +195,37 @@ pub fn svg_texture(ctx: &Context, key: &str, svg: &str, height_pt: u32) -> Textu
     tex
 }
 
-/// Cached texture for a weather icon, displayed at `px` points square.
-pub fn weather_texture(ctx: &Context, icon: PixelIcon, p: &Palette, px: u32) -> TextureHandle {
+/// Cached texture for the weather icon of a WMO `code`, `px` points square.
+/// `dark` picks the dark-theme variant.
+pub fn weather_texture(
+    ctx: &Context,
+    code: u8,
+    is_day: bool,
+    dark: bool,
+    px: u32,
+) -> TextureHandle {
+    let name = v1_icon(code, is_day);
     let raster = device_px(ctx, px);
-    let id = Id::unique(("pw", icon.name(), px, raster, p.a0, p.text, p.bg, p.text2));
+    let id = Id::unique(("wx-v1", name, dark, px, raster));
     if let Some(t) = ctx.data_mut(|d| d.get_temp::<TextureHandle>(id)) {
         return t;
     }
-    let image = rasterize(&reskin(svg_source(icon), p), raster, raster)
+    let image = rasterize(v1_svg(name, dark), raster, raster)
         .unwrap_or_else(|| ColorImage::filled([1, 1], egui::Color32::TRANSPARENT));
-    let tex = ctx.load_texture(
-        format!("pw-{}-{px}", icon.name()),
-        image,
-        TextureOptions::LINEAR,
-    );
+    let tex = ctx.load_texture(format!("wx-{name}-{px}"), image, TextureOptions::LINEAR);
     ctx.data_mut(|d| d.insert_temp(id, tex.clone()));
     tex
 }
 
-/// Ready-to-add weather icon image, `px` points square.
-pub fn weather_image(ctx: &Context, icon: PixelIcon, p: &Palette, px: u32) -> egui::Image<'static> {
-    let tex = weather_texture(ctx, icon, p, px);
+/// Ready-to-add weather icon image for a WMO `code`, `px` points square.
+pub fn weather_image(
+    ctx: &Context,
+    code: u8,
+    is_day: bool,
+    dark: bool,
+    px: u32,
+) -> egui::Image<'static> {
+    let tex = weather_texture(ctx, code, is_day, dark, px);
     egui::Image::from_texture(&tex).fit_to_exact_size(egui::vec2(px as f32, px as f32))
 }
 
@@ -182,45 +245,35 @@ pub fn icon_data(png: &[u8]) -> std::sync::Arc<egui::IconData> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ss_core::theme::dark_base;
-
-    const SOURCES: [&str; 6] = [
-        "#fcbd00", "#bdc1c6", "#e8eaed", "#fff", "#8ab4f8", "#619dff",
-    ];
 
     pub(crate) fn has_pixels(img: &ColorImage) -> bool {
         img.pixels.iter().any(|c| c.a() > 0)
     }
 
     #[test]
-    fn reskin_replaces_all_source_colours() {
-        let p = dark_base();
-        for icon in PixelIcon::ALL {
-            let out = reskin(svg_source(icon), &p).to_ascii_lowercase();
-            for s in SOURCES {
-                assert!(!out.contains(s), "{} still has {s}", icon.name());
+    fn every_v1_icon_rasterizes_in_both_themes() {
+        for name in ss_core::weather::icons::V1_ICONS {
+            for dark in [true, false] {
+                let img = rasterize(v1_svg(name, dark), 48, 48)
+                    .unwrap_or_else(|| panic!("{name} failed to rasterize"));
+                assert!(has_pixels(&img), "{name} (dark={dark}) is empty");
             }
         }
     }
 
     #[test]
-    fn reskin_keeps_none_and_longer_hex() {
-        let p = dark_base();
-        let out = reskin(r##"<a fill="none" b="#fff" c="#ffffff" d="#fffa00"/>"##, &p);
-        assert!(out.contains(r#"fill="none""#));
-        assert!(out.contains(r##"d="#fffa00""##));
-        assert!(!out.contains(r##""#fff""##));
-        assert!(!out.contains("#ffffff"));
-    }
-
-    #[test]
-    fn icons_rasterize() {
-        let p = dark_base();
-        for icon in PixelIcon::ALL {
-            let img = rasterize(&reskin(svg_source(icon), &p), 48, 48)
-                .unwrap_or_else(|| panic!("{} failed to rasterize", icon.name()));
-            assert_eq!(img.size, [48, 48]);
-            assert!(has_pixels(&img), "{} is empty", icon.name());
+    fn bundled_fonts_parse() {
+        for (name, bytes) in [
+            ("sans", fonts::GOOGLE_SANS),
+            ("sans-semibold", fonts::GOOGLE_SANS_SEMIBOLD),
+            ("flex-light", fonts::GOOGLE_SANS_FLEX_LIGHT),
+            ("flex-wide-thin", fonts::GOOGLE_SANS_FLEX_WIDE_THIN),
+            ("flex-wide-medium", fonts::GOOGLE_SANS_FLEX_WIDE_MEDIUM),
+            ("code", fonts::GOOGLE_SANS_CODE),
+            ("code-medium", fonts::GOOGLE_SANS_CODE_MEDIUM),
+        ] {
+            assert!(bytes.len() > 10_000, "{name} too small");
+            assert_eq!(&bytes[..4], &[0, 1, 0, 0], "{name} is not a TrueType font");
         }
     }
 

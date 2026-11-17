@@ -1,5 +1,4 @@
 use egui::{RichText, Ui};
-use ss_core::weather::icons::pixel_icon;
 use ss_core::weather::outlook::today_outlook;
 use ss_core::weather::units::{compass_8, fmt_precip, fmt_temp, fmt_time_full, fmt_wind, uv_label};
 use ss_core::weather::wmo::wmo_label;
@@ -7,7 +6,7 @@ use ss_core::PanelKind;
 
 use super::{error_text, placeholder, Panel, PanelCx};
 use crate::icons::weather_image;
-use crate::theme::{c32, c32a, on, PRO_PURPLE};
+use crate::theme::{c32, c32a, on, PRO_BLUE};
 
 pub struct ConditionsPanel;
 
@@ -44,8 +43,9 @@ impl Panel for ConditionsPanel {
                 ui.horizontal(|ui| {
                     ui.add(weather_image(
                         ui.ctx(),
-                        pixel_icon(c.weather_code, c.is_day),
-                        &p,
+                        c.weather_code,
+                        c.is_day,
+                        crate::theme::is_dark(&p),
                         34,
                     ));
                     ui.label(
@@ -57,12 +57,12 @@ impl Panel for ConditionsPanel {
                 let wind_val = fmt_wind(c.wind_speed_kmh, units);
                 let rows = [
                     ("T", fmt_temp(c.temperature_c, units), p.a0),
-                    ("FL", fmt_temp(c.apparent_temperature_c, units), PRO_PURPLE),
+                    ("FL", fmt_temp(c.apparent_temperature_c, units), PRO_BLUE),
                     ("RH", format!("{:.0}%", c.relative_humidity_pct), p.a0),
                     (
                         "W",
                         format!("{wind_val} {}", compass_8(c.wind_direction_deg)),
-                        PRO_PURPLE,
+                        PRO_BLUE,
                     ),
                 ];
                 for (label, value, tag) in rows {

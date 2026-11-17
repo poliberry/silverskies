@@ -491,6 +491,8 @@ pub struct Config {
     /// flash-flood warnings, PDS/emergency tiers) above zone-based polygons.
     pub storm_polygons_enabled: bool,
     pub radar: RadarSettings,
+    /// Keep the menu bar visible instead of revealing it with Alt.
+    pub menu_bar_always: bool,
 }
 
 impl Default for Config {
@@ -523,6 +525,7 @@ impl Default for Config {
             tts_all_saved_locations: false,
             storm_polygons_enabled: true,
             radar: RadarSettings::default(),
+            menu_bar_always: false,
         }
     }
 }

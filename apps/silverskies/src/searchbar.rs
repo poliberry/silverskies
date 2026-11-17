@@ -9,7 +9,7 @@ use ss_core::{Location, SavedLocation};
 
 use crate::app::Action;
 use crate::search;
-use crate::theme::{alpha, c32, c32a, RADIUS};
+use crate::theme::{alpha, c32, c32a};
 
 const DEBOUNCE: Duration = Duration::from_millis(350);
 const MAX_PLACES: usize = 4;
@@ -26,6 +26,8 @@ pub struct SearchBar {
     results_for: Option<String>,
     selected: usize,
     open: bool,
+    /// Take keyboard focus on the next frame (Edit → Find, Ctrl+F).
+    pub focus_next: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -161,16 +163,17 @@ impl SearchBar {
         let hint = if ai_on {
             "Search places, or ask “will it rain tomorrow?”"
         } else {
-            "Search places or keywords — “Paris”, “radar”, “weather in Tokyo tomorrow”"
+            "Search city or keyword… (e.g. Tucson, AZ · radar · weather in Paris tomorrow)"
         };
         let edit = egui::TextEdit::singleline(&mut self.text)
             .hint_text(RichText::new(hint).color(c32a(p.text3)))
-            .desired_width(width - 44.0)
-            .margin(Margin::symmetric(14, 9))
+            .desired_width(width - 150.0)
+            .margin(Margin::symmetric(12, 11))
             .frame(egui::Frame::NONE);
         let frame = egui::Frame::new()
-            .fill(c32(p.surface3))
-            .corner_radius(CornerRadius::same(255))
+            .fill(c32(p.surface))
+            .stroke(egui::Stroke::new(1.0, c32a(p.border)))
+            .corner_radius(CornerRadius::ZERO)
             .inner_margin(Margin {
                 left: 14,
                 right: 4,
@@ -178,6 +181,7 @@ impl SearchBar {
                 bottom: 0,
             });
         let mut resp = None;
+        let mut search_clicked = false;
         let outer = frame.show(ui, |ui| {
             ui.horizontal_centered(|ui| {
                 // Magnifier, painted (no font has a reliable glyph for it).
@@ -188,6 +192,13 @@ impl SearchBar {
                 ui.painter()
                     .line_segment([c + egui::vec2(4.0, 4.0), c + egui::vec2(8.5, 8.5)], stroke);
                 resp = Some(ui.add(edit));
+                // The design's square SEARCH button.
+                let btn =
+                    egui::Button::new(crate::theme::caps("Search", 11.0, crate::theme::accent2(p)))
+                        .fill(crate::theme::glow(p))
+                        .stroke(egui::Stroke::new(1.0, alpha(p.a0, 128)))
+                        .min_size(egui::vec2(96.0, 34.0));
+                search_clicked = ui.add(btn).clicked();
             });
         });
         let resp = resp.expect("text edit drawn");
@@ -198,6 +209,9 @@ impl SearchBar {
             self.selected = 0;
             self.open = true;
             ui.ctx().request_repaint_after(DEBOUNCE);
+        }
+        if std::mem::take(&mut self.focus_next) {
+            resp.request_focus();
         }
         if resp.gained_focus() {
             self.open = true;
@@ -220,7 +234,7 @@ impl SearchBar {
             }
         }
         // Enter: the highlighted suggestion, or the raw text as a query.
-        if resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+        if search_clicked || (resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter))) {
             chosen = items
                 .get(self.selected)
                 .map(|s| s.action.clone())
@@ -239,8 +253,9 @@ impl SearchBar {
             let inner = area.show(ui.ctx(), |ui| {
                 egui::Frame::popup(ui.style())
                     .fill(c32(p.surface))
-                    .corner_radius(CornerRadius::same(RADIUS))
-                    .inner_margin(Margin::same(6))
+                    .corner_radius(CornerRadius::ZERO)
+                    .stroke(egui::Stroke::new(1.0, c32a(p.border)))
+                    .inner_margin(Margin::same(4))
                     .show(ui, |ui| {
                         ui.set_width(field_rect.width() - 12.0);
                         for (i, s) in items.iter().enumerate() {
@@ -253,10 +268,15 @@ impl SearchBar {
                                 self.selected = i;
                             }
                             if hot {
+                                ui.painter()
+                                    .rect_filled(row.rect, 0.0, crate::theme::glow(p));
                                 ui.painter().rect_filled(
-                                    row.rect,
-                                    CornerRadius::same(10),
-                                    alpha(p.a0, 50),
+                                    egui::Rect::from_min_size(
+                                        row.rect.min,
+                                        egui::vec2(2.0, row.rect.height()),
+                                    ),
+                                    0.0,
+                                    c32(p.a0),
                                 );
                             }
                             let painter = ui.painter_at(row.rect);
@@ -264,11 +284,11 @@ impl SearchBar {
                             painter.text(
                                 egui::pos2(row.rect.left() + 12.0, y),
                                 egui::Align2::LEFT_CENTER,
-                                s.kind,
-                                egui::FontId::proportional(11.5),
-                                c32(p.a0),
+                                s.kind.to_uppercase(),
+                                crate::theme::mono_medium_font(10.0),
+                                crate::theme::accent2(p),
                             );
-                            let title_x = row.rect.left() + 70.0;
+                            let title_x = row.rect.left() + 76.0;
                             let g = painter.layout_no_wrap(
                                 s.title.clone(),
                                 egui::FontId::proportional(14.5),

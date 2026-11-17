@@ -1,4 +1,5 @@
-//! Header row: Pro logomark, active location block and clock blocks.
+//! Header row as a terminal command line: logomark, the active place as an
+//! amber security field with `WX <GO>`, coordinates, date and clock.
 
 use std::time::{Duration, Instant};
 
@@ -8,7 +9,7 @@ use ss_core::weather::units::fmt_clock;
 
 use crate::icons::logo_texture;
 use crate::state::Shared;
-use crate::theme::{c32, c32a, is_dark, on, PRO_PURPLE};
+use crate::theme::{c32, c32a, is_dark, PRO_BAR, PRO_UP, PRO_YELLOW};
 
 #[derive(Default)]
 pub struct HeaderAction {
@@ -80,12 +81,11 @@ pub fn show(
     let mut action = HeaderAction::default();
     let ctx = ui.ctx().clone();
     let dark = is_dark(&p);
-    let tex = logo_texture(&ctx, dark, 30);
+    let tex = logo_texture(&ctx, dark, 26);
     let ts = tex.size_vec2();
-    let size = egui::vec2(30.0 * ts.x / ts.y.max(1.0), 30.0);
-    let mono = FontId::monospace(11.0);
-    let t3 = c32a(p.text3);
-    let ink = c32(p.text);
+    let size = egui::vec2(26.0 * ts.x / ts.y.max(1.0), 26.0);
+    let mono = FontId::monospace(12.0);
+    let amber = c32(p.a0);
 
     ui.horizontal_centered(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
@@ -96,6 +96,34 @@ pub fn show(
         }
         ui.add_space(14.0);
 
+        // The "security" field of a terminal command line: the active place
+        // as a ticker, the WX function and a green <GO> key.
+        let (ticker, coord) = match sh.active_location() {
+            Some(l) => (l.label.to_uppercase(), coords(l.lat, l.lon)),
+            None => ("LOCATING…".to_string(), String::new()),
+        };
+        block(
+            ui,
+            &format!("{ticker} "),
+            FontId::monospace(13.0),
+            c32(PRO_YELLOW),
+            egui::Color32::BLACK,
+        );
+        block(ui, "WX", FontId::monospace(13.0), c32(PRO_BAR), amber);
+        block(
+            ui,
+            "<GO>",
+            FontId::monospace(12.0),
+            c32(PRO_UP),
+            egui::Color32::BLACK,
+        );
+        ui.add_space(12.0);
+        if !coord.is_empty() {
+            ui.add(
+                Label::new(RichText::new(coord).font(mono.clone()).color(c32a(p.text3))).truncate(),
+            );
+        }
+
         let tz = sh.active_weather().map(|w| w.timezone.as_str());
         let (hh, mm) = clock_parts(now, tz);
         let clock = fmt_clock(hh, mm, sh.config.time_format);
@@ -104,54 +132,31 @@ pub fn show(
             let (h, m) = clock_parts(now - ago, tz);
             fmt_clock(h, m, sh.config.time_format)
         });
+        let date = match tz.and_then(|z| z.parse::<chrono_tz::Tz>().ok()) {
+            Some(z) => now.with_timezone(&z).format("%a %m/%d/%y").to_string(),
+            None => now.format("%a %m/%d/%y").to_string(),
+        }
+        .to_uppercase();
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            ui.spacing_mut().item_spacing.x = 0.0;
-            block(ui, &clock, FontId::monospace(13.0), c32(p.a0), on(p.a0));
-            block(
-                ui,
-                &format!("SYNC {}", refresh.unwrap_or_else(|| "—".into())),
-                mono.clone(),
-                c32(PRO_PURPLE),
-                on(PRO_PURPLE),
+            ui.spacing_mut().item_spacing.x = 10.0;
+            ui.label(
+                RichText::new(clock)
+                    .font(FontId::monospace(14.0))
+                    .color(c32(p.text)),
             );
-            ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                ui.spacing_mut().item_spacing.x = 0.0;
-                match sh.active_location() {
-                    Some(l) => {
-                        block(
-                            ui,
-                            &l.label.to_uppercase(),
-                            FontId::monospace(13.0),
-                            c32(p.surface3),
-                            ink,
-                        );
-                        ui.add_space(10.0);
-                        ui.add(
-                            Label::new(
-                                RichText::new(coords(l.lat, l.lon))
-                                    .font(mono.clone())
-                                    .color(t3),
-                            )
-                            .truncate(),
-                        );
-                    }
-                    None => {
-                        block(ui, "LOCATING…", mono.clone(), c32(p.surface3), ink);
-                    }
-                }
-            });
+            ui.label(RichText::new(date).font(mono.clone()).color(amber));
+            ui.label(
+                RichText::new(format!("SYNC {}", refresh.unwrap_or_else(|| "—".into())))
+                    .font(mono.clone())
+                    .color(c32a(p.text3)),
+            );
         });
     });
 
-    // Rule under the header: blue, with a blue/violet tab at the left.
+    // Thin amber rule under the command line.
     let r = ui.max_rect();
-    let y = r.bottom() + 5.0;
     ui.painter()
-        .hline(r.x_range(), y, egui::Stroke::new(1.5, c32(p.a0)));
-    let tab = egui::Rect::from_min_size(egui::pos2(r.left(), y - 1.0), egui::vec2(48.0, 4.0));
-    ui.painter().rect_filled(tab, 0.0, c32(p.a0));
-    let tab2 = tab.translate(egui::vec2(48.0, 0.0));
-    ui.painter().rect_filled(tab2, 0.0, c32(PRO_PURPLE));
+        .hline(r.x_range(), r.bottom() + 5.0, egui::Stroke::new(1.0, amber));
     action
 }
 

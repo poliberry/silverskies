@@ -4,12 +4,18 @@ The over-engineered one: a composite forecast, meteorology and radar workstation
 entirely in Rust. Part of the [Silver Skies](../../README.md) suite — for a simple, calm
 forecast app, see [Silver Skies](../silverskies/README.md).
 
-Pro is laid out like an engineering workstation: a menu bar and a toolbar of block buttons
-across the top, pane stacks docked flush to the left and right, the radar as the central
-viewport, centre panes in a bottom dock, a command console beneath it and a tool strip down the
-right edge that shows and hides panes. It is black, with white, blue and violet text, an
-electric-blue primary accent and a violet secondary accent; every control is a hard-edged
-block. Conditions read out like a digital readout (DRO).
+Pro is laid out and styled like a financial terminal. Under the native window title bar sits a
+command line — the active place as an amber "security" field with `WX <GO>`, its coordinates,
+the date and clock — then a numbered function-key row (`1) SAVE  2) SYNC  …  12) SETTINGS`, also
+on F1–F12). Panes dock flush to the left and right with dark title bars carrying amber numbered
+badges, the radar is the central viewport, centre panes sit in a bottom dock above the `:`
+console, a tool strip down the right edge shows and hides panes, and a ticker tape scrolls every
+saved place with its temperature, three-hour trend (green ▲ / red ▼) and alert count. It is
+black with amber labels, white data, blue highlights and green/red for up/down; conditions read
+out like a digital readout.
+
+Press **Alt** for the classic menu bar (File, View, Radar, Alerts, Radio, Help); View → Always
+Show Menu Bar pins it.
 
 Everything is also driven by an embedded `:` command line — locations, layout, radar layers,
 alerts, theming and the weather radio. Panes can be dragged between docks, hidden, or popped out

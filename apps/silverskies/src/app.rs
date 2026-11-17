@@ -7,7 +7,7 @@ use chrono::NaiveDateTime;
 use crossbeam_channel::Receiver;
 use egui::{Align, CornerRadius, Layout, Margin, RichText, Ui};
 use ss_core::geo::haversine_km;
-use ss_core::theme::{resolve_palette, Palette};
+use ss_core::theme::Palette;
 use ss_core::weather::wmo::accent_for;
 use ss_core::{
     Alert, Config, Location, LocationsFile, SavedLocation, UnitPref, Weather, WeatherMaps,
@@ -25,6 +25,10 @@ use crate::summary;
 use crate::theme::{self, c32, c32a};
 use crate::worker::{Event, Worker};
 
+/// Height of the top header.
+const HEADER_H: f32 = 78.0;
+/// Width of the places sidebar.
+const SIDEBAR_W: f32 = 270.0;
 const MAPS_EVERY: Duration = Duration::from_secs(5 * 60);
 /// Treat a picked place this close to a saved one as the same place.
 const SAME_PLACE_KM: f64 = 3.0;
@@ -108,6 +112,22 @@ pub struct App {
     pub notice: Option<(String, Instant)>,
     /// Locally generated alerts from Settings → Developer (never persisted).
     pub demo_alerts: Vec<Alert>,
+    /// The menu bar, revealed with Alt.
+    pub menu: ss_assets::menubar::AltMenuBar,
+    pub about_open: bool,
+    /// The native window title last sent, to avoid resending every frame.
+    last_title: String,
+    /// When each cached forecast was fetched (unix seconds), by location id.
+    pub fetched_at: HashMap<String, i64>,
+}
+
+/// Last good forecast per place, shown when a refresh fails.
+pub const FORECAST_CACHE: &str = "forecast-cache.json";
+
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct ForecastCache {
+    pub entries: HashMap<String, (Weather, i64)>,
 }
 
 impl App {
@@ -128,7 +148,7 @@ impl App {
             .user_agent(ss_net::USER_AGENT)
             .build()?;
         let tiles = TileCache::new(http, rt, Some(store.dir().join("tiles")), ctx.clone());
-        let palette = resolve_palette(&config, [0x7f, 0xb4, 0xff], true);
+        let palette = theme::simple_palette(&config, [0x8a, 0x64, 0xff], true);
         theme::apply_palette(&ctx, &palette);
 
         let mut app = App {
@@ -162,7 +182,19 @@ impl App {
             locating: false,
             notice: None,
             demo_alerts: Vec::new(),
+            menu: Default::default(),
+            about_open: false,
+            last_title: String::new(),
+            fetched_at: HashMap::new(),
         };
+        // Start from the last good forecasts so the app is useful offline.
+        let cache: ForecastCache = app.store.read(FORECAST_CACHE);
+        for (id, (w, at)) in cache.entries {
+            if app.locations.saved_locations.iter().any(|l| l.id == id) {
+                app.weather.insert(id.clone(), w);
+                app.fetched_at.insert(id, at);
+            }
+        }
         if app.locations.saved_locations.is_empty() {
             app.locating = true;
             app.worker.ip_locate();
@@ -226,6 +258,29 @@ impl App {
 
     pub fn save_prefs(&self) {
         self.prefs.save(&self.store);
+    }
+
+    fn save_forecast_cache(&self) {
+        let cache = ForecastCache {
+            entries: self
+                .weather
+                .iter()
+                .filter_map(|(id, w)| Some((id.clone(), (w.clone(), *self.fetched_at.get(id)?))))
+                .collect(),
+        };
+        if let Err(e) = self.store.write(FORECAST_CACHE, &cache) {
+            tracing::warn!("saving forecast cache: {e}");
+        }
+    }
+
+    /// Quit the app (File → Quit, Ctrl+Q).
+    pub fn quit(&self) {
+        self.ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    }
+
+    /// Put focus in the search field on the next frame (Ctrl+F).
+    pub fn focus_search(&mut self) {
+        self.search.focus_next = true;
     }
 
     pub fn store_dir(&self) -> String {
@@ -295,8 +350,8 @@ impl App {
                     w.current.wind_speed_kmh,
                 )
             })
-            .unwrap_or([0x7f, 0xb4, 0xff]);
-        let p = resolve_palette(&self.config, accent, system_dark);
+            .unwrap_or([0x8a, 0x64, 0xff]);
+        let p = theme::simple_palette(&self.config, accent, system_dark);
         if p != self.palette {
             self.palette = p;
             theme::apply_palette(&self.ctx, &p);
@@ -555,6 +610,9 @@ impl App {
                     match result {
                         Ok(w) => {
                             self.weather.insert(location_id.clone(), w);
+                            self.fetched_at
+                                .insert(location_id.clone(), chrono::Utc::now().timestamp());
+                            self.save_forecast_cache();
                             self.errors.remove(&location_id);
                             let is_active =
                                 self.locations.active_location_id.as_deref() == Some(&location_id);
@@ -581,6 +639,7 @@ impl App {
                             }
                         }
                         Err(e) => {
+                            tracing::warn!("forecast for {location_id}: {e}");
                             self.errors.insert(location_id, friendly_error(&e));
                         }
                     }
@@ -680,24 +739,66 @@ impl App {
 
     fn top_bar(&mut self, ui: &mut Ui, actions: &mut Vec<Action>) {
         let p = self.palette;
+        let tf = self.config.time_format;
+        let clock_fmt = match tf {
+            ss_core::TimeFormat::H12 => "%-I:%M %p",
+            ss_core::TimeFormat::H24 => "%H:%M",
+        };
+        let now = match self.active_weather() {
+            Some(w) => App::now_for(w),
+            None => chrono::Local::now().naive_local(),
+        };
         ui.horizontal_centered(|ui| {
-            let tex = ss_assets::svg_texture(
-                ui.ctx(),
-                "ss-iconmark",
-                include_str!("../assets/brand/iconmark.svg"),
-                36,
+            // Brand + last refresh, as wide as the sidebar below it.
+            ui.allocate_ui_with_layout(
+                egui::vec2(SIDEBAR_W - 16.0, 56.0),
+                Layout::top_down(Align::Min),
+                |ui| {
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    ui.horizontal(|ui| {
+                        let tex = ss_assets::svg_texture(
+                            ui.ctx(),
+                            "ss-iconmark",
+                            include_str!("../assets/brand/iconmark.svg"),
+                            30,
+                        );
+                        ui.add(
+                            egui::Image::from_texture(&tex)
+                                .fit_to_exact_size(egui::vec2(30.0, 30.0)),
+                        );
+                        ui.label(
+                            RichText::new("Silver Skies")
+                                .font(theme::light_font(25.0))
+                                .color(theme::accent2(&p)),
+                        );
+                    });
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        let (dot, _) =
+                            ui.allocate_exact_size(egui::vec2(6.0, 12.0), egui::Sense::hover());
+                        ui.painter().rect_filled(
+                            egui::Rect::from_center_size(dot.center(), egui::vec2(5.0, 5.0)),
+                            0.0,
+                            c32(p.a0),
+                        );
+                        ui.label(theme::caps("Last refresh", 10.0, c32a(p.text3)));
+                        let stamp = self
+                            .last_refresh
+                            .map(|t| {
+                                // Same zone as the clock.
+                                let at = now
+                                    - chrono::Duration::from_std(t.elapsed()).unwrap_or_default();
+                                at.format(clock_fmt).to_string()
+                            })
+                            .unwrap_or_else(|| "—".into());
+                        ui.label(theme::caps(&stamp, 10.0, theme::accent2(&p)));
+                    });
+                },
             );
-            ui.add(egui::Image::from_texture(&tex).fit_to_exact_size(egui::vec2(36.0, 36.0)));
-            ui.label(
-                RichText::new("Silver Skies")
-                    .size(19.0)
-                    .strong()
-                    .color(c32(p.text)),
-            );
-            ui.add_space(18.0);
+            ui.add_space(8.0);
 
-            let right_w = 330.0;
-            let search_w = (ui.available_width() - right_w - 40.0).clamp(220.0, 560.0);
+            let right_w = 300.0;
+            let search_w = (ui.available_width() - right_w).clamp(240.0, 720.0);
             let places = &self.locations.saved_locations;
             if let Some(a) =
                 self.search
@@ -710,105 +811,166 @@ impl App {
             }
 
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui
-                    .add(egui::Button::new(
-                        RichText::new("Settings").color(c32(p.text)),
-                    ))
-                    .clicked()
-                {
-                    actions.push(Action::OpenSettings);
-                }
-                let unit = match self.config.units {
-                    UnitPref::F => "°F",
-                    UnitPref::C => "°C",
-                };
-                if ui
-                    .add(egui::Button::new(unit))
-                    .on_hover_text("Switch units")
-                    .clicked()
-                {
-                    actions.push(Action::Intent(Intent::Units(match self.config.units {
-                        UnitPref::F => search::Units::Celsius,
-                        UnitPref::C => search::Units::Fahrenheit,
-                    })));
-                }
-                ui.add_space(6.0);
-                let tf = self.config.time_format;
-                let clock_fmt = match tf {
-                    ss_core::TimeFormat::H12 => "%-I:%M %p",
-                    ss_core::TimeFormat::H24 => "%H:%M",
-                };
-                let now = match self.active_weather() {
-                    Some(w) => App::now_for(w),
-                    None => chrono::Local::now().naive_local(),
-                };
                 ui.allocate_ui_with_layout(
-                    egui::vec2(118.0, 40.0),
+                    egui::vec2(right_w - 20.0, 56.0),
                     Layout::top_down(Align::Max),
                     |ui| {
-                        ui.spacing_mut().item_spacing.y = 0.0;
-                        ui.label(
-                            RichText::new(now.format(clock_fmt).to_string())
-                                .size(15.0)
-                                .color(c32(p.text)),
-                        );
-                        let stamp = self
-                            .last_refresh
-                            .map(|t| {
-                                // Same zone as the clock above it.
-                                let at = now
-                                    - chrono::Duration::from_std(t.elapsed()).unwrap_or_default();
-                                format!("Updated {}", at.format(clock_fmt))
-                            })
-                            .unwrap_or_else(|| "Not updated yet".into());
-                        ui.label(RichText::new(stamp).size(11.0).color(c32a(p.text3)));
+                        ui.spacing_mut().item_spacing.y = 6.0;
+                        let date = now.format("%a %-d %b %Y").to_string();
+                        ui.label(theme::caps(
+                            &format!("{date} — {}", now.format(clock_fmt)),
+                            10.5,
+                            c32a(p.text3),
+                        ));
+                        ui.horizontal(|ui| {
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                ui.spacing_mut().item_spacing.x = 4.0;
+                                let sq = egui::vec2(32.0, 28.0);
+                                if ui
+                                    .add(
+                                        egui::Button::new(theme::caps(
+                                            "Settings",
+                                            10.0,
+                                            c32a(p.text2),
+                                        ))
+                                        .min_size(sq),
+                                    )
+                                    .clicked()
+                                {
+                                    actions.push(Action::OpenSettings);
+                                }
+                                for (u, label) in [(UnitPref::C, "°C"), (UnitPref::F, "°F")] {
+                                    let on = self.config.units == u;
+                                    let btn = egui::Button::new(theme::caps(
+                                        label,
+                                        11.0,
+                                        if on {
+                                            theme::accent2(&p)
+                                        } else {
+                                            c32a(p.text2)
+                                        },
+                                    ))
+                                    .min_size(sq)
+                                    .fill(if on { theme::glow(&p) } else { c32(p.surface) })
+                                    .stroke(
+                                        egui::Stroke::new(
+                                            1.0,
+                                            if on {
+                                                theme::alpha(p.a0, 140)
+                                            } else {
+                                                c32a(p.border)
+                                            },
+                                        ),
+                                    );
+                                    if ui.add(btn).clicked() && !on {
+                                        actions.push(Action::Intent(Intent::Units(match u {
+                                            UnitPref::C => search::Units::Celsius,
+                                            UnitPref::F => search::Units::Fahrenheit,
+                                        })));
+                                    }
+                                }
+                                ui.add_space(6.0);
+                                if !self.loading.is_empty() {
+                                    ui.add(egui::Spinner::new().size(16.0).color(c32(p.a0)));
+                                } else if ui
+                                    .add(
+                                        egui::Button::new(theme::caps(
+                                            "↻ Refresh",
+                                            10.0,
+                                            c32a(p.text2),
+                                        ))
+                                        .min_size(sq),
+                                    )
+                                    .clicked()
+                                {
+                                    actions.push(Action::Intent(Intent::Refresh));
+                                }
+                            });
+                        });
                     },
                 );
-                ui.add_space(6.0);
-                let spinning = !self.loading.is_empty();
-                if spinning {
-                    ui.add(egui::Spinner::new().size(16.0).color(c32(p.a0)));
-                } else if ui.button("↻").on_hover_text("Refresh").clicked() {
-                    actions.push(Action::Intent(Intent::Refresh));
-                }
             });
         });
     }
 
-    fn tabs(&self, ui: &mut Ui, actions: &mut Vec<Action>) {
+    /// Place title and coordinates, with the view tabs on the right.
+    fn title_row(&self, ui: &mut Ui, actions: &mut Vec<Action>) {
         let p = self.palette;
         let n = self.active_alerts().len();
         ui.horizontal(|ui| {
-            for (tab, label) in [
-                (Tab::Forecast, "Forecast".to_string()),
-                (Tab::Radar, "Radar".to_string()),
-                (
-                    Tab::Alerts,
-                    if n > 0 {
-                        format!("Alerts · {n}")
-                    } else {
-                        "Alerts".into()
-                    },
-                ),
-            ] {
-                let on = self.tab == tab;
-                let text = RichText::new(label).size(15.0).color(if on {
-                    c32(p.text)
-                } else {
-                    c32a(p.text2)
+            if let Some(l) = self.active() {
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    ui.label(
+                        RichText::new(l.label.split(',').next().unwrap_or(&l.label).trim())
+                            .font(theme::light_font(36.0))
+                            .color(c32(p.text)),
+                    );
+                    ui.label(theme::caps(
+                        &ss_core::Location::new(l.lat, l.lon, "").coord_label(),
+                        10.5,
+                        c32a(p.text3),
+                    ));
                 });
-                let btn = egui::Button::new(text)
-                    .fill(if on {
-                        theme::alpha(p.a0, 70)
-                    } else {
-                        egui::Color32::TRANSPARENT
-                    })
-                    .corner_radius(CornerRadius::same(255));
-                if ui.add(btn).clicked() {
-                    actions.push(Action::Tab(tab));
-                }
             }
+            ui.with_layout(Layout::right_to_left(Align::Max), |ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                for (tab, label) in [
+                    (
+                        Tab::Alerts,
+                        if n > 0 {
+                            format!("Alerts · {n}")
+                        } else {
+                            "Alerts".into()
+                        },
+                    ),
+                    (Tab::Radar, "Radar".to_string()),
+                    (Tab::Forecast, "Forecast".to_string()),
+                ] {
+                    let on = self.tab == tab;
+                    let alert_tab = tab == Tab::Alerts && n > 0;
+                    let color = if on {
+                        theme::accent2(&p)
+                    } else if alert_tab {
+                        c32(p.danger)
+                    } else {
+                        c32a(p.text3)
+                    };
+                    let (rect, resp) =
+                        ui.allocate_exact_size(egui::vec2(110.0, 34.0), egui::Sense::click());
+                    if on {
+                        ui.painter().rect_filled(rect, 0.0, theme::glow(&p));
+                        ui.painter().rect_filled(
+                            egui::Rect::from_min_size(
+                                rect.left_bottom() - egui::vec2(0.0, 2.0),
+                                egui::vec2(rect.width(), 2.0),
+                            ),
+                            0.0,
+                            c32(p.a0),
+                        );
+                    } else if resp.hovered() {
+                        ui.painter().rect_filled(rect, 0.0, theme::alpha(p.a0, 14));
+                    }
+                    ui.painter().text(
+                        rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        label.to_uppercase(),
+                        theme::mono_medium_font(11.0),
+                        color,
+                    );
+                    if resp.clicked() {
+                        actions.push(Action::Tab(tab));
+                    }
+                }
+            });
         });
+        let r = ui.min_rect();
+        ui.painter().hline(
+            r.x_range(),
+            ui.cursor().top() + 2.0,
+            egui::Stroke::new(1.0, c32a(p.border)),
+        );
+        ui.add_space(10.0);
     }
 }
 
@@ -820,15 +982,31 @@ impl eframe::App for App {
         let p = self.palette;
         let mut actions: Vec<Action> = Vec::new();
 
-        egui::Panel::top("top")
-            .exact_size(64.0)
+        crate::menu::shortcuts(ui.ctx(), self, &mut actions);
+        // The native title bar names the place, like a document title.
+        let title = match self.active() {
+            Some(l) => format!("{} — Silver Skies", l.label),
+            None => "Silver Skies".to_string(),
+        };
+        if title != self.last_title {
+            ui.ctx()
+                .send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
+            self.last_title = title;
+        }
+        if self.menu.update(ui.ctx(), self.config.menu_bar_always) {
+            crate::menu::bar(ui, self, &mut actions);
+        }
+
+        let header = egui::Panel::top("top")
+            .exact_size(HEADER_H)
             .resizable(false)
             .frame(
                 egui::Frame::NONE
                     .fill(c32(p.bg))
-                    .inner_margin(Margin::symmetric(18, 10)),
+                    .inner_margin(Margin::symmetric(20, 10)),
             )
             .show(ui, |ui| self.top_bar(ui, &mut actions));
+        let header_bottom = header.response.rect.bottom();
 
         // Top glow: a soft accent line under the header that pulses in the
         // alert's colour while a severe alert is active.
@@ -836,7 +1014,7 @@ impl eframe::App for App {
             let alerts = self.active_alerts();
             let pulse = ss_core::alerts::colors::active_pulse_color(&alerts);
             let r = ui.ctx().content_rect();
-            let y = r.top() + 64.0;
+            let y = header_bottom;
             let (rgb, a) = match pulse {
                 Some(c) => {
                     let t = ui.input(|i| i.time);
@@ -871,26 +1049,25 @@ impl eframe::App for App {
         }
 
         egui::Panel::left("places")
-            .exact_size(250.0)
+            .exact_size(SIDEBAR_W)
             .resizable(false)
             .frame(egui::Frame::NONE.fill(c32(p.bg)).inner_margin(Margin {
-                left: 16,
-                right: 8,
-                top: 6,
+                left: 20,
+                right: 10,
+                top: 16,
                 bottom: 16,
             }))
             .show(ui, |ui| crate::views::places(ui, self, &mut actions));
 
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(c32(p.bg)).inner_margin(Margin {
-                left: 8,
-                right: 18,
-                top: 6,
+                left: 10,
+                right: 20,
+                top: 14,
                 bottom: 0,
             }))
             .show(ui, |ui| {
-                self.tabs(ui, &mut actions);
-                ui.add_space(4.0);
+                self.title_row(ui, &mut actions);
                 match self.tab {
                     Tab::Forecast => crate::views::forecast(ui, self, &mut actions),
                     Tab::Alerts => crate::views::alerts(ui, self, &mut actions),
@@ -937,6 +1114,9 @@ impl eframe::App for App {
 
         if self.settings_open {
             crate::settings::window(ui.ctx(), self);
+        }
+        if self.about_open {
+            crate::menu::about(ui.ctx(), self);
         }
 
         for a in actions {

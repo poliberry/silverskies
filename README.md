@@ -35,7 +35,8 @@ crates/
   ss-audio/     tone synthesis, native TTS, live stream player
   ss-map/       slippy-map engine for egui: tile cache, Mercator viewport, raster/WMS/polygon/
                 marker/wind-barb layers
-  ss-assets/    shared UI assets: bundled fonts, Pixel Weather icons, SVG rasterizing
+  ss-assets/    shared UI assets: bundled fonts (Google Sans family, DejaVu), Google's V1
+                weather icons, SVG rasterizing, the Alt-revealed menu bar
 tools/
   render-icons/ regenerates each app's PNG icons from its brand SVGs (`cargo run -p render-icons`)
 ```
@@ -48,3 +49,10 @@ in `apps/<app>/dist/`.
 Pushing a `v*` tag that matches the workspace version builds installers of both apps for
 Windows (installer + portable zip), macOS (Apple silicon and Intel `.dmg`/`.zip`) and Linux
 (AppImage + `.deb`) and publishes them together in one GitHub Release.
+
+## Credits
+
+Weather icons: Google's V1 weather icon set, from
+[bignutty/google-weather-icons](https://github.com/bignutty/google-weather-icons). Fonts:
+Google Sans, Google Sans Flex and Google Sans Code (SIL Open Font License), DejaVu (Bitstream
+Vera license).

@@ -1,5 +1,4 @@
 use egui::{vec2, RichText, Sense, Ui};
-use ss_core::weather::icons::pixel_icon;
 use ss_core::weather::units::{fmt_date_short, fmt_temp};
 use ss_core::PanelKind;
 
@@ -51,8 +50,9 @@ impl Panel for ForecastPanel {
                 );
                 ui.add(weather_image(
                     ui.ctx(),
-                    pixel_icon(d.weather_code, true),
-                    &p,
+                    d.weather_code,
+                    true,
+                    crate::theme::is_dark(&p),
                     16,
                 ));
                 ui.add_sized(

@@ -14,7 +14,7 @@ use ss_core::{Column, Layout, PanelKind, SavedLocation};
 use crate::panels::{Panel, PanelCx};
 use crate::state::{PanelRequests, Shared, WindowTarget};
 use crate::tasks::Tasks;
-use crate::theme::{c32, c32a, on, PRO_PURPLE};
+use crate::theme::{c32, c32a, on, PRO_BAR, PRO_BLUE};
 
 pub const TITLE_H: f32 = 24.0;
 const MARGIN: f32 = 12.0;
@@ -94,25 +94,44 @@ pub fn drop_index(others: &[Rect], y: f32) -> usize {
     others.iter().filter(|r| r.center().y < y).count()
 }
 
-/// Title bar as a solid block: blue when idle, violet when hovered or being
-/// dragged. Returns the colour glyphs on the bar should use.
+/// Terminal-style title bar: dark grey with a numbered amber badge and an
+/// amber title; blue while hovered, amber (black text) while dragged.
+/// Returns the colour glyphs on the bar should use.
 fn paint_title_block(
     ui: &Ui,
     title: Rect,
     p: &ss_core::theme::Palette,
     text: &str,
+    number: Option<usize>,
     hot: bool,
     dragging: bool,
 ) -> Color32 {
-    let fill = if dragging || hot { PRO_PURPLE } else { p.a0 };
-    let fg = on(fill);
-    ui.painter().rect_filled(title, 0.0, c32(fill));
-    // A small accent notch: violet on idle, white when active.
-    let notch = Rect::from_min_size(title.min, vec2(6.0, title.height()));
-    let notch_fill = if hot || dragging { fg } else { c32(PRO_PURPLE) };
-    ui.painter().rect_filled(notch, 0.0, notch_fill);
+    let (fill, fg) = if dragging {
+        (c32(p.a0), on(p.a0))
+    } else if hot {
+        (c32(PRO_BLUE), Color32::WHITE)
+    } else {
+        (c32(PRO_BAR), c32a(p.text2))
+    };
+    ui.painter().rect_filled(title, 0.0, fill);
+    let mut x = title.left() + 6.0;
+    if let Some(n) = number {
+        let badge = Rect::from_min_size(
+            pos2(title.left() + 3.0, title.top() + 3.0),
+            vec2(18.0, title.height() - 6.0),
+        );
+        ui.painter().rect_filled(badge, 0.0, c32(p.a0));
+        ui.painter().text(
+            badge.center(),
+            Align2::CENTER_CENTER,
+            n.to_string(),
+            FontId::monospace(11.0),
+            on(p.a0),
+        );
+        x = badge.right() + 7.0;
+    }
     ui.painter().text(
-        pos2(title.left() + 12.0, title.center().y),
+        pos2(x, title.center().y),
         Align2::LEFT_CENTER,
         text.to_uppercase(),
         FontId::monospace(11.5),
@@ -121,7 +140,7 @@ fn paint_title_block(
     fg
 }
 
-/// Pane body: opaque fill with a thin accent outline.
+/// Pane body: opaque fill with a thin grey outline.
 fn paint_card(ui: &Ui, rect: Rect, p: &ss_core::theme::Palette, fill: Color32) {
     ui.painter().rect_filled(rect, 0.0, fill);
     ui.painter().rect_stroke(
@@ -149,7 +168,7 @@ pub fn panel_frame(
     ui.painter()
         .rect_stroke(area, 0.0, Stroke::new(1.5, c32(p.text)), StrokeKind::Inside);
     let bar = Rect::from_min_size(area.min, vec2(area.width(), TITLE_H));
-    paint_title_block(ui, bar, p, title, false, false);
+    paint_title_block(ui, bar, p, title, None, false, false);
     let body = Rect::from_min_max(
         pos2(area.left() + 6.0, bar.bottom() + 4.0),
         pos2(area.right() - 6.0, area.bottom() - 4.0),
@@ -372,7 +391,7 @@ fn tool_strip(
                 kind.title()
             ));
         let (fill, fg) = match (resp.hovered(), docked) {
-            (true, _) => (c32(PRO_PURPLE), Color32::WHITE),
+            (true, _) => (c32(PRO_BLUE), Color32::WHITE),
             (false, true) => (c32(p.a0), on(p.a0)),
             (false, false) => (Color32::TRANSPARENT, c32a(p.text3)),
         };
@@ -423,7 +442,11 @@ fn dock_pane(
     let tresp = ui.interact(title, tid, Sense::click_and_drag());
     let dragging_me = state.dragging == Some(kind);
     let hot = ui.rect_contains_pointer(title) || dragging_me;
-    let glyph_fg = paint_title_block(ui, title, p, kind.title(), hot, dragging_me);
+    let number = PanelKind::ALL
+        .iter()
+        .position(|k| *k == kind)
+        .map(|i| i + 1);
+    let glyph_fg = paint_title_block(ui, title, p, kind.title(), number, hot, dragging_me);
 
     if tresp.drag_started() {
         state.dragging = Some(kind);
@@ -450,7 +473,7 @@ fn dock_pane(
             x -= 20.0;
             let bresp = ui.interact(b, tid.with(glyph), Sense::click());
             if bresp.hovered() {
-                let fill = if glyph == "×" { p.danger } else { PRO_PURPLE };
+                let fill = if glyph == "×" { p.danger } else { PRO_BLUE };
                 ui.painter().rect_filled(b, 0.0, c32(fill));
             }
             let col = if bresp.hovered() {
@@ -515,21 +538,21 @@ pub fn show(
             location,
             Some(controls_slot(area, &layout, console_h)),
         );
-        // Viewport frame: blue outline with a violet corner tab.
+        // Viewport frame: grey outline with an amber function tag.
         ui.painter().rect_stroke(
             d.viewport,
             0.0,
-            Stroke::new(1.5, c32(p.a0)),
+            Stroke::new(1.0, c32a(p.border)),
             StrokeKind::Inside,
         );
-        let tab_text = "VIEWPORT · RADAR";
+        let tab_text = "RADR <GO>  COMPOSITE RADAR";
         let galley =
             ui.painter()
-                .layout_no_wrap(tab_text.into(), FontId::monospace(10.5), Color32::WHITE);
+                .layout_no_wrap(tab_text.into(), FontId::monospace(10.5), on(p.a0));
         let tab = Rect::from_min_size(d.viewport.min, galley.size() + vec2(14.0, 6.0));
-        ui.painter().rect_filled(tab, 0.0, c32(PRO_PURPLE));
+        ui.painter().rect_filled(tab, 0.0, c32(p.a0));
         ui.painter()
-            .galley(tab.min + vec2(7.0, 3.0), galley, Color32::WHITE);
+            .galley(tab.min + vec2(7.0, 3.0), galley, on(p.a0));
     } else if d.viewport.height() > 40.0 {
         ui.painter().rect_filled(d.viewport, 0.0, c32(p.bg));
         ui.painter().rect_stroke(
@@ -657,7 +680,7 @@ pub fn show(
                     Color32::from_rgba_unmultiplied(p.a0[0], p.a0[1], p.a0[2], a),
                 );
                 let stroke = if over {
-                    Stroke::new(2.0, c32(PRO_PURPLE))
+                    Stroke::new(2.0, c32(PRO_BLUE))
                 } else {
                     Stroke::new(1.0, c32a([p.a0[0], p.a0[1], p.a0[2], 90]))
                 };
@@ -666,7 +689,7 @@ pub fn show(
             let label = kind.title().to_uppercase();
             let galley = painter.layout_no_wrap(label, FontId::monospace(12.0), Color32::WHITE);
             let tag = Rect::from_min_size(pos + vec2(12.0, 12.0), galley.size() + vec2(12.0, 6.0));
-            painter.rect_filled(tag, 0.0, c32(PRO_PURPLE));
+            painter.rect_filled(tag, 0.0, c32(PRO_BLUE));
             painter.galley(tag.min + vec2(6.0, 3.0), galley, Color32::WHITE);
             ui.ctx().request_repaint();
         }
