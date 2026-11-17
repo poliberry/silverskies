@@ -11,6 +11,8 @@ pub const CONFIG_FILE: &str = "config.json";
 pub const LOCATIONS_FILE: &str = "locations.json";
 pub const SESSION_FILE: &str = "session.json";
 pub const DEDUPE_FILE: &str = "dedupe.json";
+/// Last good forecast per saved place, shown when a refresh fails.
+pub const FORECAST_CACHE_FILE: &str = "forecast-cache.json";
 
 /// Config directory names of the two apps.
 pub const APP_SILVER_SKIES: &str = "Silver Skies";
@@ -75,6 +77,15 @@ impl Dedupe {
     pub fn is_empty(&self) -> bool {
         self.seen.is_empty()
     }
+}
+
+/// The last good forecast per location id, with when it was fetched (unix
+/// seconds). Lets the apps show something useful offline or when a weather
+/// API is rate limiting.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ForecastCache {
+    pub entries: BTreeMap<String, (ss_core::types::Weather, i64)>,
 }
 
 #[derive(Debug, Clone)]
@@ -193,6 +204,12 @@ impl Store {
     }
     pub fn save_session(&self, s: &SessionFile) -> Result<()> {
         self.write(SESSION_FILE, s)
+    }
+    pub fn load_forecast_cache(&self) -> ForecastCache {
+        self.read(FORECAST_CACHE_FILE)
+    }
+    pub fn save_forecast_cache(&self, c: &ForecastCache) -> Result<()> {
+        self.write(FORECAST_CACHE_FILE, c)
     }
     pub fn load_dedupe(&self) -> Dedupe {
         self.read(DEDUPE_FILE)

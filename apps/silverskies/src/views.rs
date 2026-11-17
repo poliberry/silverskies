@@ -382,6 +382,7 @@ pub fn forecast(ui: &mut Ui, app: &mut App, actions: &mut Vec<Action>) {
     let full_w = ui.available_width() - 12.0;
     let wide = full_w >= 860.0;
     let mut hero_rect = Rect::NOTHING;
+    let mut answered = false;
 
     let out = ScrollArea::vertical()
         .auto_shrink([false, false])
@@ -395,7 +396,7 @@ pub fn forecast(ui: &mut Ui, app: &mut App, actions: &mut Vec<Action>) {
             }
             if let Some(ans) = app.answer.clone() {
                 if ans.location_id == loc.id {
-                    answer_card(
+                    let r = answer_card(
                         ui,
                         &p,
                         &w,
@@ -405,6 +406,11 @@ pub fn forecast(ui: &mut Ui, app: &mut App, actions: &mut Vec<Action>) {
                         now,
                         actions,
                     );
+                    // A just-asked question: show its answer, not the hero.
+                    if scroll_to == Some(search::View::Forecast) {
+                        ui.scroll_to_rect(r, Some(Align::TOP));
+                        answered = true;
+                    }
                 }
             }
 
@@ -430,7 +436,7 @@ pub fn forecast(ui: &mut Ui, app: &mut App, actions: &mut Vec<Action>) {
                             Cell::Week => Some(search::View::Week),
                             _ => None,
                         };
-                        if target.is_some() && target == scroll_to {
+                        if target.is_some() && target == scroll_to && !answered {
                             ui.scroll_to_rect(cr, Some(Align::TOP));
                         }
                         draw_cell(ui, app, &p, &loc.label, &w, &alerts, now, c, cr, actions);
@@ -1238,7 +1244,7 @@ fn answer_card(
     tf: TimeFormat,
     now: chrono::NaiveDateTime,
     actions: &mut Vec<Action>,
-) {
+) -> Rect {
     card_frame(p)
         .fill(glow(p))
         .stroke(Stroke::new(1.0, alpha(p.a0, 120)))
@@ -1263,7 +1269,9 @@ fn answer_card(
                 .wrap(),
             );
             ai_block(ui, p, &ans.ai);
-        });
+        })
+        .response
+        .rect
 }
 
 fn summary_tile(

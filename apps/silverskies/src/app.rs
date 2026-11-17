@@ -121,15 +121,6 @@ pub struct App {
     pub fetched_at: HashMap<String, i64>,
 }
 
-/// Last good forecast per place, shown when a refresh fails.
-pub const FORECAST_CACHE: &str = "forecast-cache.json";
-
-#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
-#[serde(default)]
-pub struct ForecastCache {
-    pub entries: HashMap<String, (Weather, i64)>,
-}
-
 impl App {
     pub fn new(
         cc: &eframe::CreationContext<'_>,
@@ -188,7 +179,7 @@ impl App {
             fetched_at: HashMap::new(),
         };
         // Start from the last good forecasts so the app is useful offline.
-        let cache: ForecastCache = app.store.read(FORECAST_CACHE);
+        let cache = app.store.load_forecast_cache();
         for (id, (w, at)) in cache.entries {
             if app.locations.saved_locations.iter().any(|l| l.id == id) {
                 app.weather.insert(id.clone(), w);
@@ -261,14 +252,14 @@ impl App {
     }
 
     fn save_forecast_cache(&self) {
-        let cache = ForecastCache {
+        let cache = ss_store::ForecastCache {
             entries: self
                 .weather
                 .iter()
                 .filter_map(|(id, w)| Some((id.clone(), (w.clone(), *self.fetched_at.get(id)?))))
                 .collect(),
         };
-        if let Err(e) = self.store.write(FORECAST_CACHE, &cache) {
+        if let Err(e) = self.store.save_forecast_cache(&cache) {
             tracing::warn!("saving forecast cache: {e}");
         }
     }
@@ -1131,17 +1122,17 @@ impl eframe::App for App {
 
 /// A short, human message for a network error string from `ss-net`.
 pub fn friendly_error(e: &str) -> String {
-    if e.contains("status 429") {
+    if e.contains("HTTP 429") {
         "The forecast service is busy right now. Silver Skies will try again shortly.".into()
     } else if let Some(code) = e
-        .strip_prefix("unexpected status ")
+        .strip_prefix("HTTP ")
         .and_then(|r| r.split_whitespace().next())
     {
         format!("The forecast service returned an error ({code}). Try refreshing in a minute.")
-    } else if e.contains("http error") || e.contains("error sending request") {
+    } else if e.starts_with("network error") {
         "Couldn't reach the forecast service. Check your connection.".into()
     } else {
-        e.split(" from http").next().unwrap_or(e).to_string()
+        e.to_string()
     }
 }
 
@@ -1151,12 +1142,9 @@ mod tests {
 
     #[test]
     fn errors_are_humanized() {
-        assert!(friendly_error("unexpected status 429 from https://x?y").contains("busy"));
-        assert!(friendly_error("unexpected status 500 from https://x").contains("(500)"));
-        assert!(friendly_error("http error: dns").contains("connection"));
-        assert_eq!(
-            friendly_error("parse error: bad from https://x"),
-            "parse error: bad"
-        );
+        assert!(friendly_error("HTTP 429 (rate limited) from x").contains("busy"));
+        assert!(friendly_error("HTTP 500 (server error) from x").contains("(500)"));
+        assert!(friendly_error("network error: x timed out").contains("connection"));
+        assert_eq!(friendly_error("parse error: bad"), "parse error: bad");
     }
 }

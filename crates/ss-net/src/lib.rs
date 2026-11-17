@@ -26,11 +26,13 @@ use std::time::Duration;
 pub const USER_AGENT: &str =
     "SilverSkies/2.0 (desktop app; https://github.com/poliberry/silverskies-desktop)";
 
+/// Errors name the host, not the full request URL (which can be hundreds of
+/// characters of query string and ends up in panes and logs).
 #[derive(Debug, thiserror::Error)]
 pub enum NetError {
-    #[error("http error: {0}")]
+    #[error("{}", describe_http(.0))]
     Http(#[from] reqwest::Error),
-    #[error("unexpected status {status} from {url}")]
+    #[error("HTTP {status}{} from {}", status_hint(*.status), host_of(.url))]
     Status { url: String, status: u16 },
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
@@ -41,6 +43,40 @@ pub enum NetError {
 }
 
 pub type Result<T> = std::result::Result<T, NetError>;
+
+/// The host part of a URL (`api.open-meteo.com`), or the input if unparsable.
+pub fn host_of(url: &str) -> &str {
+    let rest = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    &rest[..end]
+}
+
+fn status_hint(status: u16) -> &'static str {
+    match status {
+        429 => " (rate limited)",
+        500..=599 => " (server error)",
+        404 => " (not found)",
+        401 | 403 => " (not allowed)",
+        _ => "",
+    }
+}
+
+fn describe_http(e: &reqwest::Error) -> String {
+    let host = e
+        .url()
+        .and_then(|u| u.host_str())
+        .unwrap_or("the server")
+        .to_string();
+    if e.is_timeout() {
+        format!("network error: {host} timed out")
+    } else if e.is_connect() {
+        format!("network error: couldn't connect to {host}")
+    } else if e.is_decode() || e.is_body() {
+        format!("network error: bad response from {host}")
+    } else {
+        format!("network error talking to {host}")
+    }
+}
 
 /// Shared HTTP client plus the configured LibreWXR host.
 #[derive(Clone)]
@@ -197,5 +233,24 @@ mod tests {
     fn net_trims_host() {
         let n = Net::new("https://x.test/").unwrap();
         assert_eq!(n.libre_wxr_host, "https://x.test");
+    }
+}
+
+#[cfg(test)]
+mod error_tests {
+    use super::*;
+
+    #[test]
+    fn errors_name_the_host_not_the_url() {
+        let e = NetError::Status {
+            url: "https://api.open-meteo.com/v1/forecast?latitude=1&longitude=2".into(),
+            status: 429,
+        };
+        assert_eq!(
+            e.to_string(),
+            "HTTP 429 (rate limited) from api.open-meteo.com"
+        );
+        assert_eq!(host_of("https://a.b:8080/x?y"), "a.b:8080");
+        assert_eq!(host_of("not a url"), "not a url");
     }
 }

@@ -192,8 +192,13 @@ impl CommandBar {
     }
 
     /// Global key handling: `:` opens the bar when no text field has focus.
+    /// (Clicking the map or a pane focuses that widget too; only a focused
+    /// text field should keep `:` for itself.)
     pub fn handle_global_keys(&mut self, ctx: &egui::Context) {
-        if self.open || ctx.egui_wants_keyboard_input() {
+        let typing = ctx
+            .memory(|m| m.focused())
+            .is_some_and(|id| egui::text_edit::TextEditState::load(ctx, id).is_some());
+        if self.open || typing {
             return;
         }
         let pressed = ctx.input(|i| {

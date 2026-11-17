@@ -97,6 +97,12 @@ impl App {
 
         let mut shared = Shared::new(config, locations, session);
         shared.data_dir = Some(store.dir().to_path_buf());
+        // Start from the last good forecasts so panes are useful offline.
+        for (id, (w, _)) in store.load_forecast_cache().entries {
+            if shared.locations.saved_locations.iter().any(|l| l.id == id) {
+                shared.weather.insert(id, w);
+            }
+        }
         windows.attach_panels(&factory, &mut panels, &mut shared.layout);
         shared.log(
             LogLevel::Info,
@@ -239,8 +245,22 @@ impl App {
                             ),
                         );
                         sh.weather_errors.remove(&location_id);
-                        sh.weather.insert(location_id, w);
+                        sh.weather.insert(location_id.clone(), w.clone());
                         sh.last_refresh = Some(Instant::now());
+                        let mut cache = self.store.load_forecast_cache();
+                        cache
+                            .entries
+                            .insert(location_id, (w, chrono::Utc::now().timestamp()));
+                        let saved: Vec<&str> = sh
+                            .locations
+                            .saved_locations
+                            .iter()
+                            .map(|l| l.id.as_str())
+                            .collect();
+                        cache.entries.retain(|id, _| saved.contains(&id.as_str()));
+                        if let Err(e) = self.store.save_forecast_cache(&cache) {
+                            sh.log(LogLevel::Warn, format!("saving forecast cache: {e}"));
+                        }
                     }
                     Err(e) => {
                         sh.log(LogLevel::Error, format!("forecast for {label}: {e}"));
