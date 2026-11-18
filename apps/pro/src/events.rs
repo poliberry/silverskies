@@ -8,6 +8,15 @@ use crate::state::{LogLevel, RadioStatus, WindObs};
 
 /// Results posted by background tasks and applied on the UI thread.
 pub enum AppEvent {
+    /// NEXRAD storm cells (IEM).
+    StormCells(Result<Vec<ss_core::storms::StormCell>, String>),
+    /// Local storm reports (IEM).
+    StormReports(Result<Vec<ss_core::storms::StormReport>, String>),
+    /// Forecast soundings for a location (Open-Meteo pressure levels).
+    Soundings {
+        location_id: String,
+        result: Result<Vec<ss_core::sounding::Sounding>, String>,
+    },
     WeatherLoaded {
         location_id: String,
         result: Result<Weather, String>,

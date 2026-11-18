@@ -15,8 +15,9 @@ use ss_core::{
 };
 use ss_map::viewport::world_px_at;
 use ss_map::{
-    draw_color_legend, esri_basemap, radar_dbz_stops, Barb, Layer, LayerStack, MapWidget, Marker,
-    MarkerKind, MarkerLayer, PolyItem, PolygonLayer, RangeRingLayer, RasterTileLayer, TileCache,
+    draw_color_legend, esri_basemap, esri_hillshade, radar_dbz_stops, Barb, Layer, LayerStack,
+    LoopFrameSource, MapWidget, Marker, MarkerKind, MarkerLayer, PolyItem, PolygonLayer,
+    RadarLoopLayer, RangeRingLayer, RasterTileLayer, StormLayer, StormMark, StormShape, TileCache,
     TileId, WindBarbLayer, WmsImageLayer,
 };
 use ss_net::librewxr::{radar_tile_url, satellite_tile_url};
@@ -80,8 +81,13 @@ pub struct Playback {
     pub idx: usize,
     pub playing: bool,
     pub tracking_live: bool,
+    /// Time of the previous tick (NaN before the first one while playing).
     last_advance: f64,
     prev_latest_time: Option<i64>,
+    /// Shared loop timing: hold, ease into the next frame, wait for loading.
+    clock: ss_map::LoopClock,
+    /// The fluid playhead for the radar loop layer (`idx` plus the crossfade).
+    pub pos: f32,
 }
 
 impl Default for Playback {
@@ -98,11 +104,20 @@ impl Playback {
             tracking_live: true,
             last_advance: f64::NAN,
             prev_latest_time: None,
+            clock: ss_map::LoopClock::with_timing(FRAME_SECS as f32, 0.3, FRAME_SECS as f32, 2.0),
+            pos: 0.0,
         }
     }
 
     /// Call every frame with the current loop and time in seconds.
+    #[cfg(test)]
     pub fn tick(&mut self, frames: &[LoopFrame], now: f64) {
+        self.tick_with(frames, now, 1.0);
+    }
+
+    /// Like [`tick`](Self::tick), with how loaded the next frame is (0..=1),
+    /// so playback waits for it instead of showing it half-drawn.
+    pub fn tick_with(&mut self, frames: &[LoopFrame], now: f64, next_ready: f32) {
         if frames.is_empty() {
             return;
         }
@@ -113,13 +128,22 @@ impl Playback {
         }
         self.prev_latest_time = latest_time;
         self.idx = self.idx.min(frames.len() - 1);
+        if self.clock.idx != self.idx {
+            self.clock.set(self.idx);
+        }
         if self.playing {
-            if self.last_advance.is_nan() {
-                self.last_advance = now;
-            } else if now - self.last_advance >= FRAME_SECS {
-                self.idx = (self.idx + 1) % frames.len();
-                self.last_advance = now;
-            }
+            let dt = if self.last_advance.is_nan() {
+                0.0
+            } else {
+                (now - self.last_advance).max(0.0)
+            };
+            self.last_advance = now;
+            self.clock.playing = true;
+            self.pos = self.clock.tick(dt as f32, frames.len(), latest, next_ready);
+            self.idx = self.clock.idx;
+        } else {
+            self.clock.playing = false;
+            self.pos = self.idx as f32;
         }
     }
 
@@ -248,6 +272,8 @@ pub struct RadarPanel {
     spc_sig: u64,
     md_sig: u64,
     barbs_sig: u64,
+    /// Signature of the storm data the storm layers were built from.
+    storms_sig: u64,
     nexrad_cfg: Option<(String, RadarProduct)>,
     last_wind_req: Option<(BBox, f64)>,
     last_alert_req: Option<(BBox, f64)>,
@@ -321,8 +347,9 @@ impl RadarPanel {
         let mut map = MapWidget::new(cache);
         let l = &mut map.layers;
         l.push(esri_basemap(true));
+        l.push(esri_hillshade(0.32));
         l.push(placeholder_raster("satellite", TILE_MAX_ZOOM, 0.75));
-        l.push(placeholder_raster("radar", TILE_MAX_ZOOM, 0.7));
+        l.push(RadarLoopLayer::new("radar", TILE_MAX_ZOOM, 0.7));
         l.push(placeholder_raster("owm-wind", OWM_MAX_ZOOM, 0.55));
         l.push(placeholder_raster("owm-temp", OWM_MAX_ZOOM, 0.55));
         l.push(placeholder_raster("owm-precip", OWM_MAX_ZOOM, 0.55));
@@ -337,6 +364,8 @@ impl RadarPanel {
         l.push(PolygonLayer::new("md"));
         l.push(PolygonLayer::new("alerts"));
         l.push(WindBarbLayer::new("barbs", Color32::GRAY));
+        l.push(StormLayer::new("storm-reports"));
+        l.push(StormLayer::new("storm-cells"));
         l.push(MarkerLayer::new("locations"));
         l.push(MarkerLayer::new("radar-sites"));
         Self {
@@ -350,6 +379,7 @@ impl RadarPanel {
             spc_sig: 0,
             md_sig: 0,
             barbs_sig: 0,
+            storms_sig: 0,
             nexrad_cfg: None,
             last_wind_req: None,
             last_alert_req: None,
@@ -408,6 +438,112 @@ fn overlay_text_on_baseline(
         Color32::from_black_alpha(200),
     );
     text_on_baseline(painter, x, y, align, text, font, color);
+}
+
+/// Map marks for NEXRAD storm cells: a threat symbol and, for moving cells,
+/// a track projected 15/30/45/60 minutes ahead.
+pub fn storm_cell_marks(cells: &[ss_core::storms::StormCell]) -> Vec<StormMark> {
+    use ss_core::storms::Tvs;
+    let mut marks: Vec<StormMark> = cells
+        .iter()
+        .map(|c| {
+            let shape = if c.tvs != Tvs::None {
+                StormShape::Tornado
+            } else if c.meso > 0 {
+                StormShape::Meso
+            } else if c.max_hail_in >= 1.0 || c.posh >= 50.0 {
+                StormShape::Hail
+            } else if c.max_dbz >= 50.0 {
+                StormShape::Strong
+            } else {
+                StormShape::Cell
+            };
+            let track = if c.speed_kt >= 3.0 {
+                [15.0, 30.0, 45.0, 60.0]
+                    .iter()
+                    .map(|m| c.projected(*m))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let motion = if c.speed_kt >= 3.0 {
+                format!(
+                    "moving {} at {:.0} kt (track ticks every 15 min)",
+                    ss_core::weather::units::compass_8(c.heading_deg()),
+                    c.speed_kt
+                )
+            } else {
+                "nearly stationary".to_string()
+            };
+            let tooltip = format!(
+                "{}/{} — {}\n{motion}\nVIL {:.0} kg/m² · max {:.0} dBZ at {:.0}k ft",
+                c.radar,
+                c.id,
+                c.summary(),
+                c.vil,
+                c.max_dbz,
+                c.max_dbz_height_kft,
+            );
+            StormMark {
+                id: format!("{}/{}", c.radar, c.id),
+                lon: c.lon,
+                lat: c.lat,
+                color: c32(super::storms::threat_color(c.threat())),
+                shape,
+                track,
+                tooltip,
+            }
+        })
+        .collect();
+    // Most threatening drawn last (on top).
+    marks.sort_by_key(|m| match m.shape {
+        StormShape::Cell => 0,
+        StormShape::Strong => 1,
+        StormShape::Hail => 2,
+        StormShape::Meso => 3,
+        _ => 4,
+    });
+    marks
+}
+
+/// Map marks for local storm reports (newest drawn on top).
+pub fn storm_report_marks(reports: &[ss_core::storms::StormReport]) -> Vec<StormMark> {
+    let mut marks: Vec<StormMark> = reports
+        .iter()
+        .enumerate()
+        .map(|(i, r)| {
+            let when = chrono::DateTime::parse_from_rfc3339(&r.valid)
+                .map(|d| {
+                    d.with_timezone(&chrono::Local)
+                        .format("%a %H:%M")
+                        .to_string()
+                })
+                .unwrap_or_default();
+            let mut tip = format!(
+                "{} — {}, {}\n{} · {}",
+                r.headline(),
+                r.place,
+                r.state,
+                when,
+                r.source
+            );
+            if !r.remark.is_empty() {
+                tip.push('\n');
+                tip.push_str(&r.remark.chars().take(200).collect::<String>());
+            }
+            StormMark {
+                id: format!("lsr{i}"),
+                lon: r.lon,
+                lat: r.lat,
+                color: c32(r.kind.color()),
+                shape: StormShape::Report(r.kind.letter()),
+                track: Vec::new(),
+                tooltip: tip,
+            }
+        })
+        .collect();
+    marks.reverse();
+    marks
 }
 
 /// Topmost visible polygon under `pos` in the named layer: `(id, label)`.
@@ -541,9 +677,16 @@ impl Panel for RadarPanel {
         if std::mem::take(&mut cx.req.radar_live) {
             self.playback.go_live(&frames);
         }
-        self.playback.tick(&frames, now);
+        let next_ready = self
+            .map
+            .layers
+            .get_mut::<RadarLoopLayer>("radar")
+            .map(|l| l.ready((self.playback.idx + 1) % frames.len().max(1)))
+            .unwrap_or(1.0);
+        self.playback.tick_with(&frames, now, next_ready);
         if rs.nexrad_site.is_none() && self.playback.playing {
-            ui.ctx().request_repaint_after(Duration::from_millis(100));
+            // Smooth crossfades need every frame while playing.
+            ui.ctx().request_repaint();
         }
 
         self.sync_layers(cx, &rs, &frames);
@@ -690,12 +833,23 @@ impl Panel for RadarPanel {
         }
         self.request_viewport_alerts(ui, cx, r.rect, now);
 
-        // Hover tooltip: alerts first, then MD, then SPC outlook.
+        // Hover tooltip: storm cells and reports first, then alerts, MD and
+        // the SPC outlook.
         if let Some(h) = r.response.hover_pos() {
-            let tip = ["alerts", "md", "spc-outlook"]
-                .iter()
-                .find_map(|n| hit_polygon(&mut self.map, n, h, r.rect))
-                .and_then(|(_, label)| label);
+            let vp = self.map.viewport.clone();
+            let storm_tip = ["storm-cells", "storm-reports"].iter().find_map(|n| {
+                self.map
+                    .layers
+                    .get_mut::<StormLayer>(n)
+                    .and_then(|l| l.hit_test(h, 10.0, &vp, r.rect))
+                    .map(|m| m.tooltip.clone())
+            });
+            let tip = storm_tip.or_else(|| {
+                ["alerts", "md", "spc-outlook"]
+                    .iter()
+                    .find_map(|n| hit_polygon(&mut self.map, n, h, r.rect))
+                    .and_then(|(_, label)| label)
+            });
             if let Some(t) = tip {
                 r.response.clone().on_hover_text_at_pointer(t);
             }
@@ -983,31 +1137,62 @@ impl RadarPanel {
             move |t| satellite_tile_url(&h, &sp, u32::from(t.z), t.x, t.y),
         );
 
-        // --- composite radar (current loop frame) ---
-        let cur = frames.get(self.playback.idx.min(frames.len().saturating_sub(1)));
-        let (h, rsc, dark) = (host.clone(), rs.clone(), self.dark);
-        let cur_path = cur.map(|f| f.path.clone()).unwrap_or_default();
-        sync_raster(
-            layers,
-            "radar",
-            composite && cur.is_some(),
-            rs.opacity,
-            cur.map(|f| radar_layer_key(&f.path, rs, dark)),
-            move |t| {
-                radar_tile_url(
-                    &h,
-                    &cur_path,
-                    u32::from(t.z),
-                    t.x,
-                    t.y,
-                    rsc.color_scheme,
-                    rsc.smooth,
-                    rsc.snow,
-                    overlay_style(rsc.show_arrows, dark),
-                    overlay_style(rsc.show_cells, dark),
-                )
-            },
-        );
+        // --- composite radar: the whole loop in one fluid layer ---
+        let dark = self.dark;
+        if let Some(l) = layers.get_mut::<RadarLoopLayer>("radar") {
+            l.visible = composite && !frames.is_empty();
+            l.opacity = rs.opacity;
+            l.set_frames(
+                frames
+                    .iter()
+                    .map(|f| {
+                        let (h, rsc, path) = (host.clone(), rs.clone(), f.path.clone());
+                        LoopFrameSource {
+                            key: radar_layer_key(&f.path, rs, dark),
+                            url: std::sync::Arc::new(move |t| {
+                                radar_tile_url(
+                                    &h,
+                                    &path,
+                                    u32::from(t.z),
+                                    t.x,
+                                    t.y,
+                                    rsc.color_scheme,
+                                    rsc.smooth,
+                                    rsc.snow,
+                                    overlay_style(rsc.show_arrows, dark),
+                                    overlay_style(rsc.show_cells, dark),
+                                )
+                            }),
+                        }
+                    })
+                    .collect(),
+            );
+            l.pos = self.playback.pos;
+        }
+
+        // --- terrain relief ---
+        if let Some(l) = layers.get_mut::<RasterTileLayer>("terrain") {
+            l.visible = rs.terrain;
+            l.opacity = if self.dark { 0.28 } else { 0.42 };
+        }
+
+        // --- storm cells and storm reports ---
+        layers.set_visible("storm-cells", rs.storm_cells);
+        layers.set_visible("storm-reports", rs.storm_reports);
+        let sig = hash_of(&(
+            sh.storms_at.map(|t| t.timestamp()),
+            sh.storm_cells.len(),
+            sh.storm_reports.len(),
+        ));
+        if sig != self.storms_sig {
+            self.storms_sig = sig;
+            if let Some(l) = layers.get_mut::<StormLayer>("storm-cells") {
+                l.marks = storm_cell_marks(&sh.storm_cells);
+            }
+            if let Some(l) = layers.get_mut::<StormLayer>("storm-reports") {
+                l.marks = storm_report_marks(&sh.storm_reports);
+            }
+        }
 
         // --- OpenWeatherMap tiles ---
         let owm_key = sh

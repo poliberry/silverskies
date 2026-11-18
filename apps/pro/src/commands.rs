@@ -486,6 +486,9 @@ pub fn run_layer(sh: &mut Shared, name: &str, on: Option<bool>) -> bool {
             "sites" => &mut cfg.radar.show_stations,
             "legend" => &mut cfg.radar.legend,
             "arrows" => &mut cfg.radar.show_arrows,
+            "terrain" => &mut cfg.radar.terrain,
+            "storms" => &mut cfg.radar.storm_cells,
+            "reports" => &mut cfg.radar.storm_reports,
             _ => &mut cfg.radar.show_cells,
         };
         let want = on.unwrap_or(!*slot);

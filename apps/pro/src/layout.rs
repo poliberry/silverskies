@@ -42,6 +42,8 @@ pub enum LayoutAction {
         index: Option<usize>,
     },
     Hide(PanelKind),
+    /// Undock into its own window (handled by the app, not the layout).
+    Popout(PanelKind),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,6 +58,7 @@ pub fn apply_action(layout: &mut Layout, action: LayoutAction) {
     match action {
         LayoutAction::Place { panel, col, index } => layout.place(panel, col, index),
         LayoutAction::Hide(p) => layout.hide(p),
+        LayoutAction::Popout(_) => {}
     }
 }
 
@@ -200,6 +203,8 @@ pub fn card_height(kind: PanelKind) -> f32 {
         PanelKind::Forecast => 250.0,
         PanelKind::AuditLog => 220.0,
         PanelKind::Radio => 200.0,
+        PanelKind::Storms => 300.0,
+        PanelKind::Sounding => 460.0,
         PanelKind::Radar => 0.0,
     }
 }
@@ -351,7 +356,7 @@ fn run_panel(
 }
 
 /// Tool strip buttons: (label, panel it toggles).
-const STRIP: [(&str, PanelKind); 7] = [
+const STRIP: [(&str, PanelKind); 9] = [
     ("LOC", PanelKind::Locations),
     ("RDR", PanelKind::Radar),
     ("NOW", PanelKind::Conditions),
@@ -359,6 +364,8 @@ const STRIP: [(&str, PanelKind); 7] = [
     ("7DY", PanelKind::Forecast),
     ("LOG", PanelKind::AuditLog),
     ("RAD", PanelKind::Radio),
+    ("STM", PanelKind::Storms),
+    ("SKW", PanelKind::Sounding),
 ];
 
 /// The vertical tool strip: one block per pane; filled = docked.
@@ -448,6 +455,10 @@ fn dock_pane(
         .map(|i| i + 1);
     let glyph_fg = paint_title_block(ui, title, p, kind.title(), number, hot, dragging_me);
 
+    // Double-click a title to undock the pane into its own window.
+    if tresp.double_clicked() {
+        actions.push(LayoutAction::Popout(kind));
+    }
     if tresp.drag_started() {
         state.dragging = Some(kind);
     }
@@ -459,8 +470,9 @@ fn dock_pane(
     }
 
     if hot && state.dragging.is_none() {
-        let buttons: [(&str, Option<LayoutAction>); 5] = [
+        let buttons: [(&str, Option<LayoutAction>); 6] = [
             ("×", Some(LayoutAction::Hide(kind))),
+            ("↗", Some(LayoutAction::Popout(kind))),
             ("▾", neighbor_move(layout, kind, Dir::Down)),
             ("▴", neighbor_move(layout, kind, Dir::Up)),
             ("▸", neighbor_move(layout, kind, Dir::Right)),
@@ -471,7 +483,14 @@ fn dock_pane(
             let Some(action) = action else { continue };
             let b = Rect::from_min_size(pos2(x - 20.0, title.top()), vec2(20.0, TITLE_H));
             x -= 20.0;
-            let bresp = ui.interact(b, tid.with(glyph), Sense::click());
+            let tip = match glyph {
+                "×" => "Hide pane",
+                "↗" => "Undock into its own window (or double-click the title)",
+                _ => "Move pane",
+            };
+            let bresp = ui
+                .interact(b, tid.with(glyph), Sense::click())
+                .on_hover_text(tip);
             if bresp.hovered() {
                 let fill = if glyph == "×" { p.danger } else { PRO_BLUE };
                 ui.painter().rect_filled(b, 0.0, c32(fill));
@@ -729,6 +748,10 @@ pub fn show(
 
     if !actions.is_empty() {
         for a in actions {
+            if let LayoutAction::Popout(kind) = a {
+                emit.push(Command::Popout(kind));
+                continue;
+            }
             apply_action(&mut shared.layout, a);
         }
         shared.dirty_session = true;

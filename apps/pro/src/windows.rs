@@ -275,6 +275,8 @@ pub struct ChildWindow {
     /// For `Main`-role pop-outs: which dock panel this window hosts.
     pub panel: Option<PanelKind>,
     pub is_primary_popout: bool,
+    /// The user asked to put this popped-out pane back in the main window.
+    redock: bool,
     /// The radar window a conditions / audit-log window tracks (`None` = main).
     pub paired: Option<String>,
     /// Saved-location id a radar instance tracks (`None` = global active).
@@ -300,6 +302,7 @@ impl ChildWindow {
             role,
             panel: None,
             is_primary_popout: false,
+            redock: false,
             paired: None,
             location_id: None,
             panels: HashMap::new(),
@@ -374,7 +377,9 @@ impl ChildWindow {
                 self.draw(ui, &mut sh, tasks, main_req, location.clone(), emit);
             });
         });
-        close
+        // Docking back closes the window; closing a popped-out pane's window
+        // returns the pane to the main layout.
+        close || std::mem::take(&mut self.redock)
     }
 
     fn draw(
@@ -427,6 +432,33 @@ impl ChildWindow {
                     }
                 });
                 emit.extend(cmds.into_iter().map(|c| (target.clone(), c)));
+                if self.is_primary_popout && role == WindowRole::Main {
+                    // "Dock" in the title bar puts the pane back in the main window.
+                    let area = ui.max_rect();
+                    let b = egui::Rect::from_min_size(
+                        egui::pos2(area.right() - 64.0, area.top()),
+                        egui::vec2(64.0, crate::layout::TITLE_H),
+                    );
+                    let r = ui
+                        .interact(b, ui.scope_id().with("dock_back"), egui::Sense::click())
+                        .on_hover_text("Dock back into the main window");
+                    let fill = if r.hovered() {
+                        crate::theme::PRO_BLUE
+                    } else {
+                        p.a0
+                    };
+                    ui.painter().rect_filled(b.shrink(2.0), 0.0, c32(fill));
+                    ui.painter().text(
+                        b.center(),
+                        egui::Align2::CENTER_CENTER,
+                        "⇲ DOCK",
+                        egui::FontId::monospace(12.0),
+                        crate::theme::on(fill),
+                    );
+                    if r.clicked() {
+                        self.redock = true;
+                    }
+                }
             }
         }
     }

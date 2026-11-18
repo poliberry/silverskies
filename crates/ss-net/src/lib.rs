@@ -11,6 +11,7 @@
 
 pub mod accuweather;
 pub mod eccc;
+pub mod iem;
 pub mod librewxr;
 pub mod ncep;
 pub mod nwr;

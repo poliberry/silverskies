@@ -418,6 +418,12 @@ pub struct RadarSettings {
     pub owm_temp: bool,
     pub owm_precip: bool,
     pub aqi_badge: bool,
+    /// Shaded-relief terrain under the radar.
+    pub terrain: bool,
+    /// NEXRAD storm cells with tornado/mesocyclone/hail markers and tracks.
+    pub storm_cells: bool,
+    /// Local storm reports (tornado, hail, wind, flood) from the last 24 h.
+    pub storm_reports: bool,
     /// Auto-load alerts whose polygons fall inside the visible map area.
     pub viewport_alerts: bool,
 }
@@ -444,6 +450,9 @@ impl Default for RadarSettings {
             owm_temp: false,
             owm_precip: false,
             aqi_badge: false,
+            terrain: true,
+            storm_cells: true,
+            storm_reports: true,
             viewport_alerts: true,
         }
     }
@@ -569,10 +578,14 @@ pub enum PanelKind {
     Forecast,
     Hourly,
     Radio,
+    /// Storm cells and local storm reports near the location.
+    Storms,
+    /// Forecast sounding: Skew-T, hodograph and severe indices.
+    Sounding,
 }
 
 impl PanelKind {
-    pub const ALL: [PanelKind; 7] = [
+    pub const ALL: [PanelKind; 9] = [
         PanelKind::Locations,
         PanelKind::Radar,
         PanelKind::AuditLog,
@@ -580,6 +593,8 @@ impl PanelKind {
         PanelKind::Forecast,
         PanelKind::Hourly,
         PanelKind::Radio,
+        PanelKind::Storms,
+        PanelKind::Sounding,
     ];
     pub fn id(self) -> &'static str {
         match self {
@@ -590,6 +605,8 @@ impl PanelKind {
             PanelKind::Forecast => "forecast",
             PanelKind::Hourly => "hourly",
             PanelKind::Radio => "radio",
+            PanelKind::Storms => "storms",
+            PanelKind::Sounding => "sounding",
         }
     }
     pub fn title(self) -> &'static str {
@@ -601,6 +618,8 @@ impl PanelKind {
             PanelKind::Forecast => "7-DAY",
             PanelKind::Hourly => "HOURLY",
             PanelKind::Radio => "WX RADIO",
+            PanelKind::Storms => "STORMS",
+            PanelKind::Sounding => "SOUNDING",
         }
     }
     pub fn parse(s: &str) -> Option<Self> {

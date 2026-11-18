@@ -20,6 +20,8 @@ pub mod hourly;
 pub mod locations;
 pub mod radar;
 pub mod radio;
+pub mod sounding;
+pub mod storms;
 
 pub struct PanelCx<'a> {
     pub shared: &'a mut Shared,
@@ -88,6 +90,8 @@ impl PanelFactory {
             PanelKind::Forecast => Box::new(forecast::ForecastPanel),
             PanelKind::Hourly => Box::new(hourly::HourlyPanel),
             PanelKind::Radio => Box::new(radio::RadioPanel),
+            PanelKind::Storms => Box::new(storms::StormsPanel),
+            PanelKind::Sounding => Box::new(sounding::SoundingPanel::default()),
         }
     }
 }

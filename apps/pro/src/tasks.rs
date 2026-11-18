@@ -153,6 +153,41 @@ impl Tasks {
         });
     }
 
+    /// Storm cells and the last 24 h of local storm reports (IEM).
+    pub fn storms(&self) {
+        let (net, tx, ctx) = (self.net.clone(), self.tx.clone(), self.ctx.clone());
+        self.rt.spawn(async move {
+            let (cells, reports) = tokio::join!(net.storm_cells(), net.storm_reports(24));
+            Self::post(
+                &tx,
+                &ctx,
+                AppEvent::StormCells(cells.map_err(|e| e.to_string())),
+            );
+            Self::post(
+                &tx,
+                &ctx,
+                AppEvent::StormReports(reports.map_err(|e| e.to_string())),
+            );
+        });
+    }
+
+    /// Hourly forecast soundings for a location.
+    pub fn soundings(&self, loc: &SavedLocation) {
+        let (net, tx, ctx) = (self.net.clone(), self.tx.clone(), self.ctx.clone());
+        let (id, lat, lon) = (loc.id.clone(), loc.lat, loc.lon);
+        self.rt.spawn(async move {
+            let result = net.soundings(lat, lon).await.map_err(|e| e.to_string());
+            Self::post(
+                &tx,
+                &ctx,
+                AppEvent::Soundings {
+                    location_id: id,
+                    result,
+                },
+            );
+        });
+    }
+
     /// Weather-map frame index only. Frames refresh upstream every ~10 minutes.
     pub fn weather_maps(&self) {
         let (net, tx, ctx) = (self.net.clone(), self.tx.clone(), self.ctx.clone());

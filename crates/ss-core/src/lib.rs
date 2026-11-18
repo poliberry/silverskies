@@ -9,6 +9,8 @@ pub mod alerts;
 pub mod command;
 pub mod geo;
 pub mod same;
+pub mod sounding;
+pub mod storms;
 pub mod theme;
 pub mod types;
 pub mod version;

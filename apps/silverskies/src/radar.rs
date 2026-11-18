@@ -2,15 +2,15 @@
 //! short nowcast) as a looping animation, alert areas and a pin for the
 //! active place. One colour scheme, no layers to manage.
 
-use std::time::{Duration, Instant};
+use std::sync::Arc;
 
 use egui::{CornerRadius, Margin, Ui};
 use ss_core::alerts::colors::class_color;
 use ss_core::theme::Palette;
 use ss_core::{Alert, RadarFrame, WeatherMaps};
 use ss_map::{
-    carto_basemap, draw_color_legend, radar_dbz_stops, LayerStack, MapWidget, Marker, MarkerKind,
-    MarkerLayer, PolyItem, PolygonLayer, RasterTileLayer, TileCache,
+    carto_basemap, draw_color_legend, radar_dbz_stops, LayerStack, LoopClock, LoopFrameSource,
+    MapWidget, Marker, MarkerKind, MarkerLayer, PolyItem, PolygonLayer, RadarLoopLayer, TileCache,
 };
 use ss_net::librewxr::radar_tile_url;
 
@@ -18,15 +18,14 @@ use crate::theme::{alpha, c32, RADIUS_SMALL};
 
 /// "Universal Blue" — the same calm default the Pro app starts with.
 const COLOR_SCHEME: u8 = 2;
-const FRAME_STEP: Duration = Duration::from_millis(550);
-/// Hold on the newest observed frame before looping.
-const LIVE_HOLD: Duration = Duration::from_millis(1600);
 
 pub struct Radar {
     map: MapWidget,
-    frame: usize,
-    playing: bool,
-    last_step: Instant,
+    /// Playback: holds each frame, eases into the next, waits for loading
+    /// frames, and holds the live frame longer.
+    clock: LoopClock,
+    /// The newest observed frame's time, to follow it as new frames arrive.
+    live_time: Option<i64>,
     /// The place the map was last centred on (re-centre when it changes).
     centred_on: Option<(f64, f64)>,
     /// The place the pin marker was last placed for.
@@ -39,7 +38,7 @@ pub struct Radar {
 fn layer_stack(dark: bool) -> LayerStack {
     let mut layers = LayerStack::new();
     layers.push(carto_basemap(dark));
-    layers.push(RasterTileLayer::new("radar", "", 12, |_| String::new()).with_opacity(0.8));
+    layers.push(RadarLoopLayer::new("radar", 12, 0.8));
     layers.push(PolygonLayer::new("alerts"));
     layers.push(MarkerLayer::new("pin"));
     layers
@@ -60,9 +59,8 @@ impl Radar {
         map.show_coords = false;
         Radar {
             map,
-            frame: usize::MAX,
-            playing: true,
-            last_step: Instant::now(),
+            clock: LoopClock::default(),
+            live_time: None,
             centred_on: None,
             pinned: None,
             dark: None,
@@ -87,7 +85,6 @@ impl Radar {
             self.map.layers = layer_stack(dark);
             self.alerts_key = None;
             self.pinned = None;
-            self.frame = usize::MAX;
         }
 
         if let Some((lat, lon, label)) = place {
@@ -150,44 +147,47 @@ impl Radar {
         let live_idx = maps
             .map(|m| m.radar_past.len().saturating_sub(1))
             .unwrap_or(0);
-        if !all.is_empty() {
-            if self.frame >= all.len() {
-                self.frame = live_idx;
+        // Follow the live edge: when a newer observed frame arrives, go to it
+        // (the loop layer crossfades rather than cuts).
+        let newest = maps.and_then(|m| m.radar_past.last()).map(|f| f.time);
+        if newest != self.live_time {
+            if self.live_time.is_none() || !self.clock.playing {
+                self.clock.set(live_idx);
             }
-            if self.playing {
-                let hold = if self.frame == live_idx {
-                    LIVE_HOLD
-                } else {
-                    FRAME_STEP
-                };
-                if self.last_step.elapsed() >= hold {
-                    self.frame = (self.frame + 1) % all.len();
-                    self.last_step = Instant::now();
-                }
-                ui.ctx().request_repaint_after(FRAME_STEP);
-            }
-            if let (Some(m), Some(f)) = (maps, all.get(self.frame)) {
-                let host = m.host.clone();
-                let path = f.path.clone();
-                let key = format!("radar:{path}:{COLOR_SCHEME}");
-                if let Some(layer) = self.map.layers.get_mut::<RasterTileLayer>("radar") {
-                    if layer.key != key {
-                        layer.set_template(key, move |t| {
-                            radar_tile_url(
-                                &host,
-                                &path,
-                                u32::from(t.z),
-                                t.x,
-                                t.y,
-                                COLOR_SCHEME,
-                                true,
-                                true,
-                                None,
-                                None,
-                            )
-                        });
-                    }
-                }
+            self.live_time = newest;
+        }
+        if let (Some(m), Some(layer)) = (maps, self.map.layers.get_mut::<RadarLoopLayer>("radar")) {
+            let host = m.host.clone();
+            layer.set_frames(
+                all.iter()
+                    .map(|f| {
+                        let (host, path) = (host.clone(), f.path.clone());
+                        LoopFrameSource {
+                            key: format!("radar:{}:{COLOR_SCHEME}", f.path),
+                            url: Arc::new(move |t| {
+                                radar_tile_url(
+                                    &host,
+                                    &path,
+                                    u32::from(t.z),
+                                    t.x,
+                                    t.y,
+                                    COLOR_SCHEME,
+                                    true,
+                                    true,
+                                    None,
+                                    None,
+                                )
+                            }),
+                        }
+                    })
+                    .collect(),
+            );
+            let n = layer.len();
+            let next = if n > 0 { (self.clock.idx + 1) % n } else { 0 };
+            let dt = ui.input(|i| i.stable_dt).min(0.1);
+            layer.pos = self.clock.tick(dt, n, live_idx, layer.ready(next));
+            if self.clock.playing && n > 1 {
+                ui.ctx().request_repaint();
             }
         }
 
@@ -197,7 +197,7 @@ impl Radar {
         // --- floating controls ---
         let bar = egui::Rect::from_min_size(
             egui::pos2(rect.left() + 16.0, rect.bottom() - 64.0),
-            egui::vec2((rect.width() - 32.0).min(440.0), 48.0),
+            egui::vec2((rect.width() - 32.0).min(480.0), 48.0),
         );
         // A floating pill: play/pause, scrubber and time, each placed at a
         // fixed position on the bar's centre line so they align exactly.
@@ -214,7 +214,7 @@ impl Radar {
             egui::pos2(bar.left() + 6.0, cy - 18.0),
             egui::vec2(100.0, 36.0),
         );
-        let label = if self.playing {
+        let label = if self.clock.playing {
             "❚❚  Pause"
         } else {
             "▶  Play"
@@ -238,13 +238,13 @@ impl Radar {
         );
         let play = play.on_hover_cursor(egui::CursorIcon::PointingHand);
         if play.clicked() {
-            self.playing = !self.playing;
-            if !self.playing {
-                self.frame = live_idx;
+            self.clock.playing = !self.clock.playing;
+            if !self.clock.playing {
+                self.clock.set(live_idx);
             }
         }
         if !all.is_empty() {
-            let mut f = self.frame.min(all.len() - 1);
+            let mut f = self.clock.idx.min(all.len() - 1);
             let slider_r = egui::Rect::from_min_size(
                 egui::pos2(btn.right() + 14.0, cy - 12.0),
                 egui::vec2(170.0, 24.0),
@@ -254,8 +254,24 @@ impl Radar {
             let sr = ui.put(slider_r, slider);
             let text_x = sr.rect.right() + 14.0;
             if sr.changed() {
-                self.frame = f;
-                self.playing = false;
+                self.clock.set(f);
+                self.clock.playing = false;
+            }
+            // Loading progress for the loop, as a thin line under the track.
+            if let Some(layer) = self.map.layers.get_mut::<RadarLoopLayer>("radar") {
+                let n = layer.len().max(1);
+                let loaded = (0..n).map(|i| layer.ready(i)).sum::<f32>() / n as f32;
+                if loaded < 0.99 {
+                    let track = slider_r.shrink2(egui::vec2(6.0, 0.0));
+                    let y = slider_r.bottom() - 1.0;
+                    ui.painter().line_segment(
+                        [
+                            egui::pos2(track.left(), y),
+                            egui::pos2(track.left() + track.width() * loaded, y),
+                        ],
+                        egui::Stroke::new(2.0, sch.tertiary),
+                    );
+                }
             }
             let t = all[f].time;
             // Frame time in the place's own zone (falls back to this computer's).
@@ -265,12 +281,19 @@ impl Radar {
                     None => d.with_timezone(&chrono::Local).format("%H:%M").to_string(),
                 })
                 .unwrap_or_default();
+            // How fresh the live frame is.
+            let age_min = all
+                .get(live_idx)
+                .map(|lf| (chrono::Utc::now().timestamp() - lf.time).max(0) / 60);
             let tag = if f > live_idx {
-                "forecast"
+                "forecast".to_string()
             } else if f == live_idx {
-                "now"
+                match age_min {
+                    Some(m) if m >= 1 => format!("live, {m} min ago"),
+                    _ => "live".to_string(),
+                }
             } else {
-                "past"
+                "past".to_string()
             };
             crate::views::text_on_baseline(
                 ui.painter(),

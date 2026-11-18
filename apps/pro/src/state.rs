@@ -170,6 +170,15 @@ pub struct Shared {
     /// A weather refresh to run once the user stops editing (e.g. typing or
     /// pasting an AccuWeather key), so partial keys aren't sent.
     pub refresh_due: Option<std::time::Instant>,
+    /// NEXRAD storm cells and local storm reports (US), with fetch time.
+    pub storm_cells: Vec<ss_core::storms::StormCell>,
+    pub storm_reports: Vec<ss_core::storms::StormReport>,
+    pub storms_at: Option<chrono::DateTime<chrono::Local>>,
+    pub storms_error: Option<String>,
+    /// Forecast soundings by location id, and locations with a fetch in flight.
+    pub soundings: HashMap<String, Vec<ss_core::sounding::Sounding>>,
+    pub soundings_pending: std::collections::HashSet<String>,
+    pub sounding_errors: HashMap<String, String>,
     pub alerts: HashMap<String, Vec<Alert>>,
     /// Alerts for the radar bbox selection / audit log (slice 5 fills more).
     pub area_alerts: Vec<Alert>,
@@ -225,6 +234,13 @@ impl Shared {
             weather: HashMap::new(),
             weather_errors: HashMap::new(),
             refresh_due: None,
+            storm_cells: Vec::new(),
+            storm_reports: Vec::new(),
+            storms_at: None,
+            storms_error: None,
+            soundings: HashMap::new(),
+            soundings_pending: Default::default(),
+            sounding_errors: HashMap::new(),
             alerts: HashMap::new(),
             area_alerts: Vec::new(),
             viewport_alerts: Vec::new(),

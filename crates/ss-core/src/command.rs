@@ -350,6 +350,10 @@ fn parse_panel(s: &str) -> Option<PanelKind> {
         "7day" | "daily" | "7-day" | "week" => Some(PanelKind::Forecast),
         "hour" | "hours" => Some(PanelKind::Hourly),
         "wxradio" | "wx-radio" | "wx" => Some(PanelKind::Radio),
+        "storm" | "cells" | "lsr" | "reports" | "severe" => Some(PanelKind::Storms),
+        "skewt" | "skew-t" | "skew" | "snd" | "raob" | "hodo" | "hodograph" => {
+            Some(PanelKind::Sounding)
+        }
         _ => None,
     }
 }
@@ -588,6 +592,9 @@ pub const LAYER_NAMES: &[&str] = &[
     "nexrad",
     "arrows",
     "cells",
+    "terrain",
+    "storms",
+    "reports",
 ];
 
 /// Map-layer names accepted by `:layer`. Returns the canonical name.
@@ -609,6 +616,9 @@ pub fn canonical_layer(name: &str) -> Option<&'static str> {
         "nexrad" => "nexrad",
         "arrows" => "arrows",
         "cells" => "cells",
+        "terrain" | "topo" | "topography" | "relief" | "hillshade" => "terrain",
+        "storms" | "storm-cells" | "tvs" | "meso" | "tracks" => "storms",
+        "reports" | "lsr" | "storm-reports" => "reports",
         _ => return None,
     };
     LAYER_NAMES.iter().copied().find(|l| *l == canon)

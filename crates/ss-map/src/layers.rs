@@ -189,6 +189,18 @@ impl Layer for RasterTileLayer {
     }
 }
 
+/// Esri World Hillshade: shaded relief for terrain context under radar.
+/// Free with attribution; grey relief, best drawn translucent over a basemap.
+pub fn esri_hillshade(opacity: f32) -> RasterTileLayer {
+    RasterTileLayer::new("terrain", "esri-hillshade", 16, |t| {
+        format!(
+            "https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{}/{}/{}",
+            t.z, t.y, t.x
+        )
+    })
+    .with_opacity(opacity)
+}
+
 /// Esri "Canvas" basemap (World_Dark_Gray_Base / World_Light_Gray_Base).
 /// Free to use without an API key (attribution required); tiles are served as z/y/x.
 pub fn esri_basemap(dark: bool) -> RasterTileLayer {

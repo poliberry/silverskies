@@ -88,6 +88,27 @@ pub fn haversine_km(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
 
 /// Area-weighted centroid of a ring; falls back to the vertex mean for
 /// degenerate (zero-area) rings.
+/// The point `km` kilometres from (`lon`, `lat`) along initial bearing
+/// `bearing_deg` (great circle). Returns `(lon, lat)`.
+pub fn destination(lon: f64, lat: f64, bearing_deg: f64, km: f64) -> (f64, f64) {
+    const R: f64 = 6371.0088;
+    let d = km / R;
+    let (phi1, lam1, th) = (lat.to_radians(), lon.to_radians(), bearing_deg.to_radians());
+    let phi2 = (phi1.sin() * d.cos() + phi1.cos() * d.sin() * th.cos()).asin();
+    let lam2 = lam1 + (th.sin() * d.sin() * phi1.cos()).atan2(d.cos() - phi1.sin() * phi2.sin());
+    let lon2 = (lam2.to_degrees() + 540.0).rem_euclid(360.0) - 180.0;
+    (lon2, phi2.to_degrees())
+}
+
+/// Initial great-circle bearing from point 1 to point 2, degrees 0..360.
+pub fn bearing_deg(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
+    let (p1, p2) = (lat1.to_radians(), lat2.to_radians());
+    let dl = (lon2 - lon1).to_radians();
+    let y = dl.sin() * p2.cos();
+    let x = p1.cos() * p2.sin() - p1.sin() * p2.cos() * dl.cos();
+    y.atan2(x).to_degrees().rem_euclid(360.0)
+}
+
 pub fn polygon_centroid(ring: &[LonLat]) -> LonLat {
     let mut pts: Vec<LonLat> = ring.to_vec();
     if pts.len() > 1 && pts.first() == pts.last() {

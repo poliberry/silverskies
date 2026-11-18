@@ -46,6 +46,8 @@ pub struct App {
     last_static: Instant,
     last_maps: Instant,
     last_spc: Instant,
+    /// Storm cells / reports: fetched at start, then every couple of minutes.
+    last_storms: Option<Instant>,
     last_auto: Instant,
     last_session_save: Instant,
     /// Builds panel instances for child windows (holds client, runtime, tile dir).
@@ -138,6 +140,7 @@ impl App {
             last_static: Instant::now(),
             last_maps: Instant::now(),
             last_spc: Instant::now(),
+            last_storms: None,
             last_auto: Instant::now(),
             last_session_save: Instant::now(),
             factory,
@@ -332,6 +335,50 @@ impl App {
                 }
                 sh.alerts.insert(location_id, alerts);
                 sh.bump_alerts();
+            }
+            AppEvent::StormCells(r) => match r {
+                Ok(v) => {
+                    let tor = v
+                        .iter()
+                        .filter(|c| c.tvs == ss_core::storms::Tvs::Tvs)
+                        .count();
+                    sh.log(
+                        LogLevel::Info,
+                        format!("storm cells: {} ({} TVS)", v.len(), tor),
+                    );
+                    sh.storm_cells = v;
+                    sh.storms_at = Some(chrono::Local::now());
+                    sh.storms_error = None;
+                    sh.bump_alerts();
+                }
+                Err(e) => {
+                    sh.log(LogLevel::Warn, format!("storm cells: {e}"));
+                    sh.storms_error = Some(e);
+                }
+            },
+            AppEvent::StormReports(r) => match r {
+                Ok(v) => {
+                    sh.log(LogLevel::Info, format!("storm reports (24 h): {}", v.len()));
+                    sh.storm_reports = v;
+                    sh.bump_alerts();
+                }
+                Err(e) => sh.log(LogLevel::Warn, format!("storm reports: {e}")),
+            },
+            AppEvent::Soundings {
+                location_id,
+                result,
+            } => {
+                sh.soundings_pending.remove(&location_id);
+                match result {
+                    Ok(v) => {
+                        sh.sounding_errors.remove(&location_id);
+                        sh.soundings.insert(location_id, v);
+                    }
+                    Err(e) => {
+                        sh.log(LogLevel::Warn, format!("sounding: {e}"));
+                        sh.sounding_errors.insert(location_id, e);
+                    }
+                }
             }
             AppEvent::RadarStations(r) => match r {
                 Ok(v) => {
@@ -546,6 +593,13 @@ impl App {
         if self.last_maps.elapsed() >= Duration::from_secs(120) {
             self.last_maps = Instant::now();
             self.tasks.weather_maps();
+        }
+        if self
+            .last_storms
+            .is_none_or(|t| t.elapsed() >= Duration::from_secs(120))
+        {
+            self.last_storms = Some(Instant::now());
+            self.tasks.storms();
         }
         if self.last_spc.elapsed() >= Duration::from_secs(600) {
             self.last_spc = Instant::now();

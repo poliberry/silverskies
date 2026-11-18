@@ -29,7 +29,8 @@ use crate::worker::{Event, Worker};
 const HEADER_H: f32 = 80.0;
 /// Width of the places sidebar.
 const SIDEBAR_W: f32 = 270.0;
-const MAPS_EVERY: Duration = Duration::from_secs(5 * 60);
+/// How often the radar frame index is refreshed (new frames every few minutes).
+const MAPS_EVERY: Duration = Duration::from_secs(2 * 60);
 /// Treat a picked place this close to a saved one as the same place.
 const SAME_PLACE_KM: f64 = 3.0;
 

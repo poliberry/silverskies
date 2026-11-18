@@ -122,6 +122,101 @@ pub fn parse_forecast(json: &str) -> Result<Weather> {
 }
 
 // ---------------------------------------------------------------------------
+// Soundings (pressure-level forecasts)
+// ---------------------------------------------------------------------------
+
+/// Pressure levels requested for soundings (hPa), surface upward.
+pub const SOUNDING_LEVELS: [u32; 19] = [
+    1000, 975, 950, 925, 900, 850, 800, 750, 700, 650, 600, 550, 500, 450, 400, 350, 300, 250, 200,
+];
+
+pub fn sounding_url(lat: f64, lon: f64) -> String {
+    let mut vars: Vec<String> = Vec::new();
+    for v in [
+        "temperature",
+        "dew_point",
+        "wind_speed",
+        "wind_direction",
+        "geopotential_height",
+    ] {
+        for l in SOUNDING_LEVELS {
+            vars.push(format!("{v}_{l}hPa"));
+        }
+    }
+    vars.extend(
+        [
+            "surface_pressure",
+            "temperature_2m",
+            "dew_point_2m",
+            "wind_speed_10m",
+            "wind_direction_10m",
+        ]
+        .map(String::from),
+    );
+    // `SS_OPENMETEO_BASE` points soundings at a local mock (testing only).
+    let base = std::env::var("SS_OPENMETEO_BASE")
+        .ok()
+        .filter(|b| !b.trim().is_empty())
+        .unwrap_or_else(|| "https://api.open-meteo.com".to_string());
+    format!(
+        "{}/v1/forecast?latitude={lat}&longitude={lon}&hourly={}&wind_speed_unit=kn&forecast_days=2&timezone=auto",
+        base.trim_end_matches('/'),
+        vars.join(",")
+    )
+}
+
+/// Hourly forecast soundings: the surface (2 m / 10 m) followed by every
+/// pressure level above ground.
+pub fn parse_soundings(json: &str) -> Result<Vec<ss_core::sounding::Sounding>> {
+    use ss_core::sounding::{Level, Sounding};
+    let v = parse_value(json)?;
+    let h = v.get("hourly").ok_or(NetError::Missing("hourly"))?;
+    let elevation = num(&v, "elevation");
+    let time = arr(h, "time");
+    let series = |name: &str| arr(h, name);
+    let mut out = Vec::with_capacity(time.len());
+    for i in 0..time.len() {
+        let sp = f(series("surface_pressure"), i);
+        if sp <= 0.0 {
+            continue;
+        }
+        let mut levels = vec![Level {
+            pressure_hpa: sp,
+            height_m: elevation,
+            temp_c: f(series("temperature_2m"), i),
+            dewpoint_c: f(series("dew_point_2m"), i),
+            wind_kt: f(series("wind_speed_10m"), i),
+            wind_dir_deg: f(series("wind_direction_10m"), i),
+        }];
+        for l in SOUNDING_LEVELS {
+            let p = f64::from(l);
+            let z = series(&format!("geopotential_height_{l}hPa"))
+                .get(i)
+                .and_then(Value::as_f64);
+            let Some(z) = z else { continue };
+            // Levels below ground (or at it) are extrapolated: skip them.
+            if p >= sp - 1.0 || z <= elevation + 1.0 {
+                continue;
+            }
+            levels.push(Level {
+                pressure_hpa: p,
+                height_m: z,
+                temp_c: f(series(&format!("temperature_{l}hPa")), i),
+                dewpoint_c: f(series(&format!("dew_point_{l}hPa")), i),
+                wind_kt: f(series(&format!("wind_speed_{l}hPa")), i),
+                wind_dir_deg: f(series(&format!("wind_direction_{l}hPa")), i),
+            });
+        }
+        out.push(Sounding {
+            time: s(time, i),
+            elevation_m: elevation,
+            levels,
+        });
+    }
+    Ok(out)
+}
+
+// ---------------------------------------------------------------------------
 // Geocoding
 // ---------------------------------------------------------------------------
 
@@ -332,6 +427,11 @@ pub fn parse_ip(json: &str) -> Result<Option<Location>> {
 }
 
 impl Net {
+    /// Hourly forecast soundings for the next two days.
+    pub async fn soundings(&self, lat: f64, lon: f64) -> Result<Vec<ss_core::sounding::Sounding>> {
+        parse_soundings(&self.get_text(&sounding_url(lat, lon), None).await?)
+    }
+
     pub async fn forecast(&self, lat: f64, lon: f64) -> Result<Weather> {
         parse_forecast(&self.get_text(&forecast_url(lat, lon), None).await?)
     }
@@ -410,6 +510,48 @@ mod tests {
         assert_eq!(w.daily[0].uv_index_max, 4.5);
         assert_eq!(w.provider, WeatherProviderId::OpenMeteo);
         assert!(parse_forecast("{}").is_err());
+    }
+
+    #[test]
+    fn soundings_parse_and_skip_levels_below_ground() {
+        // Elevation 360 m, surface 970 hPa: 1000/975 hPa are underground.
+        let mut hourly = serde_json::Map::new();
+        hourly.insert("time".into(), serde_json::json!(["2026-05-20T18:00"]));
+        hourly.insert("surface_pressure".into(), serde_json::json!([970.0]));
+        hourly.insert("temperature_2m".into(), serde_json::json!([30.0]));
+        hourly.insert("dew_point_2m".into(), serde_json::json!([22.0]));
+        hourly.insert("wind_speed_10m".into(), serde_json::json!([15.0]));
+        hourly.insert("wind_direction_10m".into(), serde_json::json!([160.0]));
+        for l in SOUNDING_LEVELS {
+            let z = 44330.0 * (1.0 - (f64::from(l) / 1013.25).powf(0.1903));
+            hourly.insert(
+                format!("geopotential_height_{l}hPa"),
+                serde_json::json!([z]),
+            );
+            hourly.insert(
+                format!("temperature_{l}hPa"),
+                serde_json::json!([20.0 - z / 150.0]),
+            );
+            hourly.insert(
+                format!("dew_point_{l}hPa"),
+                serde_json::json!([10.0 - z / 150.0]),
+            );
+            hourly.insert(format!("wind_speed_{l}hPa"), serde_json::json!([20.0]));
+            hourly.insert(format!("wind_direction_{l}hPa"), serde_json::json!([240.0]));
+        }
+        let json = serde_json::json!({"elevation": 360.0, "hourly": hourly}).to_string();
+        let s = parse_soundings(&json).unwrap();
+        assert_eq!(s.len(), 1);
+        let lv = &s[0].levels;
+        assert_eq!(lv[0].pressure_hpa, 970.0);
+        assert_eq!(lv[0].temp_c, 30.0);
+        assert_eq!(
+            lv[1].pressure_hpa, 950.0,
+            "1000 and 975 hPa are below ground"
+        );
+        assert!(lv.windows(2).all(|w| w[1].pressure_hpa < w[0].pressure_hpa));
+        assert_eq!(lv.last().unwrap().pressure_hpa, 200.0);
+        assert!(sounding_url(35.0, -97.0).contains("geopotential_height_500hPa"));
     }
 
     #[test]
