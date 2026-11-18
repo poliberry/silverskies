@@ -23,13 +23,22 @@ pub fn window(ctx: &Context, app: &mut App) {
     let mut open = app.settings_open;
     let mut config_changed = false;
     let mut prefs_changed = false;
+    // Fit the screen: the content scrolls inside a dialog no taller than
+    // the window (minus margins, the title bar and padding).
+    let max_h = (ctx.content_rect().height() - 190.0).max(200.0);
     egui::Window::new(RichText::new("Settings").size(18.0).strong())
         .open(&mut open)
         .collapsible(false)
         .resizable(false)
         .default_width(440.0)
         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        .max_height(max_h)
         .show(ctx, |ui| {
+            egui::ScrollArea::vertical()
+                .max_height(max_h)
+                .min_scrolled_height(max_h)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 10.0;
             egui::Grid::new("settings_grid")
                 .num_columns(2)
@@ -157,6 +166,7 @@ pub fn window(ctx: &Context, app: &mut App) {
                     .size(11.5)
                     .color(c32a(p.text3)),
             );
+                });
         });
     app.settings_open = open;
     if config_changed {
