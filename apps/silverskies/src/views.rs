@@ -90,34 +90,176 @@ fn cell(ui: &mut Ui, rect: Rect, fill: Color32, salt: &str, add: impl FnOnce(&mu
     add(&mut child);
 }
 
-/// A small Material chip (label on a full-round container).
-fn chip(ui: &mut Ui, text: &str, fill: Color32, ink: Color32) {
-    egui::Frame::new()
-        .fill(fill)
-        .corner_radius(corner::FULL)
-        .inner_margin(Margin::symmetric(12, 5))
-        .show(ui, |ui| {
-            ui.label(label(text, 13.0, ink));
-        });
+/// Distance from a galley's top to its first line's baseline.
+pub fn galley_baseline(g: &egui::Galley) -> f32 {
+    g.rows
+        .first()
+        .map(|r| {
+            r.pos.y
+                + r.row
+                    .glyphs
+                    .first()
+                    .map_or(r.row.size.y * 0.8, |gl| gl.pos.y)
+        })
+        .unwrap_or(g.size().y * 0.8)
 }
 
-/// A circular icon button with a glyph; returns the response.
-fn icon_button(
+/// Paint one line of text with its baseline at `y`, anchored at `x` by
+/// `align` (left, centre or right). Mixed fonts on a row share a baseline
+/// this way instead of being centred box-by-box.
+pub fn text_on_baseline(
+    painter: &Painter,
+    x: f32,
+    y: f32,
+    align: Align,
+    text: impl ToString,
+    font: egui::FontId,
+    color: Color32,
+) -> Rect {
+    let g = painter.layout_no_wrap(text.to_string(), font, color);
+    let w = g.size().x;
+    let left = match align {
+        Align::Min => x,
+        Align::Center => x - w / 2.0,
+        Align::Max => x - w,
+    };
+    let r = Rect::from_min_size(pos2(left, y - galley_baseline(&g)), g.size());
+    painter.galley(r.min, g, color);
+    r
+}
+
+/// The baseline that visually centres text of `size` points on `center_y`
+/// (half the cap height below the centre).
+pub fn baseline_for_center(center_y: f32, size: f32) -> f32 {
+    center_y + size * 0.36
+}
+
+/// Lay out runs of differently sized text left to right on one shared
+/// baseline, allocating their space in `ui`. Returns the rect and baseline.
+fn runs(ui: &mut Ui, parts: &[(String, egui::FontId, Color32)], gap: f32) -> (Rect, f32) {
+    let galleys: Vec<_> = parts
+        .iter()
+        .map(|(t, f, c)| ui.painter().layout_no_wrap(t.clone(), f.clone(), *c))
+        .collect();
+    let ascent = galleys
+        .iter()
+        .map(|g| galley_baseline(g))
+        .fold(0.0, f32::max);
+    let height = galleys
+        .iter()
+        .map(|g| ascent - galley_baseline(g) + g.size().y)
+        .fold(0.0, f32::max);
+    let width = galleys.iter().map(|g| g.size().x).sum::<f32>()
+        + gap * galleys.len().saturating_sub(1) as f32;
+    let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
+    let base = rect.top() + ascent;
+    let mut x = rect.left();
+    for (g, (_, _, c)) in galleys.into_iter().zip(parts) {
+        let w = g.size().x;
+        let top = base - galley_baseline(&g);
+        ui.painter().galley(pos2(x, top), g, *c);
+        x += w + gap;
+    }
+    (rect, base)
+}
+
+/// Paint a chip whose left edge is at `left` and which is centred on `cy`.
+fn paint_chip(
+    painter: &Painter,
+    left: f32,
+    cy: f32,
+    text: &str,
+    fill: Color32,
+    ink: Color32,
+) -> Rect {
+    let g = painter.layout_no_wrap(text.to_string(), medium_font(13.0), ink);
+    let r = Rect::from_min_size(pos2(left, cy - 13.0), vec2(g.size().x + 24.0, 26.0));
+    painter.rect_filled(r, corner::FULL, fill);
+    text_on_baseline(
+        painter,
+        r.center().x,
+        baseline_for_center(cy, 13.0),
+        Align::Center,
+        text,
+        medium_font(13.0),
+        ink,
+    );
+    r
+}
+
+/// A small Material chip (label on a full-round container).
+fn chip(ui: &mut Ui, text: &str, fill: Color32, ink: Color32) {
+    let w = ui
+        .painter()
+        .layout_no_wrap(text.to_string(), medium_font(13.0), ink)
+        .size()
+        .x
+        + 24.0;
+    let (r, _) = ui.allocate_exact_size(vec2(w, 26.0), Sense::hover());
+    paint_chip(ui.painter(), r.left(), r.center().y, text, fill, ink);
+}
+
+/// A leading badge next to a block of content, centred on the block's
+/// height (egui rows centre items as they are added, so a badge placed
+/// before a taller block would otherwise sit high).
+fn badge_row(
     ui: &mut Ui,
+    badge: f32,
+    paint: impl FnOnce(&Painter, egui::Pos2),
+    content: impl FnOnce(&mut Ui),
+) {
+    let r = ui
+        .horizontal_top(|ui| {
+            let (col, _) = ui.allocate_exact_size(vec2(badge, badge), Sense::hover());
+            let block = ui.vertical(content).response.rect;
+            (col, block)
+        })
+        .inner;
+    let (col, block) = r;
+    let cy = block.center().y.max(col.top() + badge / 2.0);
+    paint(ui.painter(), pos2(col.center().x, cy));
+}
+
+/// The "!" alert badge: a soft four-lobed shape in the alert's colour.
+fn alert_badge(painter: &Painter, c: egui::Pos2, radius: f32, color: Color32) {
+    m3::cookie(painter, c, radius, 4, 0.4, color);
+    let size = radius * 0.9;
+    text_on_baseline(
+        painter,
+        c.x,
+        baseline_for_center(c.y, size),
+        Align::Center,
+        "!",
+        medium_font(size),
+        ink_on(color),
+    );
+}
+
+/// A circular icon button drawn in `rect`.
+fn icon_button_at(
+    ui: &mut Ui,
+    rect: Rect,
     glyph: &str,
-    size: f32,
     fill: Color32,
     ink: Color32,
     tip: &str,
 ) -> egui::Response {
-    let (r, resp) = ui.allocate_exact_size(vec2(size, size), Sense::click());
+    let resp = ui.interact(
+        rect,
+        ui.scope_id()
+            .with(("icon", glyph, rect.min.x as i32, rect.min.y as i32)),
+        Sense::click(),
+    );
     ui.painter()
-        .circle_filled(r.center(), size / 2.0, state(fill, ink, &resp));
-    ui.painter().text(
-        r.center(),
-        Align2::CENTER_CENTER,
+        .circle_filled(rect.center(), rect.height() / 2.0, state(fill, ink, &resp));
+    let size = rect.height() * 0.42;
+    text_on_baseline(
+        ui.painter(),
+        rect.center().x,
+        baseline_for_center(rect.center().y, size),
+        Align::Center,
         glyph,
-        medium_font(size * 0.42),
+        medium_font(size),
         ink,
     );
     resp.on_hover_text(tip)
@@ -277,19 +419,14 @@ pub fn round_button_at(
     glyph: &str,
     tip: &str,
 ) -> egui::Response {
-    let resp = ui.interact(rect, ui.scope_id().with(("round", glyph)), Sense::click());
-    let (fill, ink) = (s.surface_container_highest, s.on_surface_variant);
-    ui.painter()
-        .circle_filled(rect.center(), rect.height() / 2.0, state(fill, ink, &resp));
-    ui.painter().text(
-        rect.center(),
-        Align2::CENTER_CENTER,
+    icon_button_at(
+        ui,
+        rect,
         glyph,
-        medium_font(rect.height() * 0.42),
-        ink,
-    );
-    resp.on_hover_text(tip)
-        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        s.surface_container_highest,
+        s.on_surface_variant,
+        tip,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -1023,20 +1160,12 @@ fn stat(
         ui.spacing_mut().item_spacing.y = 0.0;
         tile_title(ui, s, title);
         ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 4.0;
-            ui.label(
-                RichText::new(value)
-                    .font(display_font(36.0))
-                    .color(s.on_surface),
-            );
-            if !unit.is_empty() {
-                ui.vertical(|ui| {
-                    ui.add_space(17.0);
-                    ui.label(RichText::new(unit).size(14.0).color(s.on_surface_variant));
-                });
-            }
-        });
+        // Value and unit share a baseline.
+        let mut parts = vec![(value, display_font(36.0), s.on_surface)];
+        if !unit.is_empty() {
+            parts.push((unit.to_string(), body_font(15.0), s.on_surface_variant));
+        }
+        runs(ui, &parts, 5.0);
         if let Some(sub) = sub {
             ui.label(RichText::new(sub).size(13.0).color(s.on_surface_variant));
         }
@@ -1191,6 +1320,8 @@ fn week(
         }
         let painter = ui.painter_at(rect);
         let y = rect.center().y;
+        // Every label on the row shares one baseline.
+        let baseline = baseline_for_center(y, 15.0);
         let name = if today {
             "Today".to_string()
         } else {
@@ -1200,9 +1331,11 @@ fn week(
                 .unwrap_or("")
                 .to_string()
         };
-        painter.text(
-            pos2(rect.left() + 18.0, y),
-            Align2::LEFT_CENTER,
+        text_on_baseline(
+            &painter,
+            rect.left() + 18.0,
+            baseline,
+            Align::Min,
             name,
             medium_font(15.0),
             ink,
@@ -1216,9 +1349,11 @@ fn week(
             Rect::from_center_size(pos2(rect.left() + 98.0, y), vec2(28.0, 28.0)),
         );
         let pop = d.precipitation_probability_max_pct.round();
-        painter.text(
-            pos2(rect.right() - 18.0, y),
-            Align2::RIGHT_CENTER,
+        text_on_baseline(
+            &painter,
+            rect.right() - 18.0,
+            baseline,
+            Align::Max,
             format!("{pop}%"),
             medium_font(12.5),
             if focused || today { ink } else { s.primary },
@@ -1226,16 +1361,20 @@ fn week(
         // low  ━━━━  high
         let bar_l = rect.left() + 172.0;
         let bar_r = rect.right() - 118.0;
-        painter.text(
-            pos2(bar_l - 12.0, y),
-            Align2::RIGHT_CENTER,
+        text_on_baseline(
+            &painter,
+            bar_l - 12.0,
+            baseline,
+            Align::Max,
             format!("{}°", num(d.temp_min_c, units)),
             body_font(14.0),
             ink.gamma_multiply(0.75),
         );
-        painter.text(
-            pos2(bar_r + 12.0, y),
-            Align2::LEFT_CENTER,
+        text_on_baseline(
+            &painter,
+            bar_r + 12.0,
+            baseline,
+            Align::Min,
             format!("{}°", num(d.temp_max_c, units)),
             medium_font(15.0),
             ink,
@@ -1279,17 +1418,21 @@ fn week(
 fn uv(ui: &mut Ui, s: &Scheme, uv: f64) {
     let (uv_text, uv_rgb) = uv_label(uv);
     tile_title(ui, s, "UV index");
-    ui.horizontal(|ui| {
-        ui.label(
-            RichText::new(format!("{uv:.0}"))
-                .font(display_font(40.0))
-                .color(s.on_surface),
-        );
-        ui.vertical(|ui| {
-            ui.add_space(14.0);
-            chip(ui, uv_text, c32(uv_rgb), ink_on(c32(uv_rgb)));
-        });
-    });
+    // The number, then its rating chip centred on the digits.
+    let (r, base) = runs(
+        ui,
+        &[(format!("{uv:.0}"), display_font(40.0), s.on_surface)],
+        0.0,
+    );
+    let cy = base - 40.0 * 0.36;
+    paint_chip(
+        ui.painter(),
+        r.right() + 12.0,
+        cy,
+        uv_text,
+        c32(uv_rgb),
+        ink_on(c32(uv_rgb)),
+    );
     ui.label(
         RichText::new(if uv > 5.0 {
             "Sun protection recommended"
@@ -1471,31 +1614,31 @@ fn condensed_bar(
         Rect::from_center_size(ic, vec2(32.0, 32.0)),
     );
     let ink = s.on_primary_container;
-    let g = painter.layout_no_wrap(
-        place.split(',').next().unwrap_or(place).to_string(),
+    // Place, temperature and condition on one baseline.
+    let base = baseline_for_center(bar.center().y, 20.0);
+    let r1 = text_on_baseline(
+        &painter,
+        bar.left() + 66.0,
+        base,
+        Align::Min,
+        place.split(',').next().unwrap_or(place),
         medium_font(17.0),
         ink,
     );
-    let tw = g.size().x;
-    painter.galley(
-        pos2(bar.left() + 66.0, bar.center().y - g.size().y / 2.0),
-        g,
-        ink,
-    );
-    let t = painter.layout_no_wrap(
+    let r2 = text_on_baseline(
+        &painter,
+        r1.right() + 14.0,
+        base,
+        Align::Min,
         temp(w.current.temperature_c, units),
         display_font(26.0),
         ink,
     );
-    let ttw = t.size().x;
-    painter.galley(
-        pos2(bar.left() + 80.0 + tw, bar.center().y - t.size().y / 2.0),
-        t,
-        ink,
-    );
-    painter.text(
-        pos2(bar.left() + 94.0 + tw + ttw, bar.center().y),
-        Align2::LEFT_CENTER,
+    text_on_baseline(
+        &painter,
+        r2.right() + 14.0,
+        base,
+        Align::Min,
         wmo_label(w.current.weather_code),
         body_font(15.5),
         ink.gamma_multiply(0.8),
@@ -1526,14 +1669,7 @@ fn alert_banner(ui: &mut Ui, p: &Palette, alerts: &[Alert], actions: &mut Vec<Ac
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
                 let (b, _) = ui.allocate_exact_size(vec2(40.0, 40.0), Sense::hover());
-                m3::cookie(ui.painter(), b.center(), 20.0, 4, 0.4, c);
-                ui.painter().text(
-                    b.center(),
-                    Align2::CENTER_CENTER,
-                    "!",
-                    medium_font(20.0),
-                    ink_on(c),
-                );
+                alert_badge(ui.painter(), b.center(), 20.0, c);
                 ui.add_space(4.0);
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.label(label("View alerts  →", 14.0, s.on_error_container));
@@ -1683,33 +1819,42 @@ fn answer_card(
         .fill(s.secondary_container)
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.horizontal(|ui| {
-                ui.label(label(
-                    "You asked",
-                    13.0,
-                    s.on_secondary_container.gamma_multiply(0.8),
-                ));
-                ui.label(
-                    RichText::new(format!("“{}”", ans.question))
-                        .size(14.5)
-                        .color(s.on_secondary_container),
-                );
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if icon_button(
-                        ui,
-                        "✕",
-                        32.0,
-                        s.secondary_container
-                            .lerp_to_gamma(s.on_secondary_container, 0.1),
-                        s.on_secondary_container,
-                        "Dismiss",
-                    )
-                    .clicked()
-                    {
-                        actions.push(Action::DismissAnswer);
-                    }
-                });
-            });
+            // "You asked", the question and the dismiss button on one line.
+            let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::hover());
+            let base = baseline_for_center(row.center().y, 14.5);
+            let r = text_on_baseline(
+                ui.painter(),
+                row.left(),
+                base,
+                Align::Min,
+                "You asked",
+                medium_font(13.0),
+                s.on_secondary_container.gamma_multiply(0.8),
+            );
+            text_on_baseline(
+                ui.painter(),
+                r.right() + 8.0,
+                base,
+                Align::Min,
+                format!("“{}”", ans.question),
+                body_font(14.5),
+                s.on_secondary_container,
+            );
+            let x =
+                Rect::from_center_size(pos2(row.right() - 16.0, row.center().y), vec2(32.0, 32.0));
+            if icon_button_at(
+                ui,
+                x,
+                "✕",
+                s.secondary_container
+                    .lerp_to_gamma(s.on_secondary_container, 0.1),
+                s.on_secondary_container,
+                "Dismiss",
+            )
+            .clicked()
+            {
+                actions.push(Action::DismissAnswer);
+            }
             let local = summary::answer(w, ans.topic, ans.day, units, tf, now);
             ui.add(
                 egui::Label::new(
@@ -1879,19 +2024,12 @@ pub fn alerts(ui: &mut Ui, app: &App, _actions: &mut Vec<Action>) {
             if alerts.is_empty() {
                 card_frame(&p).show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    ui.horizontal(|ui| {
-                        let (r, _) = ui.allocate_exact_size(vec2(64.0, 64.0), Sense::hover());
-                        m3::cookie(ui.painter(), r.center(), 30.0, 9, 0.0, s.secondary_container);
-                        ui.painter().text(
-                            r.center(),
-                            Align2::CENTER_CENTER,
-                            "✓",
-                            medium_font(24.0),
-                            s.on_secondary_container,
-                        );
-                        ui.add_space(6.0);
-                        ui.vertical(|ui| {
-                            ui.add_space(6.0);
+                    let (fill, ink) = (s.secondary_container, s.on_secondary_container);
+                    badge_row(ui, 70.0, |pa, at| {
+                        m3::cookie(pa, at, 30.0, 9, 0.0, fill);
+                        text_on_baseline(pa, at.x, baseline_for_center(at.y, 24.0), Align::Center, "✓", medium_font(24.0), ink);
+                    }, |ui| {
+                            ui.spacing_mut().item_spacing.y = 4.0;
                             ui.label(
                                 RichText::new("No active alerts")
                                     .font(medium_font(22.0))
@@ -1908,7 +2046,6 @@ pub fn alerts(ui: &mut Ui, app: &App, _actions: &mut Vec<Action>) {
                                 )
                                 .wrap(),
                             );
-                        });
                     });
                 });
             }
@@ -1916,18 +2053,7 @@ pub fn alerts(ui: &mut Ui, app: &App, _actions: &mut Vec<Action>) {
                 let c = c32(class_color(&a.class));
                 card_frame(&p).show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    ui.horizontal(|ui| {
-                        let (r, _) = ui.allocate_exact_size(vec2(48.0, 48.0), Sense::hover());
-                        m3::cookie(ui.painter(), r.center(), 24.0, 4, 0.4, c);
-                        ui.painter().text(
-                            r.center(),
-                            Align2::CENTER_CENTER,
-                            "!",
-                            medium_font(22.0),
-                            ink_on(c),
-                        );
-                        ui.add_space(4.0);
-                        ui.vertical(|ui| {
+                    badge_row(ui, 52.0, |pa, at| alert_badge(pa, at, 24.0, c), |ui| {
                             ui.spacing_mut().item_spacing.y = 4.0;
                             ui.label(
                                 RichText::new(&a.display_event)
@@ -1945,7 +2071,6 @@ pub fn alerts(ui: &mut Ui, app: &App, _actions: &mut Vec<Action>) {
                                     );
                                 }
                             });
-                        });
                     });
                     if let Some(h) = &a.headline {
                         ui.add(

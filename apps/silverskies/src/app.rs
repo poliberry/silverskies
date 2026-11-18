@@ -865,13 +865,21 @@ impl App {
             {
                 actions.push(Action::Intent(Intent::Refresh));
             }
-            ui.painter().text(
-                egui::pos2(right, cy),
-                egui::Align2::RIGHT_CENTER,
-                format!("{}\n{}", now.format("%a %-d %b"), now.format(clock_fmt)),
-                egui::FontId::proportional(12.5),
-                s.on_surface_variant,
-            );
+            // Date over time, both right-aligned, centred as a pair.
+            for (text, dy) in [
+                (now.format("%a %-d %b").to_string(), -8.0),
+                (now.format(clock_fmt).to_string(), 8.0),
+            ] {
+                crate::views::text_on_baseline(
+                    ui.painter(),
+                    right,
+                    crate::views::baseline_for_center(cy + dy, 12.5),
+                    Align::Max,
+                    text,
+                    egui::FontId::proportional(12.5),
+                    s.on_surface_variant,
+                );
+            }
         });
     }
 

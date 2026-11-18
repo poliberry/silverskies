@@ -9,7 +9,6 @@ use ss_core::{Location, SavedLocation};
 
 use crate::app::Action;
 use crate::search;
-use crate::theme::c32;
 
 const DEBOUNCE: Duration = Duration::from_millis(350);
 const MAX_PLACES: usize = 4;
@@ -335,14 +334,24 @@ impl SearchBar {
                                 CornerRadius::same(255),
                                 sch.tertiary_container,
                             );
-                            painter.galley(
-                                chip.center() - kg.size() / 2.0,
-                                kg,
+                            use crate::views::{baseline_for_center, text_on_baseline};
+                            text_on_baseline(
+                                &painter,
+                                chip.center().x,
+                                baseline_for_center(y, 11.5),
+                                egui::Align::Center,
+                                s.kind,
+                                crate::theme::medium_font(11.5),
                                 sch.on_tertiary_container,
                             );
-                            let title_x = row.rect.left() + 96.0;
-                            let g = painter.layout_no_wrap(
-                                s.title.clone(),
+                            // Title and detail share one baseline.
+                            let base = baseline_for_center(y, 15.0);
+                            let tr = text_on_baseline(
+                                &painter,
+                                row.rect.left() + 96.0,
+                                base,
+                                egui::Align::Min,
+                                &s.title,
                                 egui::FontId::proportional(15.0),
                                 if hot {
                                     sch.on_secondary_container
@@ -350,16 +359,12 @@ impl SearchBar {
                                     sch.on_surface
                                 },
                             );
-                            let tw = g.size().x;
-                            painter.galley(
-                                egui::pos2(title_x, y - g.size().y / 2.0),
-                                g,
-                                c32(p.text),
-                            );
                             if let Some(d) = &s.detail {
-                                painter.text(
-                                    egui::pos2(title_x + tw + 10.0, y),
-                                    egui::Align2::LEFT_CENTER,
+                                text_on_baseline(
+                                    &painter,
+                                    tr.right() + 10.0,
+                                    base,
+                                    egui::Align::Min,
                                     d,
                                     egui::FontId::proportional(12.5),
                                     sch.on_surface_variant,
