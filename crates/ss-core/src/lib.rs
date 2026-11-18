@@ -4,6 +4,7 @@
 //! `ss-store`, audio in `ss-audio`, map rendering in `ss-map`, and the egui
 //! application in the `silverskies` binary.
 
+pub mod ai;
 pub mod alerts;
 pub mod command;
 pub mod geo;

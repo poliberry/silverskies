@@ -32,18 +32,20 @@ pub enum Tab {
     Radar,
     Alerts,
     Radio,
+    Ai,
     Themes,
     Developer,
     About,
 }
 
 impl Tab {
-    const ALL: [Tab; 8] = [
+    const ALL: [Tab; 9] = [
         Tab::General,
         Tab::Sources,
         Tab::Radar,
         Tab::Alerts,
         Tab::Radio,
+        Tab::Ai,
         Tab::Themes,
         Tab::Developer,
         Tab::About,
@@ -56,6 +58,7 @@ impl Tab {
             Tab::Radar => "RADAR",
             Tab::Alerts => "ALERTS",
             Tab::Radio => "RADIO",
+            Tab::Ai => "AI",
             Tab::Themes => "THEMES",
             Tab::Developer => "DEVELOPER",
             Tab::About => "ABOUT",
@@ -354,6 +357,15 @@ pub fn settings_ui(
             Tab::Radar => radar_tab(ui, sh, p, st),
             Tab::Alerts => alerts_tab(ui, &mut sh.config, p, st),
             Tab::Radio => radio_tab(ui, &mut sh.config, p),
+            Tab::Ai => {
+                section(ui, p, "AI ASSISTANT");
+                ss_ai::settings_ui::ai_settings_form(
+                    ui,
+                    &mut sh.config.ai,
+                    c32a(p.text2),
+                    c32(p.danger),
+                );
+            }
             Tab::Themes => themes_tab(ui, sh, p, st),
             Tab::Developer => developer_tab(ui, sh, p, st, emit),
             Tab::About => about_tab(ui, sh, p),

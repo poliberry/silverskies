@@ -330,6 +330,22 @@ pub fn font_definitions() -> FontDefinitions {
     fonts
 }
 
+/// The assistant chat window's look: the web design's tokens.
+pub fn chat_theme(p: &Palette) -> ss_ai::chat::ChatTheme {
+    ss_ai::chat::ChatTheme {
+        bg: c32(p.bg),
+        surface: c32(p.surface),
+        border: c32a(p.border),
+        text: c32(p.text),
+        muted: c32a(p.text2),
+        accent: accent2(p),
+        user_bubble: glow(p),
+        danger: c32(p.danger),
+        corner: 0,
+        caption: mono_medium_font(10.5),
+    }
+}
+
 const LOGOMARK_DARK: &[u8] = include_bytes!("../assets/brand/logomark-dark.png");
 const LOGOMARK_LIGHT: &[u8] = include_bytes!("../assets/brand/logomark-light.png");
 

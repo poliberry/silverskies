@@ -49,10 +49,7 @@ pub struct Worker {
 
 impl Worker {
     pub fn new(rt: Handle, net: Net, tx: Sender<Event>, ctx: egui::Context) -> Worker {
-        let ai_client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(90))
-            .build()
-            .unwrap_or_default();
+        let ai_client = ss_ai::http_client();
         Worker {
             rt,
             net,
@@ -128,10 +125,12 @@ impl Worker {
         });
     }
 
-    pub fn ai(&self, seq: u64, key: String, model: String, task: AiTask, digest: String) {
+    /// A one-shot AI summary or answer through the configured provider.
+    pub fn ai(&self, seq: u64, endpoint: ss_core::ai::AiEndpoint, task: AiTask, digest: String) {
         let client = self.ai_client.clone();
         self.spawn(move |_, _| async move {
-            let result = ai::run(&client, &key, &model, &task, &digest).await;
+            let messages = ai::task_messages(&task, &digest);
+            let result = ss_ai::complete(&client, &endpoint, ai::SYSTEM, &messages).await;
             Event::Ai { seq, result }
         });
     }

@@ -57,6 +57,10 @@ pub struct App {
     pub(crate) audio: AudioState,
     /// Logo click counter for the asteroid easter egg.
     logo_clicks: (u8, Instant),
+    /// The AI assistant chat window.
+    pub(crate) chat: ss_ai::chat::Chat,
+    ai_http: reqwest::Client,
+    rt: tokio::runtime::Handle,
     /// The Alt-revealed menu bar.
     menu: ss_assets::menubar::AltMenuBar,
     /// Native window title last sent.
@@ -90,7 +94,12 @@ impl App {
             .user_agent(concat!("silverskies/", env!("CARGO_PKG_VERSION")))
             .timeout(Duration::from_secs(20))
             .build()?;
-        let factory = PanelFactory::new(client, rt, Some(store.dir().join("tiles")), ctx.clone());
+        let factory = PanelFactory::new(
+            client,
+            rt.clone(),
+            Some(store.dir().join("tiles")),
+            ctx.clone(),
+        );
         let mut panels = panels::build_panels(&factory);
         let windows = windows::restore_windows(&session.windows, &locations.saved_locations);
         let mut windows = windows;
@@ -136,6 +145,9 @@ impl App {
             req: PanelRequests::default(),
             audio,
             logo_clicks: (0, Instant::now()),
+            chat: Default::default(),
+            ai_http: ss_ai::http_client(),
+            rt: rt.clone(),
             menu: Default::default(),
             last_title: String::new(),
             last_system_dark: None,
@@ -717,6 +729,93 @@ impl App {
     }
 }
 
+impl App {
+    /// The AI assistant chat window (Ctrl+J, `:assistant`, AI menu).
+    fn show_assistant(&mut self, ctx: &egui::Context) {
+        let ctrl_j = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::J);
+        if ctx.input_mut(|i| i.consume_shortcut(&ctrl_j)) {
+            self.chat.show_window();
+        }
+        if !self.chat.open && !self.chat.is_busy() {
+            return;
+        }
+        let (theme, settings, label, system) = {
+            let sh = self.shared.read();
+            let p = sh.palette;
+            let theme = ss_ai::chat::ChatTheme {
+                bg: theme::c32(p.bg),
+                surface: theme::c32(p.surface3),
+                border: theme::c32a(p.border),
+                text: theme::c32(p.text),
+                muted: theme::c32a(p.text2),
+                accent: theme::c32(p.a0),
+                user_bubble: egui::Color32::from_rgba_unmultiplied(
+                    theme::PRO_BLUE[0],
+                    theme::PRO_BLUE[1],
+                    theme::PRO_BLUE[2],
+                    90,
+                ),
+                danger: theme::c32(p.danger),
+                corner: 0,
+                caption: egui::FontId::monospace(10.5),
+            };
+            let label = sh
+                .active_location()
+                .map(|l| l.label.clone())
+                .unwrap_or_else(|| "your saved places".into());
+            let system =
+                ss_ai::digest::assistant_system_prompt("Silver Skies Pro", &assistant_context(&sh));
+            (theme, sh.config.ai.clone(), label, system)
+        };
+        let (rt, client) = (self.rt.clone(), self.ai_http.clone());
+        let action = self.chat.show(
+            ctx,
+            "Silver Skies Pro",
+            &theme,
+            &settings,
+            &label,
+            move || system,
+            &rt,
+            &client,
+        );
+        if action == ss_ai::chat::ChatAction::OpenSettings {
+            commands::execute(
+                self,
+                WindowTarget::Main,
+                Command::Open(ss_core::WindowRole::Settings),
+            );
+        }
+    }
+}
+
+/// Forecast digests for the assistant: the active place first, then the
+/// other saved places that have a forecast loaded.
+fn assistant_context(sh: &Shared) -> String {
+    let active = sh.locations.active_location_id.clone();
+    let mut locs: Vec<&ss_core::SavedLocation> = sh.locations.saved_locations.iter().collect();
+    locs.sort_by_key(|l| Some(&l.id) != active.as_ref());
+    let digests: Vec<String> = locs
+        .iter()
+        .filter_map(|l| {
+            let w = sh.weather_for(&l.id)?;
+            let alerts = sh.alerts.get(&l.id).map(Vec::as_slice).unwrap_or(&[]);
+            Some(ss_ai::digest::forecast_digest(
+                w,
+                &l.label,
+                alerts,
+                sh.config.units,
+                sh.config.time_format,
+                ss_ai::digest::local_now(w),
+            ))
+        })
+        .collect();
+    if digests.is_empty() {
+        "No forecast is loaded yet.\n".to_string()
+    } else {
+        digests.join("\n")
+    }
+}
+
 /// The asteroid hit: wipe every demo alert and start the flash.
 fn apply_impact(sh: &mut Shared, now: Instant) {
     sh.demo_alerts.clear();
@@ -943,6 +1042,7 @@ impl eframe::App for App {
         for (target, c) in emit {
             commands::execute(self, target, c);
         }
+        self.show_assistant(&ctx);
         self.paint_flash(&ctx);
         self.windows.route_radar_requests(&mut self.req);
         self.sync_session(&ctx);

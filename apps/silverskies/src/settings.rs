@@ -94,52 +94,18 @@ pub fn window(ctx: &Context, app: &mut App) {
                 });
 
             ui.separator();
-            ui.label(RichText::new("✦ AI summaries & answers").size(16.0).strong());
-            ui.label(
-                RichText::new(
-                    "Optional. Writes forecast summaries and answers questions you type in the \
-                     search bar, using Claude with your own Anthropic API key. Your forecast for \
-                     the selected place is sent with each request; nothing else is.",
-                )
-                .size(12.5)
-                .color(c32a(p.text2)),
-            );
+            ui.label(RichText::new("✦ AI").size(16.0).strong());
+            config_changed |=
+                ss_ai::settings_ui::ai_settings_form(ui, &mut app.config.ai, c32a(p.text2), c32(p.danger));
             prefs_changed |= ui
-                .checkbox(&mut app.prefs.ai_enabled, "Turn on AI")
-                .changed();
-            ui.add_enabled_ui(app.prefs.ai_enabled, |ui| {
-                egui::Grid::new("ai_grid")
-                    .num_columns(2)
-                    .spacing([18.0, 10.0])
-                    .show(ui, |ui| {
-                        ui.label(RichText::new("API key").color(c32a(p.text2)));
-                        let key = app.prefs.anthropic_api_key.get_or_insert_with(String::new);
-                        prefs_changed |= ui
-                            .add(
-                                egui::TextEdit::singleline(key)
-                                    .password(true)
-                                    .hint_text("sk-ant-…")
-                                    .desired_width(260.0),
-                            )
-                            .changed();
-                        ui.end_row();
-
-                        ui.label(RichText::new("Model").color(c32a(p.text2)));
-                        prefs_changed |= ui
-                            .add(egui::TextEdit::singleline(&mut app.prefs.ai_model).desired_width(260.0))
-                            .changed();
-                        ui.end_row();
-                    });
-                prefs_changed |= ui
-                    .checkbox(
+                .add_enabled(
+                    app.config.ai.enabled,
+                    egui::Checkbox::new(
                         &mut app.prefs.ai_auto_summary,
                         "Write an AI summary automatically when a forecast loads",
-                    )
-                    .changed();
-            });
-            if app.prefs.ai_enabled && app.prefs.ai_key().is_none() {
-                ui.label(RichText::new("Add an API key to use AI.").color(c32(p.danger)));
-            }
+                    ),
+                )
+                .changed();
             ui.separator();
             egui::CollapsingHeader::new("Developer")
                 .default_open(false)

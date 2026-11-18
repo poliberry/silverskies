@@ -1226,6 +1226,16 @@ fn ai_block(ui: &mut Ui, p: &Palette, state: &AiState) {
                     ui.set_width(ui.available_width());
                     ui.label(caps("✦ AI", 10.0, accent2(p)));
                     ui.add(egui::Label::new(RichText::new(t).color(c32(p.text))).wrap());
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(
+                                "AI can make mistakes. Check official forecasts and warnings.",
+                            )
+                            .size(11.5)
+                            .color(c32a(p.text3)),
+                        )
+                        .wrap(),
+                    );
                 });
         }
         AiState::Failed(e) => {
@@ -1290,7 +1300,7 @@ fn summary_tile(
             let id = app.active_id().unwrap_or_default();
             let state = app.ai_summary.get(&id);
             let busy = matches!(state, Some(AiState::Loading(_) | AiState::Waiting));
-            let (label, action) = if app.prefs.ai_key().is_some() {
+            let (label, action) = if app.ai_ready() {
                 (
                     if matches!(state, Some(AiState::Done(_))) {
                         "✦ Redo"

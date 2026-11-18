@@ -13,6 +13,7 @@ const REFRESH: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::F5
 const REFRESH_R: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::R);
 const FIND: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::F);
 const SETTINGS: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Comma);
+const ASSISTANT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::J);
 const QUIT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Q);
 const TAB_FORECAST: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Num1);
 const TAB_RADAR: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Num2);
@@ -32,6 +33,9 @@ pub fn shortcuts(ctx: &Context, app: &mut App, actions: &mut Vec<Action>) {
     }
     if hit(&QUIT) {
         app.quit();
+    }
+    if hit(&ASSISTANT) {
+        actions.push(Action::OpenAssistant);
     }
     for (s, tab) in [
         (&TAB_FORECAST, Tab::Forecast),
@@ -138,6 +142,11 @@ pub fn bar(ui: &mut Ui, app: &mut App, actions: &mut Vec<Action>) {
                             ui.close();
                             chose = true;
                         }
+                    }
+                    ui.separator();
+                    if item(ui, "Assistant…", Some(&ASSISTANT)) {
+                        actions.push(Action::OpenAssistant);
+                        chose = true;
                     }
                     ui.separator();
                     let mut changed = false;

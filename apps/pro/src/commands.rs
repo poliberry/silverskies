@@ -891,6 +891,7 @@ fn run(app: &mut App, sh: &mut Shared, target: &WindowTarget, cmd: Command, fx: 
             sh.log(LogLevel::Info, "  clear          Clear the terminal");
         }
         Command::Quit => app.ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+        Command::Assistant => app.chat.show_window(),
         Command::Zoom(_)
         | Command::Radar(RadarCmd::Recenter | RadarCmd::Live)
         | Command::Play

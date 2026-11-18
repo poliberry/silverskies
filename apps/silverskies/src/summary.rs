@@ -332,51 +332,6 @@ pub fn answer(
     }
 }
 
-/// Compact plain-text rendering of the forecast for the AI prompt.
-pub fn forecast_digest(
-    w: &Weather,
-    place: &str,
-    units: UnitPref,
-    tf: TimeFormat,
-    now: NaiveDateTime,
-) -> String {
-    let c = &w.current;
-    let mut s = format!(
-        "Place: {place}\nLocal time: {}\nNow: {}, {} (feels {}), humidity {:.0}%, wind {}, UV {:.0}\n",
-        now.format("%A %H:%M"),
-        wmo_label(c.weather_code),
-        fmt_temp(c.temperature_c, units),
-        fmt_temp(c.apparent_temperature_c, units),
-        c.relative_humidity_pct,
-        fmt_wind(c.wind_speed_kmh, units),
-        c.uv_index,
-    );
-    s.push_str("Next 12 hours:\n");
-    let i = current_hour_index(&w.hourly, now);
-    for h in w.hourly.iter().skip(i).take(12) {
-        s.push_str(&format!(
-            "  {}: {}, {}, {:.0}% precip\n",
-            fmt_time(&h.time, tf),
-            wmo_label(h.weather_code),
-            fmt_temp(h.temperature_c, units),
-            h.precipitation_probability_pct
-        ));
-    }
-    s.push_str("Daily:\n");
-    for (i, d) in w.daily.iter().enumerate().take(7) {
-        s.push_str(&format!(
-            "  {}: {}, high {}, low {}, {:.0}% precip, UV {:.0}\n",
-            day_name(&w.daily, i),
-            wmo_label(d.weather_code),
-            fmt_temp(d.temp_max_c, units),
-            fmt_temp(d.temp_min_c, units),
-            d.precipitation_probability_max_pct,
-            d.uv_index_max
-        ));
-    }
-    s
-}
-
 #[cfg(test)]
 pub mod fixtures {
     use ss_core::{CurrentConditions, DailyPoint, HourlyPoint, Weather, WeatherProviderId};
@@ -504,14 +459,5 @@ mod tests {
             now(),
         );
         assert!(a.starts_with("Yes, it's a hot one."), "{a}");
-    }
-
-    #[test]
-    fn digest_lists_days() {
-        let w = weather();
-        let d = forecast_digest(&w, "Testville", UnitPref::F, TimeFormat::H12, now());
-        assert!(d.contains("Place: Testville"));
-        assert!(d.contains("Thursday:"));
-        assert_eq!(d.lines().filter(|l| l.starts_with("  ")).count(), 12 + 7);
     }
 }

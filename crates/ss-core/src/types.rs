@@ -493,6 +493,8 @@ pub struct Config {
     pub radar: RadarSettings,
     /// Keep the menu bar visible instead of revealing it with Alt.
     pub menu_bar_always: bool,
+    /// AI provider for summaries and the assistant chat (off by default).
+    pub ai: crate::ai::AiSettings,
 }
 
 impl Default for Config {
@@ -526,6 +528,7 @@ impl Default for Config {
             storm_polygons_enabled: true,
             radar: RadarSettings::default(),
             menu_bar_always: false,
+            ai: crate::ai::AiSettings::default(),
         }
     }
 }

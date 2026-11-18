@@ -121,6 +121,15 @@ pub fn alt_menu(ui: &mut Ui, sh: &mut Shared, cmds: &mut Vec<Command>) -> bool {
                     chose |= menu_item(ui, "Stop", "radio stop", cmds);
                     chose |= menu_item(ui, "Mute All Audio", "mute", cmds);
                 });
+                ui.menu_button("AI", |ui| {
+                    let b = egui::Button::new("Assistant…").shortcut_text("Ctrl+J");
+                    if ui.add(b).clicked() {
+                        push(cmds, "assistant");
+                        ui.close();
+                        chose = true;
+                    }
+                    chose |= menu_item(ui, "AI Settings…", "open settings", cmds);
+                });
                 ui.menu_button("Help", |ui| {
                     chose |= menu_item(ui, "Commands", "help", cmds);
                 });

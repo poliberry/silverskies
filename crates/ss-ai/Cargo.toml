@@ -1,0 +1,19 @@
+[package]
+name = "ss-ai"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Silver Skies AI: Claude (Anthropic Messages API) and any OpenAI-compatible provider, a forecast digest for prompts, and the assistant chat window."
+
+[dependencies]
+ss-core.workspace = true
+egui.workspace = true
+reqwest.workspace = true
+tokio.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+chrono-tz.workspace = true
+crossbeam-channel.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }

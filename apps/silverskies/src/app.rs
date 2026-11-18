@@ -74,6 +74,7 @@ pub enum Action {
     FocusDay(Option<usize>),
     Tab(Tab),
     OpenSettings,
+    OpenAssistant,
 }
 
 pub struct App {
@@ -105,6 +106,10 @@ pub struct App {
     ai_targets: HashMap<u64, Option<String>>,
     radar: Radar,
     pub settings_open: bool,
+    /// The assistant chat window.
+    pub chat: ss_ai::chat::Chat,
+    ai_http: reqwest::Client,
+    rt: tokio::runtime::Handle,
     pub palette: Palette,
     last_system_dark: Option<bool>,
     last_refresh: Option<Instant>,
@@ -129,16 +134,27 @@ impl App {
     ) -> anyhow::Result<App> {
         let ctx = cc.egui_ctx.clone();
         theme::install_fonts(&ctx);
-        let config = store.load_config();
+        let mut config = store.load_config();
         let locations = store.load_locations();
-        let prefs = Prefs::load(&store);
+        let mut prefs = Prefs::load(&store);
+        if prefs.migrate_into(&mut config.ai) {
+            if let Err(e) = store.save_config(&config) {
+                tracing::warn!("saving migrated AI settings: {e}");
+            }
+            prefs.save(&store);
+        }
         let net = Net::new(&config.libre_wxr_host)?;
         let (tx, rx) = crossbeam_channel::unbounded();
         let worker = Worker::new(rt.clone(), net, tx, ctx.clone());
         let http = reqwest::Client::builder()
             .user_agent(ss_net::USER_AGENT)
             .build()?;
-        let tiles = TileCache::new(http, rt, Some(store.dir().join("tiles")), ctx.clone());
+        let tiles = TileCache::new(
+            http,
+            rt.clone(),
+            Some(store.dir().join("tiles")),
+            ctx.clone(),
+        );
         let palette = theme::simple_palette(&config, [0x8a, 0x64, 0xff], true);
         theme::apply_palette(&ctx, &palette);
 
@@ -167,6 +183,9 @@ impl App {
             ai_targets: HashMap::new(),
             radar: Radar::new(tiles),
             settings_open: false,
+            chat: Default::default(),
+            ai_http: ss_ai::http_client(),
+            rt: rt.clone(),
             palette,
             last_system_dark: None,
             last_refresh: None,
@@ -406,47 +425,53 @@ impl App {
     fn digest_for(&self, id: &str) -> Option<String> {
         let w = self.weather.get(id)?;
         let l = self.locations.saved_locations.iter().find(|l| l.id == id)?;
-        let mut d = summary::forecast_digest(
+        let alerts = self.alerts.get(id).map(Vec::as_slice).unwrap_or(&[]);
+        Some(ss_ai::digest::forecast_digest(
             w,
             &l.label,
+            alerts,
             self.config.units,
             self.config.time_format,
             Self::now_for(w),
+        ))
+    }
+
+    /// AI is on and fully configured.
+    pub fn ai_ready(&self) -> bool {
+        self.config.ai.endpoint().is_some()
+    }
+
+    /// Context for the assistant: the active place first, then the others.
+    fn assistant_context(&self) -> String {
+        let mut ids: Vec<String> = self.active_id().into_iter().collect();
+        ids.extend(
+            self.locations
+                .saved_locations
+                .iter()
+                .map(|l| l.id.clone())
+                .filter(|id| Some(id) != self.locations.active_location_id.as_ref()),
         );
-        let alerts = self.alerts.get(id).map(Vec::as_slice).unwrap_or(&[]);
-        if alerts.is_empty() {
-            d.push_str("Active alerts: none\n");
+        let digests: Vec<String> = ids.iter().filter_map(|id| self.digest_for(id)).collect();
+        if digests.is_empty() {
+            "No forecast is loaded yet.\n".to_string()
         } else {
-            d.push_str("Active alerts:\n");
-            for a in alerts.iter().take(5) {
-                d.push_str(&format!(
-                    "  {} ({}){}\n",
-                    a.display_event,
-                    a.severity.label(),
-                    a.headline
-                        .as_deref()
-                        .map(|h| format!(": {h}"))
-                        .unwrap_or_default()
-                ));
-            }
+            digests.join("\n")
         }
-        Some(d)
     }
 
     fn start_ai(&mut self, task: AiTask, target: Option<String>, loc_id: &str) -> Option<u64> {
-        let key = self.prefs.ai_key()?.to_string();
+        let endpoint = self.config.ai.endpoint()?;
         let digest = self.digest_for(loc_id)?;
         self.ai_seq += 1;
         let seq = self.ai_seq;
         self.ai_targets.insert(seq, target);
-        self.worker
-            .ai(seq, key, self.prefs.model().to_string(), task, digest);
+        self.worker.ai(seq, endpoint, task, digest);
         Some(seq)
     }
 
     pub fn request_ai_summary(&mut self) {
         let Some(id) = self.active_id() else { return };
-        if self.prefs.ai_key().is_none() {
+        if !self.ai_ready() {
             self.settings_open = true;
             return;
         }
@@ -459,7 +484,7 @@ impl App {
 
     fn ask_ai_for_answer(&mut self) {
         let Some(a) = self.answer.clone() else { return };
-        if self.prefs.ai_key().is_none() || !matches!(a.ai, AiState::Waiting) {
+        if !self.ai_ready() || !matches!(a.ai, AiState::Waiting) {
             return;
         }
         if let Some(seq) = self.start_ai(AiTask::Ask(a.question.clone()), None, &a.location_id) {
@@ -531,7 +556,7 @@ impl App {
                 location_id: id,
                 topic,
                 day: parsed.day,
-                ai: if self.prefs.ai_key().is_some() {
+                ai: if self.ai_ready() {
                     AiState::Waiting
                 } else {
                     AiState::Idle
@@ -554,6 +579,7 @@ impl App {
             },
             Intent::Refresh => self.refresh_all(),
             Intent::Settings => self.settings_open = true,
+            Intent::Assistant => self.chat.show_window(),
             Intent::UseMyLocation => {
                 self.locating = true;
                 self.worker.ip_locate();
@@ -568,7 +594,7 @@ impl App {
             Intent::Summarize => {
                 self.tab = Tab::Forecast;
                 self.scroll_to = Some(search::View::Forecast);
-                if self.prefs.ai_key().is_some() {
+                if self.ai_ready() {
                     self.request_ai_summary();
                 }
             }
@@ -596,6 +622,10 @@ impl App {
                 self.settings_open = true;
                 self.search.blur();
             }
+            Action::OpenAssistant => {
+                self.chat.show_window();
+                self.search.blur();
+            }
         }
     }
 
@@ -620,7 +650,7 @@ impl App {
                                 self.locations.active_location_id.as_deref() == Some(&location_id);
                             if is_active
                                 && self.prefs.ai_auto_summary
-                                && self.prefs.ai_key().is_some()
+                                && self.ai_ready()
                                 && !matches!(
                                     self.ai_summary.get(&location_id),
                                     Some(AiState::Loading(_))
@@ -788,10 +818,7 @@ impl App {
             let right_w = 300.0;
             let search_w = (ui.available_width() - right_w - 8.0).clamp(240.0, 980.0);
             let places = &self.locations.saved_locations;
-            if let Some(a) =
-                self.search
-                    .show(ui, &p, search_w, places, self.prefs.ai_key().is_some())
-            {
+            if let Some(a) = self.search.show(ui, &p, search_w, places, self.ai_ready()) {
                 actions.push(a);
             }
             if let Some(q) = self.search.wants_geocode() {
@@ -1096,6 +1123,30 @@ impl eframe::App for App {
         }
         if self.about_open {
             crate::menu::about(ui.ctx(), self);
+        }
+        if self.chat.open || self.chat.is_busy() {
+            let theme = crate::theme::chat_theme(&p);
+            let label = self
+                .active()
+                .map(|l| l.label.clone())
+                .unwrap_or_else(|| "your places".into());
+            let system =
+                ss_ai::digest::assistant_system_prompt("Silver Skies", &self.assistant_context());
+            let settings = self.config.ai.clone();
+            let (rt, client) = (self.rt.clone(), self.ai_http.clone());
+            if self.chat.show(
+                ui.ctx(),
+                "Silver Skies",
+                &theme,
+                &settings,
+                &label,
+                move || system,
+                &rt,
+                &client,
+            ) == ss_ai::chat::ChatAction::OpenSettings
+            {
+                self.settings_open = true;
+            }
         }
 
         for a in actions {

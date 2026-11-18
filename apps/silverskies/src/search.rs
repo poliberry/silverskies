@@ -124,6 +124,8 @@ pub enum Intent {
     View(View),
     Refresh,
     Settings,
+    /// Open the AI assistant chat.
+    Assistant,
     UseMyLocation,
     Units(Units),
     /// Write (or ask the AI for) a summary of the active forecast.
@@ -186,6 +188,11 @@ pub fn keywords() -> Vec<Keyword> {
             title: "Summarize the forecast",
             aliases: &["summary", "summarise", "tl;dr", "overview", "ai"],
             intent: I::Summarize,
+        },
+        Keyword {
+            title: "Ask the assistant",
+            aliases: &["chat", "assistant", "ask", "chatbot"],
+            intent: I::Assistant,
         },
         Keyword {
             title: "Refresh",

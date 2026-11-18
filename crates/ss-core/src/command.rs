@@ -98,6 +98,8 @@ pub enum Command {
     Close,
     Help(Option<String>),
     Quit,
+    /// Open the AI assistant chat window.
+    Assistant,
     Demo {
         group: Option<String>,
     },
@@ -258,6 +260,12 @@ static COMMANDS: &[CmdInfo] = &[
         "Open the settings window",
     ),
     ci("close", &[], "close", "Close the current window"),
+    ci(
+        "assistant",
+        &["chat", "ai"],
+        "assistant",
+        "Open the AI weather assistant chat",
+    ),
     ci("help", &["h", "?"], "help [command]", "Show help"),
     ci("quit", &["q", "exit"], "quit", "Quit Silver Skies"),
     ci("demo", &[], "demo [group|event]", "Fire demo alerts"),
@@ -517,6 +525,7 @@ pub fn parse(line: &str) -> Result<Command, ParseError> {
         }
         "settings" => Ok(Command::Open(WindowRole::Settings)),
         "close" => Ok(Command::Close),
+        "assistant" => Ok(Command::Assistant),
         "help" => Ok(Command::Help(rest_joined(args))),
         "quit" => Ok(Command::Quit),
         "demo" => Ok(Command::Demo {

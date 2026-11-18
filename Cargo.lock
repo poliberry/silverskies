@@ -3744,6 +3744,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "ss-ai",
  "ss-assets",
  "ss-core",
  "ss-map",
@@ -3773,6 +3774,7 @@ dependencies = [
  "resvg",
  "serde",
  "serde_json",
+ "ss-ai",
  "ss-assets",
  "ss-audio",
  "ss-core",
@@ -3918,6 +3920,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c3e8acdf2b1f4bb13f1813b40b52f3edf4cc94d8a55fe713a584f672a10388d"
 dependencies = [
  "bindgen",
+]
+
+[[package]]
+name = "ss-ai"
+version = "2.0.0"
+dependencies = [
+ "chrono",
+ "chrono-tz",
+ "crossbeam-channel",
+ "egui",
+ "reqwest",
+ "serde_json",
+ "ss-core",
+ "tokio",
 ]
 
 [[package]]

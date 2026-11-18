@@ -1,32 +1,27 @@
 //! Settings that only the simple app has, kept in `simple.json` next to the
-//! shared `config.json` / `locations.json`.
+//! shared `config.json` / `locations.json`. AI provider settings live in the
+//! shared config (`Config::ai`); older `simple.json` files that held a Claude
+//! key are migrated into it once.
 
 use serde::{Deserialize, Serialize};
+use ss_core::ai::{AiProvider, AiSettings};
 use ss_store::Store;
 
 pub const PREFS_FILE: &str = "simple.json";
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Prefs {
-    /// AI summaries and answers. Off by default; needs an API key.
-    pub ai_enabled: bool,
-    pub anthropic_api_key: Option<String>,
-    pub ai_model: String,
     /// Ask the AI for a summary automatically whenever a forecast loads
     /// (otherwise only on request).
     pub ai_auto_summary: bool,
-}
-
-impl Default for Prefs {
-    fn default() -> Self {
-        Prefs {
-            ai_enabled: false,
-            anthropic_api_key: None,
-            ai_model: crate::ai::DEFAULT_MODEL.to_string(),
-            ai_auto_summary: false,
-        }
-    }
+    // --- legacy (pre-multi-provider) fields, read once for migration ---
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ai_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub anthropic_api_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ai_model: Option<String>,
 }
 
 impl Prefs {
@@ -40,24 +35,28 @@ impl Prefs {
         }
     }
 
-    /// The key, when AI is on and one is set.
-    pub fn ai_key(&self) -> Option<&str> {
-        if !self.ai_enabled {
-            return None;
+    /// Move legacy Claude settings into `ai` when it hasn't been set up yet.
+    /// Returns true when anything changed (both files should be saved).
+    pub fn migrate_into(&mut self, ai: &mut AiSettings) -> bool {
+        let had_legacy = self.ai_enabled.is_some()
+            || self.anthropic_api_key.is_some()
+            || self.ai_model.is_some();
+        if !had_legacy {
+            return false;
         }
-        self.anthropic_api_key
-            .as_deref()
-            .map(str::trim)
-            .filter(|k| !k.is_empty())
-    }
-
-    pub fn model(&self) -> &str {
-        let m = self.ai_model.trim();
-        if m.is_empty() {
-            crate::ai::DEFAULT_MODEL
-        } else {
-            m
+        if *ai == AiSettings::default() {
+            *ai = AiSettings {
+                enabled: self.ai_enabled.unwrap_or(false),
+                provider: AiProvider::Anthropic,
+                base_url: String::new(),
+                api_key: self.anthropic_api_key.clone(),
+                model: self.ai_model.clone().unwrap_or_default(),
+            };
         }
+        self.ai_enabled = None;
+        self.anthropic_api_key = None;
+        self.ai_model = None;
+        true
     }
 }
 
@@ -66,23 +65,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ai_key_requires_enabled_and_nonempty() {
-        let mut p = Prefs::default();
-        assert_eq!(p.ai_key(), None);
-        p.anthropic_api_key = Some("  sk-test  ".into());
-        assert_eq!(p.ai_key(), None);
-        p.ai_enabled = true;
-        assert_eq!(p.ai_key(), Some("sk-test"));
-        p.anthropic_api_key = Some("   ".into());
-        assert_eq!(p.ai_key(), None);
+    fn legacy_claude_settings_migrate_once() {
+        let mut p: Prefs = serde_json::from_str(
+            r#"{"aiEnabled":true,"anthropicApiKey":"sk-x","aiModel":"claude-opus-5-5","aiAutoSummary":true}"#,
+        )
+        .unwrap();
+        let mut ai = AiSettings::default();
+        assert!(p.migrate_into(&mut ai));
+        assert!(ai.enabled && ai.provider == AiProvider::Anthropic);
+        assert_eq!(ai.key().as_deref(), Some("sk-x"));
+        assert!(p.ai_auto_summary);
+        assert!(!p.migrate_into(&mut ai), "nothing left to migrate");
+        let saved = serde_json::to_string(&p).unwrap();
+        assert!(!saved.contains("anthropicApiKey"));
     }
 
     #[test]
-    fn roundtrips_and_tolerates_missing_fields() {
-        let p: Prefs = serde_json::from_str(r#"{"aiEnabled":true}"#).unwrap();
-        assert!(p.ai_enabled);
-        assert_eq!(p.model(), crate::ai::DEFAULT_MODEL);
-        let s = serde_json::to_string(&p).unwrap();
-        assert_eq!(serde_json::from_str::<Prefs>(&s).unwrap(), p);
+    fn migration_never_overwrites_configured_ai() {
+        let mut p = Prefs {
+            anthropic_api_key: Some("old".into()),
+            ..Default::default()
+        };
+        let mut ai = AiSettings {
+            enabled: true,
+            provider: AiProvider::Ollama,
+            model: "llama3.2".into(),
+            ..Default::default()
+        };
+        let before = ai.clone();
+        assert!(p.migrate_into(&mut ai));
+        assert_eq!(ai, before);
     }
 }
