@@ -8,6 +8,7 @@ mod ai;
 mod app;
 mod m3;
 mod menu;
+mod motion;
 mod prefs;
 mod radar;
 mod search;

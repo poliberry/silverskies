@@ -117,6 +117,9 @@ pub struct App {
     pub notice: Option<(String, Instant)>,
     /// Locally generated alerts from Settings → Developer (never persisted).
     pub demo_alerts: Vec<Alert>,
+    /// A refresh to run once settings editing pauses (e.g. an AccuWeather
+    /// key being typed or pasted), so partial keys aren't sent.
+    refresh_due: Option<Instant>,
     /// The menu bar, revealed with Alt.
     pub menu: ss_assets::menubar::AltMenuBar,
     pub about_open: bool,
@@ -192,6 +195,7 @@ impl App {
             locating: false,
             notice: None,
             demo_alerts: Vec::new(),
+            refresh_due: None,
             menu: Default::default(),
             about_open: false,
             last_title: String::new(),
@@ -307,7 +311,13 @@ impl App {
             return;
         };
         self.loading.insert(l.id.clone());
-        self.worker.forecast(l.id.clone(), l.lat, l.lon);
+        self.worker.forecast(
+            l.id.clone(),
+            l.lat,
+            l.lon,
+            self.config.provider,
+            self.config.accu_weather_api_key.clone(),
+        );
         self.worker.alerts(l.id.clone(), l.lat, l.lon);
     }
 
@@ -326,7 +336,28 @@ impl App {
         self.last_refresh = Some(Instant::now());
     }
 
+    /// React to a settings edit: a new weather source refreshes at once, a
+    /// new AccuWeather key once editing pauses.
+    pub fn after_config_change(&mut self, before: &ss_core::Config) {
+        if self.config.provider != before.provider {
+            self.refresh_due = None;
+            self.refresh_all();
+        } else if self.config.accu_weather_api_key != before.accu_weather_api_key
+            && self.config.provider == ss_core::WeatherProviderId::AccuWeather
+        {
+            self.refresh_due = Some(Instant::now() + Duration::from_millis(1500));
+        }
+    }
+
     fn tick_timers(&mut self) {
+        match self.refresh_due {
+            Some(t) if Instant::now() >= t => {
+                self.refresh_due = None;
+                self.refresh_all();
+            }
+            Some(_) => self.ctx.request_repaint_after(Duration::from_millis(300)),
+            None => {}
+        }
         // 0 = auto-refresh off (radar frames still update).
         let every = match self.config.auto_refresh_minutes {
             0 => Duration::from_secs(u64::MAX / 4),
@@ -673,7 +704,18 @@ impl App {
                         }
                         Err(e) => {
                             tracing::warn!("forecast for {location_id}: {e}");
-                            self.errors.insert(location_id, friendly_error(&e));
+                            let msg = friendly_error(&e);
+                            // With a forecast already on screen the error would
+                            // otherwise go unseen (e.g. a rejected AccuWeather key).
+                            let is_active =
+                                self.locations.active_location_id.as_deref() == Some(&location_id);
+                            if is_active && self.weather.contains_key(&location_id) {
+                                self.notice = Some((
+                                    format!("Couldn't update the forecast. {msg}"),
+                                    Instant::now(),
+                                ));
+                            }
+                            self.errors.insert(location_id, msg);
                         }
                     }
                 }
@@ -941,6 +983,7 @@ impl eframe::App for App {
         self.drain_events();
         self.tick_timers();
         self.update_palette();
+        crate::motion::set_reduced(self.prefs.reduce_motion);
         let p = self.palette;
         let mut actions: Vec<Action> = Vec::new();
 
@@ -1010,6 +1053,39 @@ impl eframe::App for App {
             }))
             .show(ui, |ui| {
                 self.title_row(ui, &mut actions);
+                // Material "shared axis" transition between tabs (and places):
+                // the new view slides in from the side it lies on and fades up.
+                let order = |t: Tab| match t {
+                    Tab::Forecast => 0,
+                    Tab::Radar => 1,
+                    Tab::Alerts => 2,
+                };
+                let dir_id = egui::Id::unique("tab_axis");
+                let (prev, mut dir) = ui
+                    .ctx()
+                    .data(|d| d.get_temp::<(i32, f32)>(dir_id))
+                    .unwrap_or((order(self.tab), 0.0));
+                if prev != order(self.tab) {
+                    dir = if order(self.tab) > prev { 1.0 } else { -1.0 };
+                    ui.ctx()
+                        .data_mut(|d| d.insert_temp(dir_id, (order(self.tab), dir)));
+                } else {
+                    ui.ctx().data_mut(|d| d.insert_temp(dir_id, (prev, dir)));
+                }
+                let key = crate::motion::key((order(self.tab), self.active_id()));
+                let (s, o) =
+                    crate::motion::enter(ui.ctx(), egui::Id::unique("tab_enter"), key, 0.0);
+                let area = ui
+                    .available_rect_before_wrap()
+                    .translate(egui::vec2((1.0 - s) * 40.0 * dir, 0.0));
+                let mut content = ui.new_child(
+                    egui::UiBuilder::new()
+                        .id_salt("tab_content")
+                        .max_rect(area)
+                        .layout(Layout::top_down(Align::Min)),
+                );
+                content.set_opacity(o);
+                let ui = &mut content;
                 match self.tab {
                     Tab::Forecast => crate::views::forecast(ui, self, &mut actions),
                     Tab::Alerts => crate::views::alerts(ui, self, &mut actions),

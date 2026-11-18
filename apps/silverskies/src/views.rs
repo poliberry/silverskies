@@ -17,6 +17,7 @@ use ss_core::{Alert, Severity, TimeFormat, UnitPref, Weather};
 
 use crate::app::{Action, AiState, App, Tab};
 use crate::m3::{self, corner, Scheme};
+use crate::motion;
 use crate::search::{self, Intent};
 use crate::summary;
 use crate::theme::{
@@ -64,13 +65,14 @@ fn ink_on(bg: Color32) -> Color32 {
 
 /// A Material state layer: `base` washed with `content` at hover/press.
 fn state(base: Color32, content: Color32, resp: &egui::Response) -> Color32 {
-    if resp.is_pointer_button_down_on() {
-        base.lerp_to_gamma(content, 0.14)
-    } else if resp.hovered() {
-        base.lerp_to_gamma(content, 0.08)
-    } else {
-        base
-    }
+    // State layers fade in and out rather than snapping.
+    let hover = motion::fade(&resp.ctx, resp.id.with("hover_layer"), resp.hovered());
+    let press = motion::fade(
+        &resp.ctx,
+        resp.id.with("press_layer"),
+        resp.is_pointer_button_down_on(),
+    );
+    base.lerp_to_gamma(content, 0.08 * hover + 0.06 * press)
 }
 
 /// Draw `add` inside a rounded tonal tile filling `rect`.
@@ -329,30 +331,35 @@ fn connected_group_at(
     for (i, ((text, on, badge), w)) in items.iter().zip(widths).enumerate() {
         let r = Rect::from_min_size(pos2(x, area.top()), vec2(*w, height));
         x += w + gap;
-        let resp = ui.interact(r, ui.scope_id().with(("group", i, text)), Sense::click());
-        let (l, rr) = if *on {
-            (full, full)
-        } else {
-            (
-                if i == 0 { full } else { inner },
-                if i + 1 == n { full } else { inner },
-            )
+        let resp = ui.interact(r, ui.scope_id().with(("group", i)), Sense::click());
+        // Selection morphs: inner corners round out to a full pill with a
+        // spring, and the fill crossfades to primary.
+        let t = motion::toggle(ui.ctx(), resp.id.with("selected"), *on, 0.4);
+        let tc = t.clamp(0.0, 1.0);
+        let morph = |rest: u8| -> u8 {
+            (rest as f32 + (full as f32 - rest as f32) * t).clamp(0.0, 255.0) as u8
         };
+        let l = morph(if i == 0 { full } else { inner });
+        let rr = morph(if i + 1 == n { full } else { inner });
         let cr = egui::CornerRadius {
             nw: l,
             sw: l,
             ne: rr,
             se: rr,
         };
-        let (base, ink) = if *on {
-            (s.primary, s.on_primary)
-        } else {
-            (s.surface_container_highest, s.on_surface_variant)
-        };
+        let base = s.surface_container_highest.lerp_to_gamma(s.primary, tc);
+        let ink = s.on_surface_variant.lerp_to_gamma(s.on_primary, tc);
+        // A press squeezes the button slightly (expressive feedback).
+        let press = motion::fade(
+            ui.ctx(),
+            resp.id.with("squeeze"),
+            resp.is_pointer_button_down_on(),
+        );
+        let r = r.shrink2(vec2(2.0 * press, 1.5 * press));
         ui.painter().rect_filled(r, cr, state(base, ink, &resp));
-        let label_c = match (on, badge) {
-            (false, Some(c)) => *c,
-            _ => ink,
+        let label_c = match badge {
+            Some(c) => c.lerp_to_gamma(s.on_primary, tc),
+            None => ink,
         };
         ui.painter().text(
             r.center(),
@@ -409,16 +416,16 @@ pub fn places(ui: &mut Ui, app: &App, actions: &mut Vec<Action>) {
                 let (rect, resp) =
                     ui.allocate_exact_size(vec2(ui.available_width(), 60.0), Sense::click());
                 let hovered = resp.hovered();
-                let base = if active {
-                    s.secondary_container
-                } else {
-                    s.surface
-                };
-                let ink = if active {
-                    s.on_secondary_container
-                } else {
-                    s.on_surface
-                };
+                // The selection indicator crossfades between places.
+                let sel = motion::toggle(
+                    ui.ctx(),
+                    egui::Id::unique(("place_sel", &l.id)),
+                    active,
+                    0.3,
+                )
+                .clamp(0.0, 1.0);
+                let base = s.surface.lerp_to_gamma(s.secondary_container, sel);
+                let ink = s.on_surface.lerp_to_gamma(s.on_secondary_container, sel);
                 ui.painter()
                     .rect_filled(rect, corner::FULL, state(base, ink, &resp));
                 let painter = ui.painter_at(rect);
@@ -705,6 +712,10 @@ pub fn forecast(ui: &mut Ui, app: &mut App, actions: &mut Vec<Action>) {
     let wide = full_w >= 860.0;
     let mut hero_rect = Rect::NOTHING;
     let mut answered = false;
+    // Tiles enter one after another (Material's staggered entrance) when a
+    // place's forecast first shows.
+    let entrance = motion::key(&loc.id);
+    let mut tile_i = 0usize;
 
     let out = ScrollArea::vertical()
         .auto_shrink([false, false])
@@ -761,7 +772,24 @@ pub fn forecast(ui: &mut Ui, app: &mut App, actions: &mut Vec<Action>) {
                         if target.is_some() && target == scroll_to && !answered {
                             ui.scroll_to_rect(cr, Some(Align::TOP));
                         }
-                        draw_cell(ui, app, &p, &loc.label, &w, &alerts, now, c, cr, actions);
+                        let (sp, op) = motion::enter(
+                            ui.ctx(),
+                            egui::Id::unique(("tile_enter", tile_i)),
+                            entrance,
+                            tile_i as f32 * 0.045,
+                        );
+                        tile_i += 1;
+                        let shown = cr.translate(vec2(0.0, (1.0 - sp) * 28.0));
+                        let mut tile = ui.new_child(
+                            UiBuilder::new()
+                                .id_salt(("tile", tile_i))
+                                .max_rect(shown)
+                                .layout(Layout::top_down(Align::Min)),
+                        );
+                        tile.set_opacity(op);
+                        draw_cell(
+                            &mut tile, app, &p, &loc.label, &w, &alerts, now, c, shown, actions,
+                        );
                     }
                 }
             }
@@ -785,7 +813,14 @@ pub fn forecast(ui: &mut Ui, app: &mut App, actions: &mut Vec<Action>) {
 
     // Condensed bar once the hero has scrolled out of view.
     let top = out.inner_rect.top();
-    if hero_rect.is_finite() && hero_rect.bottom() < top + 8.0 {
+    let show_bar = hero_rect.is_finite() && hero_rect.bottom() < top + 8.0;
+    let slide = motion::toggle(
+        ui.ctx(),
+        egui::Id::unique("condensed_bar_in"),
+        show_bar,
+        0.35,
+    );
+    if slide > 0.01 {
         condensed_bar(
             ui,
             &p,
@@ -795,6 +830,7 @@ pub fn forecast(ui: &mut Ui, app: &mut App, actions: &mut Vec<Action>) {
             out.inner_rect.left(),
             top,
             full_w,
+            slide,
         );
     }
 }
@@ -979,21 +1015,40 @@ fn hero(
     let size = (rect.height() * 0.66).clamp(96.0, 176.0);
     let c = pos2(rect.right() - size / 2.0 - 6.0, rect.center().y + 4.0);
     let painter = ui.painter_at(rect.expand(22.0));
+    // Expressive shape motion: the shapes pop in with a spring when the place
+    // changes, and turn a little (in opposite directions) while hovered.
+    let ctx = ui.ctx().clone();
+    let (pop, _) = motion::enter(
+        &ctx,
+        egui::Id::unique("hero_shapes"),
+        motion::key(place),
+        0.12,
+    );
+    let hovered = ui.rect_contains_pointer(rect);
+    let turn = motion::toggle(&ctx, egui::Id::unique("hero_turn"), hovered, 0.6);
+    let grow = 0.55 + 0.45 * pop;
     m3::sunny(
         &painter,
         c + vec2(-size * 0.28, -size * 0.22),
-        size * 0.36,
-        0.3,
+        size * 0.36 * grow,
+        0.3 - 0.5 * turn,
         m3::with_alpha(s.tertiary, if s.dark { 150 } else { 120 }),
     );
-    m3::cookie(&painter, c, size * 0.58, 9, 0.0, s.surface_container_low);
+    m3::cookie(
+        &painter,
+        c,
+        size * 0.58 * grow,
+        9,
+        0.35 * turn,
+        s.surface_container_low,
+    );
     icon(
         ui,
         &painter,
         cur.weather_code,
         cur.is_day,
         p,
-        Rect::from_center_size(c, vec2(size * 0.82, size * 0.82)),
+        Rect::from_center_size(c, vec2(size * 0.82, size * 0.82) * (0.8 + 0.2 * pop)),
     );
 
     let text_w = (rect.width() - size - 24.0).max(120.0);
@@ -1021,8 +1076,15 @@ fn hero(
             );
             ui.horizontal_top(|ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
+                // The temperature glides to a new value (another place, a
+                // refresh, a unit switch) instead of jumping.
+                let shown = motion::value(
+                    ui.ctx(),
+                    egui::Id::unique("hero_temp"),
+                    cur.temperature_c as f32,
+                );
                 ui.label(
-                    RichText::new(num(cur.temperature_c, units))
+                    RichText::new(num(f64::from(shown), units))
                         .font(display_font(104.0))
                         .color(ink),
                 );
@@ -1354,6 +1416,14 @@ fn week(
                 ink.gamma_multiply(0.14),
             );
             let (x0, x1) = (x(d.temp_min_c), x(d.temp_max_c).max(x(d.temp_min_c) + 1.0));
+            // Range bars grow out from the low end, one row after another.
+            let (grow, _) = motion::enter(
+                ui.ctx(),
+                egui::Id::unique(("week_bar", i)),
+                motion::key((&w.daily[0].date, &d.date)),
+                0.2 + i as f32 * 0.04,
+            );
+            let x1 = x0 + (x1 - x0) * grow.max(0.0);
             let t0 = ((d.temp_min_c - lo) / (hi - lo)) as f32;
             let t1 = ((d.temp_max_c - lo) / (hi - lo)) as f32;
             gradient_pill(&painter, x0, x1, y, 6.0, temp_color(t0), temp_color(t1));
@@ -1469,7 +1539,14 @@ fn sun(ui: &mut Ui, s: &Scheme, w: &Weather, tf: TimeFormat, now: chrono::NaiveD
             .map(|i| pt(t0 + (t1 - t0) * f64::from(i) / 90.0))
             .collect()
     };
-    match summary_sun(d, now) {
+    // The sun travels along the arc to its position when the tile appears.
+    let (travel, _) = motion::enter(
+        ui.ctx(),
+        egui::Id::unique("sun_travel"),
+        motion::key(&d.sunrise),
+        0.3,
+    );
+    match summary_sun(d, now).map(|t| (t * f64::from(travel)).clamp(0.0, 1.0)) {
         Some(t) => {
             // Material's wavy progress for the part of the day gone by,
             // then a flat track for the rest.
@@ -1555,13 +1632,19 @@ fn condensed_bar(
     left: f32,
     top: f32,
     width: f32,
+    slide: f32,
 ) {
     let s = scheme(p);
-    let bar = Rect::from_min_size(pos2(left + 8.0, top + 8.0), vec2(width - 16.0, 60.0));
-    let painter = ui.ctx().layer_painter(egui::LayerId::new(
-        egui::Order::Middle,
-        egui::Id::unique("condensed_bar"),
-    ));
+    // Slides down from under the title row as the hero scrolls away.
+    let y = top + 8.0 - (1.0 - slide) * 76.0;
+    let bar = Rect::from_min_size(pos2(left + 8.0, y), vec2(width - 16.0, 60.0));
+    let painter = ui
+        .ctx()
+        .layer_painter(egui::LayerId::new(
+            egui::Order::Middle,
+            egui::Id::unique("condensed_bar"),
+        ))
+        .with_clip_rect(Rect::from_min_size(pos2(left, top), vec2(width, 90.0)));
     painter.rect_filled(
         bar.translate(vec2(0.0, 3.0)).expand(1.0),
         corner::FULL,

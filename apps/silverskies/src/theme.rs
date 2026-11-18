@@ -212,6 +212,18 @@ pub fn visuals_for(p: &Palette) -> Visuals {
     w.open.bg_stroke = none;
     w.open.fg_stroke = Stroke::new(1.5, s.on_secondary_container);
 
+    // `bg_fill` (unlike `weak_bg_fill`, which buttons use) draws checkbox
+    // boxes and slider tracks: give it real contrast against dialogs so an
+    // unticked checkbox is visible.
+    let well = if s.dark {
+        s.surface_container_lowest
+    } else {
+        s.outline_variant
+    };
+    w.inactive.bg_fill = well;
+    w.hovered.bg_fill = well.lerp_to_gamma(s.on_surface, 0.12);
+    w.active.bg_fill = well.lerp_to_gamma(s.on_surface, 0.2);
+
     for st in [
         &mut w.noninteractive,
         &mut w.inactive,

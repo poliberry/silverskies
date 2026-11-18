@@ -9,6 +9,7 @@
 //! raw `risk_colour_en` value) and `display_event` equals `event`. The app
 //! layer runs the classifier.
 
+pub mod accuweather;
 pub mod eccc;
 pub mod librewxr;
 pub mod ncep;
@@ -40,6 +41,9 @@ pub enum NetError {
     Parse(String),
     #[error("missing field: {0}")]
     Missing(&'static str),
+    /// A service-specific, already readable message (e.g. a rejected key).
+    #[error("{0}")]
+    Service(String),
 }
 
 pub type Result<T> = std::result::Result<T, NetError>;
@@ -78,11 +82,26 @@ fn describe_http(e: &reqwest::Error) -> String {
     }
 }
 
+/// AccuWeather caches shared by every clone of a [`Net`]: location keys by
+/// coordinates, and recent forecasts (to stay within key quotas).
+#[derive(Default)]
+pub struct AccuCache {
+    pub(crate) locations: std::sync::Mutex<std::collections::HashMap<String, (String, String)>>,
+    /// Keys that only work the legacy `?apikey=` way, so later requests
+    /// skip the Bearer attempt (which would cost a request each).
+    pub(crate) legacy_keys: std::sync::Mutex<std::collections::HashSet<String>>,
+    #[allow(clippy::type_complexity)]
+    pub(crate) forecasts: std::sync::Mutex<
+        std::collections::HashMap<String, (std::time::Instant, ss_core::types::Weather)>,
+    >,
+}
+
 /// Shared HTTP client plus the configured LibreWXR host.
 #[derive(Clone)]
 pub struct Net {
     client: reqwest::Client,
     pub libre_wxr_host: String,
+    accu: std::sync::Arc<AccuCache>,
 }
 
 impl Net {
@@ -94,6 +113,7 @@ impl Net {
         Ok(Net {
             client,
             libre_wxr_host: libre_wxr_host.trim_end_matches('/').to_string(),
+            accu: Default::default(),
         })
     }
 
@@ -129,6 +149,24 @@ impl Net {
 
     pub async fn get_bytes(&self, url: &str, accept: Option<&str>) -> Result<Vec<u8>> {
         Ok(self.send(url, accept).await?.bytes().await?.to_vec())
+    }
+
+    /// The forecast from the configured provider: AccuWeather when it is
+    /// selected and has a key, Open-Meteo otherwise.
+    pub async fn weather(
+        &self,
+        provider: ss_core::types::WeatherProviderId,
+        accu_key: Option<&str>,
+        lat: f64,
+        lon: f64,
+    ) -> Result<ss_core::types::Weather> {
+        let key = accu_key.map(str::trim).filter(|k| !k.is_empty());
+        match (provider, key) {
+            (ss_core::types::WeatherProviderId::AccuWeather, Some(k)) => {
+                self.accuweather_forecast(lat, lon, k).await
+            }
+            _ => self.forecast(lat, lon).await,
+        }
     }
 }
 

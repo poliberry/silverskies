@@ -267,6 +267,16 @@ pub fn apply_config_change(sh: &mut Shared, before: &Config, emit: &mut Vec<Comm
             });
         }
     }
+    // A new weather source applies at once; a new AccuWeather key once
+    // editing pauses, so a key being typed or pasted isn't sent part-way.
+    if sh.config.provider != before.provider {
+        sh.refresh_due = None;
+        emit.push(Command::Refresh);
+    } else if sh.config.accu_weather_api_key != before.accu_weather_api_key
+        && sh.config.provider == WeatherProviderId::AccuWeather
+    {
+        sh.refresh_due = Some(std::time::Instant::now() + std::time::Duration::from_millis(1500));
+    }
     if sh.config.libre_wxr_host != before.libre_wxr_host {
         emit.push(Command::Set {
             key: "librewxrhost".to_string(),
@@ -457,7 +467,17 @@ fn general_tab(ui: &mut Ui, cfg: &mut Config, p: &Palette, st: &mut SettingsStat
         label(ui, p, "api key");
         secret_field(ui, &mut cfg.accu_weather_api_key, &mut st.show_accu);
         if cfg.accu_weather_api_key.is_none() {
-            note(ui, p, "AccuWeather needs an API key to return data");
+            note(
+                ui,
+                p,
+                "AccuWeather needs an API key (developer.accuweather.com); until one is set, forecasts come from Open-Meteo",
+            );
+        } else {
+            note(
+                ui,
+                p,
+                "free keys allow 50 requests a day: each place uses 3 per refresh, so forecasts are reused for an hour",
+            );
         }
     }
     section(ui, p, "BEHAVIOUR");

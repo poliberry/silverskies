@@ -167,6 +167,9 @@ pub struct Shared {
     /// Keyed by saved-location id.
     pub weather: HashMap<String, Weather>,
     pub weather_errors: HashMap<String, String>,
+    /// A weather refresh to run once the user stops editing (e.g. typing or
+    /// pasting an AccuWeather key), so partial keys aren't sent.
+    pub refresh_due: Option<std::time::Instant>,
     pub alerts: HashMap<String, Vec<Alert>>,
     /// Alerts for the radar bbox selection / audit log (slice 5 fills more).
     pub area_alerts: Vec<Alert>,
@@ -221,6 +224,7 @@ impl Shared {
             locations,
             weather: HashMap::new(),
             weather_errors: HashMap::new(),
+            refresh_due: None,
             alerts: HashMap::new(),
             area_alerts: Vec::new(),
             viewport_alerts: Vec::new(),

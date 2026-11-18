@@ -72,9 +72,21 @@ impl Worker {
         });
     }
 
-    pub fn forecast(&self, location_id: String, lat: f64, lon: f64) {
+    /// The forecast from the configured provider (AccuWeather with a key,
+    /// Open-Meteo otherwise).
+    pub fn forecast(
+        &self,
+        location_id: String,
+        lat: f64,
+        lon: f64,
+        provider: ss_core::WeatherProviderId,
+        accu_key: Option<String>,
+    ) {
         self.spawn(move |net, _| async move {
-            let result = net.forecast(lat, lon).await.map_err(|e| e.to_string());
+            let result = net
+                .weather(provider, accu_key.as_deref(), lat, lon)
+                .await
+                .map_err(|e| e.to_string());
             Event::Weather {
                 location_id,
                 result,

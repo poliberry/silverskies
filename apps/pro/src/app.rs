@@ -873,6 +873,14 @@ impl eframe::App for App {
             let mut sh = shared.write();
             let location = sh.active_location().cloned();
             let mut main_cmds: Vec<Command> = Vec::new();
+            match sh.refresh_due {
+                Some(t) if std::time::Instant::now() >= t => {
+                    sh.refresh_due = None;
+                    main_cmds.push(Command::Refresh);
+                }
+                Some(_) => ctx.request_repaint_after(std::time::Duration::from_millis(300)),
+                None => {}
+            }
             let h = ctx.content_rect().height();
             let t = ctx.input(|i| i.time);
             let dark = sh.palette.bg.iter().map(|&v| v as u32).sum::<u32>() < 384;

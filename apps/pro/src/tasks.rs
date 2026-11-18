@@ -84,8 +84,12 @@ impl Tasks {
             self.ctx.clone(),
             loc.id.clone(),
         );
+        let (provider, accu_key) = (cfg.provider, cfg.accu_weather_api_key.clone());
         self.rt.spawn(async move {
-            let result = net.forecast(lat, lon).await.map_err(|e| e.to_string());
+            let result = net
+                .weather(provider, accu_key.as_deref(), lat, lon)
+                .await
+                .map_err(|e| e.to_string());
             Self::post(
                 &tx,
                 &ctx,
