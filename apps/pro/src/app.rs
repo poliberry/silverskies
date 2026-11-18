@@ -30,6 +30,8 @@ use crate::theme;
 use crate::windows::{self, WindowManager};
 
 const STATIC_REFRESH: Duration = Duration::from_secs(30 * 60);
+/// Places within this distance of a NEXRAD radar use its storm cells.
+const NEXRAD_RANGE_KM: f64 = 250.0;
 /// Minimum gap between session writes while windows are being dragged.
 const SESSION_SAVE_EVERY: Duration = Duration::from_millis(400);
 
@@ -48,6 +50,9 @@ pub struct App {
     last_spc: Instant,
     /// Storm cells / reports: fetched at start, then every couple of minutes.
     last_storms: Option<Instant>,
+    last_tropical: Option<Instant>,
+    /// Last mosaic-cell run: when, for which location.
+    last_mosaic: Option<(Instant, String)>,
     last_auto: Instant,
     last_session_save: Instant,
     /// Builds panel instances for child windows (holds client, runtime, tile dir).
@@ -141,6 +146,8 @@ impl App {
             last_maps: Instant::now(),
             last_spc: Instant::now(),
             last_storms: None,
+            last_tropical: None,
+            last_mosaic: None,
             last_auto: Instant::now(),
             last_session_save: Instant::now(),
             factory,
@@ -169,6 +176,39 @@ impl App {
             }
         }
         Ok(app)
+    }
+
+    /// Radar-mosaic storm cells for the active place when no NEXRAD radar
+    /// covers it (NEXRAD's own cells are richer where they exist): on a new
+    /// place, then every five minutes.
+    fn maybe_mosaic_cells(&mut self) {
+        let shared = self.shared.clone();
+        let sh = shared.read();
+        let Some(loc) = sh.active_location().cloned() else {
+            return;
+        };
+        let Some(maps) = sh.weather_maps.as_ref() else {
+            return;
+        };
+        if sh.radar_stations.is_empty() {
+            return; // wait to know where NEXRAD covers
+        }
+        let nexrad_near = sh
+            .radar_stations
+            .iter()
+            .any(|s| ss_core::geo::haversine_km(loc.lat, loc.lon, s.lat, s.lon) <= NEXRAD_RANGE_KM);
+        if nexrad_near {
+            return;
+        }
+        let due = match &self.last_mosaic {
+            Some((t, id)) => id != &loc.id || t.elapsed() >= Duration::from_secs(5 * 60),
+            None => true,
+        };
+        if due {
+            self.last_mosaic = Some((Instant::now(), loc.id.clone()));
+            self.tasks
+                .mosaic_cells(&loc, maps.host.clone(), maps.radar_past.clone());
+        }
     }
 
     pub fn refresh_all(&mut self) {
@@ -355,6 +395,29 @@ impl App {
                     sh.log(LogLevel::Warn, format!("storm cells: {e}"));
                     sh.storms_error = Some(e);
                 }
+            },
+            AppEvent::Tropical(r) => match r {
+                Ok(v) => {
+                    sh.log(LogLevel::Info, format!("tropical cyclones: {}", v.len()));
+                    sh.tropical = v;
+                    sh.bump_alerts();
+                }
+                Err(e) => sh.log(LogLevel::Warn, format!("tropical cyclones: {e}")),
+            },
+            AppEvent::MosaicCells {
+                location_id,
+                result,
+            } => match result {
+                Ok(v) => {
+                    sh.log(
+                        LogLevel::Info,
+                        format!("radar-mosaic storm cells: {}", v.len()),
+                    );
+                    sh.mosaic_cells = v;
+                    sh.mosaic_for = Some(location_id);
+                    sh.bump_alerts();
+                }
+                Err(e) => sh.log(LogLevel::Warn, format!("radar-mosaic cells: {e}")),
             },
             AppEvent::StormReports(r) => match r {
                 Ok(v) => {
@@ -601,6 +664,14 @@ impl App {
             self.last_storms = Some(Instant::now());
             self.tasks.storms();
         }
+        if self
+            .last_tropical
+            .is_none_or(|t| t.elapsed() >= Duration::from_secs(15 * 60))
+        {
+            self.last_tropical = Some(Instant::now());
+            self.tasks.tropical();
+        }
+        self.maybe_mosaic_cells();
         if self.last_spc.elapsed() >= Duration::from_secs(600) {
             self.last_spc = Instant::now();
             self.fetch_spc_if_enabled();
@@ -798,20 +869,21 @@ impl App {
             let p = sh.palette;
             let theme = ss_ai::chat::ChatTheme {
                 bg: theme::c32(p.bg),
-                surface: theme::c32(p.surface3),
+                surface: crate::kit::raised(&p),
                 border: theme::c32a(p.border),
                 text: theme::c32(p.text),
-                muted: theme::c32a(p.text2),
+                muted: crate::kit::muted(&p),
                 accent: theme::c32(p.a0),
-                user_bubble: egui::Color32::from_rgba_unmultiplied(
-                    theme::PRO_BLUE[0],
-                    theme::PRO_BLUE[1],
-                    theme::PRO_BLUE[2],
-                    90,
-                ),
+                user_bubble: theme::c32(theme::PRO_BLUE),
                 danger: theme::c32(p.danger),
-                corner: 0,
-                caption: egui::FontId::monospace(10.5),
+                user_text: egui::Color32::WHITE,
+                on_accent: theme::on(p.a0),
+                ok: theme::c32(p.safe),
+                corner: 6,
+                caption: theme::saira(12.0, "regular"),
+                body: theme::saira(14.0, "regular"),
+                strong: theme::saira(14.0, "semibold"),
+                title: theme::saira(20.0, "medium"),
             };
             let label = sh
                 .active_location()

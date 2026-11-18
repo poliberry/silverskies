@@ -97,7 +97,7 @@ fn default_size(role: WindowRole, panel: Option<PanelKind>) -> [f32; 2] {
         (WindowRole::Conditions, _) => [360.0, 480.0],
         (WindowRole::AuditLog, _) | (WindowRole::Main, Some(PanelKind::AuditLog)) => [700.0, 420.0],
         (WindowRole::Alert, _) => [520.0, 480.0],
-        (WindowRole::Settings, _) => [560.0, 560.0],
+        (WindowRole::Settings, _) => [860.0, 640.0],
         (WindowRole::WeatherRadio, _) => [420.0, 300.0],
         _ => [480.0, 420.0],
     }
@@ -364,14 +364,17 @@ impl ChildWindow {
 
             let mut sh = shared.write();
             let h = ctx.content_rect().height();
-            egui::Panel::bottom("cmdbar")
-                .exact_size(self.cmdbar.panel_height(h))
-                .resizable(false)
-                .show(ui, |ui| {
-                    if let Some(c) = self.cmdbar.show(ui, &mut sh, location.as_ref()) {
-                        emit.push((target.clone(), c));
-                    }
-                });
+            // Settings is a dialog: no command line under it.
+            if self.role != WindowRole::Settings {
+                egui::Panel::bottom("cmdbar")
+                    .exact_size(self.cmdbar.panel_height(h))
+                    .resizable(false)
+                    .show(ui, |ui| {
+                        if let Some(c) = self.cmdbar.show(ui, &mut sh, location.as_ref()) {
+                            emit.push((target.clone(), c));
+                        }
+                    });
+            }
             let frame = egui::Frame::NONE.fill(c32(sh.palette.bg));
             egui::CentralPanel::default().frame(frame).show(ui, |ui| {
                 self.draw(ui, &mut sh, tasks, main_req, location.clone(), emit);
@@ -402,9 +405,7 @@ impl ChildWindow {
             }
             WindowRole::Settings => {
                 let mut cmds: Vec<Command> = Vec::new();
-                panel_frame(ui, &p, "SETTINGS", |ui| {
-                    settings_ui(ui, sh, &p, &mut self.settings, &mut cmds);
-                });
+                settings_ui(ui, sh, &p, &mut self.settings, &mut cmds);
                 emit.extend(cmds.into_iter().map(|c| (target.clone(), c)));
             }
             role => {

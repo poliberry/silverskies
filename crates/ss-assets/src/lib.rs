@@ -38,6 +38,11 @@ pub mod fonts {
     /// Flex, rounded, regular weight: body text.
     pub const GOOGLE_SANS_FLEX_ROUND_REGULAR: &[u8] =
         include_bytes!("../assets/fonts/google-sans/GoogleSansFlex-RoundRegular.ttf");
+    /// Saira (OFL), the face of the Pro wordmark; digits are tabular.
+    pub const SAIRA_LIGHT: &[u8] = include_bytes!("../assets/fonts/saira/Saira-Light.ttf");
+    pub const SAIRA_REGULAR: &[u8] = include_bytes!("../assets/fonts/saira/Saira-Regular.ttf");
+    pub const SAIRA_MEDIUM: &[u8] = include_bytes!("../assets/fonts/saira/Saira-Medium.ttf");
+    pub const SAIRA_SEMIBOLD: &[u8] = include_bytes!("../assets/fonts/saira/Saira-SemiBold.ttf");
     pub const GOOGLE_SANS_CODE: &[u8] =
         include_bytes!("../assets/fonts/google-sans/GoogleSansCode-Regular.ttf");
     pub const GOOGLE_SANS_CODE_MEDIUM: &[u8] =

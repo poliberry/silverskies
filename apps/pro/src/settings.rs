@@ -6,6 +6,7 @@
 use std::collections::BTreeMap;
 
 use egui::{RichText, Ui};
+use ss_core::ai::{AiProvider, AiSettings, AI_DISCLAIMER};
 use ss_core::alerts::colors::{class_color, effective_color, effective_visible, ALL_CLASSES};
 use ss_core::alerts::demo::DEMO_GROUPS;
 use ss_core::command::Command;
@@ -15,8 +16,9 @@ use ss_core::{
     ThemePref, TimeFormat, TtsSeverityFilter, UnitPref, WeatherProviderId,
 };
 
+use crate::kit::{self, divider, Rows};
 use crate::state::Shared;
-use crate::theme::{c32, c32a};
+use crate::theme::{c32, c32a, saira};
 use crate::windows::config_text;
 
 const REPO_URL: &str = "https://github.com/poliberry/silverskies-desktop";
@@ -53,15 +55,42 @@ impl Tab {
 
     fn label(self) -> &'static str {
         match self {
-            Tab::General => "GENERAL",
-            Tab::Sources => "SOURCES",
-            Tab::Radar => "RADAR",
-            Tab::Alerts => "ALERTS",
-            Tab::Radio => "RADIO",
-            Tab::Ai => "AI",
-            Tab::Themes => "THEMES",
-            Tab::Developer => "DEVELOPER",
-            Tab::About => "ABOUT",
+            Tab::General => "General",
+            Tab::Sources => "Data sources",
+            Tab::Radar => "Radar",
+            Tab::Alerts => "Alerts",
+            Tab::Radio => "Radio & speech",
+            Tab::Ai => "AI assistant",
+            Tab::Themes => "Themes",
+            Tab::Developer => "Developer",
+            Tab::About => "About",
+        }
+    }
+
+    /// Page title and description.
+    fn header(self) -> (&'static str, &'static str) {
+        match self {
+            Tab::General => ("General", "Forecast source, units and how Pro behaves."),
+            Tab::Sources => (
+                "Data sources",
+                "API keys and servers for optional data feeds.",
+            ),
+            Tab::Radar => ("Radar", "The radar loop and the layers drawn over it."),
+            Tab::Alerts => (
+                "Alerts",
+                "Colour and visibility for each type of weather alert.",
+            ),
+            Tab::Radio => (
+                "Radio & speech",
+                "Weather radio and spoken alert announcements.",
+            ),
+            Tab::Ai => (
+                "AI assistant",
+                "Optional AI forecast summaries and chat, with your own provider.",
+            ),
+            Tab::Themes => ("Themes", "Colour themes, including your own."),
+            Tab::Developer => ("Developer", "Tools for testing Silver Skies Pro."),
+            Tab::About => ("About", "Version, files and key commands."),
         }
     }
 }
@@ -83,6 +112,7 @@ pub struct SettingsState {
     show_accu: bool,
     show_willy: bool,
     show_owm: bool,
+    show_ai_key: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -289,54 +319,54 @@ pub fn apply_config_change(sh: &mut Shared, before: &Config, emit: &mut Vec<Comm
 // UI
 // ---------------------------------------------------------------------------
 
-fn mono(text: impl Into<String>, color: egui::Color32) -> RichText {
-    RichText::new(text.into()).monospace().color(color)
+/// Width reserved for a combo box / short control in a row.
+const CTRL_W: f32 = 210.0;
+/// Width reserved for a text field or key in a row.
+const FIELD_W: f32 = 300.0;
+/// Width reserved for a switch.
+const SWITCH_W: f32 = 48.0;
+
+fn toggle_row(
+    ui: &mut Ui,
+    p: &Palette,
+    rows: &mut Rows,
+    label: &str,
+    help: Option<&str>,
+    v: &mut bool,
+) -> bool {
+    rows.next(ui, p);
+    kit::row(ui, p, label, help, SWITCH_W, |ui| {
+        kit::toggle(ui, p, v).changed()
+    })
 }
 
-fn section(ui: &mut Ui, p: &Palette, title: &str) {
-    ui.add_space(8.0);
-    ui.label(mono(format!("-- {title} --"), c32(p.a0)));
-    ui.add_space(2.0);
+#[allow(clippy::too_many_arguments)]
+fn combo_row<T: Copy + PartialEq>(
+    ui: &mut Ui,
+    p: &Palette,
+    rows: &mut Rows,
+    label: &str,
+    help: Option<&str>,
+    id: &str,
+    cur: &mut T,
+    opts: &[(T, &str)],
+) {
+    rows.next(ui, p);
+    kit::row(ui, p, label, help, CTRL_W, |ui| {
+        kit::combo(ui, p, id, cur, opts, CTRL_W - 4.0);
+    });
 }
 
 fn note(ui: &mut Ui, p: &Palette, text: &str) {
-    ui.add(egui::Label::new(mono(text, c32a(p.text3))).wrap());
+    ui.add_space(4.0);
+    kit::callout(ui, p, c32a(p.text3), text);
+    ui.add_space(14.0);
 }
 
-fn label(ui: &mut Ui, p: &Palette, text: &str) {
-    ui.label(mono(text, c32a(p.text2)));
-}
-
-fn enum_combo<T: Copy + PartialEq>(ui: &mut Ui, id: &str, cur: &mut T, opts: &[(T, &str)]) {
-    let text = opts
-        .iter()
-        .find(|(v, _)| v == cur)
-        .map(|(_, l)| *l)
-        .unwrap_or("?");
-    egui::ComboBox::from_id_salt(id)
-        .selected_text(text)
-        .show_ui(ui, |ui| {
-            for (v, l) in opts {
-                ui.selectable_value(cur, *v, *l);
-            }
-        });
-}
-
-fn secret_field(ui: &mut Ui, val: &mut Option<String>, reveal: &mut bool) {
-    let mut s = val.clone().unwrap_or_default();
-    ui.horizontal(|ui| {
-        ui.add(
-            egui::TextEdit::singleline(&mut s)
-                .password(!*reveal)
-                .font(egui::TextStyle::Monospace)
-                .desired_width(240.0),
-        );
-        ui.checkbox(reveal, "show");
-    });
-    let new = opt_string(&s);
-    if new != *val {
-        *val = new;
-    }
+fn warn(ui: &mut Ui, p: &Palette, text: &str) {
+    ui.add_space(4.0);
+    kit::callout(ui, p, c32(p.a0), text);
+    ui.add_space(14.0);
 }
 
 pub fn settings_ui(
@@ -347,183 +377,341 @@ pub fn settings_ui(
     emit: &mut Vec<Command>,
 ) {
     let before = sh.config.clone();
-    ui.horizontal_wrapped(|ui| {
-        for t in Tab::ALL {
-            let sel = st.tab == t;
-            let color = if sel { c32(p.a0) } else { c32a(p.text2) };
-            let text = mono(format!("[ {} ]", t.label()), color);
-            if ui.selectable_label(sel, text).clicked() {
-                st.tab = t;
-            }
-        }
+    let area = ui.max_rect();
+    let side_w = 196.0;
+    let side = egui::Rect::from_min_max(area.min, egui::pos2(area.left() + side_w, area.bottom()));
+    let content = egui::Rect::from_min_max(egui::pos2(side.right() + 1.0, area.top()), area.max);
+
+    // Sidebar.
+    ui.painter().rect_filled(side, 0.0, kit::raised(p));
+    ui.painter().vline(
+        side.right(),
+        side.y_range(),
+        egui::Stroke::new(1.0, c32a(p.border)),
+    );
+    let mut nav_ui = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(side.shrink2(egui::vec2(10.0, 14.0)))
+            .layout(egui::Layout::top_down(egui::Align::Min)),
+    );
+    nav_ui.horizontal(|ui| {
+        ui.add_space(6.0);
+        ui.label(
+            RichText::new("Settings")
+                .font(saira(19.0, "semibold"))
+                .color(c32(p.text)),
+        );
     });
-    ui.separator();
-    egui::ScrollArea::vertical()
-        .id_salt("settings_scroll")
-        .auto_shrink([false, false])
-        .show(ui, |ui| match st.tab {
-            Tab::General => general_tab(ui, &mut sh.config, p, st),
-            Tab::Sources => sources_tab(ui, &mut sh.config, p, st),
-            Tab::Radar => radar_tab(ui, sh, p, st),
-            Tab::Alerts => alerts_tab(ui, &mut sh.config, p, st),
-            Tab::Radio => radio_tab(ui, &mut sh.config, p),
-            Tab::Ai => {
-                section(ui, p, "AI ASSISTANT");
-                ss_ai::settings_ui::ai_settings_form(
-                    ui,
-                    &mut sh.config.ai,
-                    c32a(p.text2),
-                    c32(p.danger),
-                );
-            }
-            Tab::Themes => themes_tab(ui, sh, p, st),
-            Tab::Developer => developer_tab(ui, sh, p, st, emit),
-            Tab::About => about_tab(ui, sh, p),
+    nav_ui.add_space(12.0);
+    let labels: Vec<&str> = Tab::ALL.iter().map(|t| t.label()).collect();
+    let cur = Tab::ALL.iter().position(|t| *t == st.tab).unwrap_or(0);
+    if let Some(i) = kit::nav(&mut nav_ui, p, &labels, cur) {
+        st.tab = Tab::ALL[i];
+    }
+    nav_ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
+        ui.horizontal(|ui| {
+            ui.add_space(6.0);
+            ui.label(
+                RichText::new("Changes save automatically")
+                    .font(saira(11.5, "light"))
+                    .color(kit::muted(p)),
+            );
         });
+    });
+
+    // Page.
+    let mut page = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(content)
+            .layout(egui::Layout::top_down(egui::Align::Min)),
+    );
+    egui::ScrollArea::vertical()
+        .id_salt(("settings_scroll", st.tab as u8))
+        .auto_shrink([false, false])
+        .show(&mut page, |ui| {
+            egui::Frame::new()
+                .inner_margin(egui::Margin {
+                    left: 26,
+                    right: 26,
+                    top: 20,
+                    bottom: 12,
+                })
+                .show(ui, |ui| {
+                    ui.set_max_width(ui.available_width().min(720.0));
+                    ui.spacing_mut().item_spacing = egui::vec2(8.0, 4.0);
+                    ui.spacing_mut().slider_width = CTRL_W - 70.0;
+                    let (title, sub) = st.tab.header();
+                    kit::page_header(ui, p, title, sub);
+                    match st.tab {
+                        Tab::General => general_tab(ui, &mut sh.config, p, st),
+                        Tab::Sources => sources_tab(ui, &mut sh.config, p, st),
+                        Tab::Radar => radar_tab(ui, sh, p, st),
+                        Tab::Alerts => alerts_tab(ui, &mut sh.config, p, st),
+                        Tab::Radio => radio_tab(ui, &mut sh.config, p),
+                        Tab::Ai => ai_tab(ui, &mut sh.config.ai, p, st),
+                        Tab::Themes => themes_tab(ui, sh, p, st),
+                        Tab::Developer => developer_tab(ui, sh, p, st, emit),
+                        Tab::About => about_tab(ui, sh, p),
+                    }
+                });
+        });
+    ui.allocate_rect(area, egui::Sense::hover());
     apply_config_change(sh, &before, emit);
 }
 
 fn general_tab(ui: &mut Ui, cfg: &mut Config, p: &Palette, st: &mut SettingsState) {
-    egui::Grid::new("general_grid")
-        .num_columns(2)
-        .spacing([12.0, 6.0])
-        .show(ui, |ui| {
-            label(ui, p, "provider");
-            enum_combo(
-                ui,
-                "provider",
-                &mut cfg.provider,
-                &[
-                    (WeatherProviderId::OpenMeteo, "Open-Meteo"),
-                    (WeatherProviderId::AccuWeather, "AccuWeather"),
-                ],
-            );
-            ui.end_row();
-
-            label(ui, p, "units");
-            enum_combo(
-                ui,
-                "units",
-                &mut cfg.units,
-                &[(UnitPref::F, "Fahrenheit"), (UnitPref::C, "Celsius")],
-            );
-            ui.end_row();
-
-            label(ui, p, "time format");
-            enum_combo(
-                ui,
-                "time_format",
-                &mut cfg.time_format,
-                &[(TimeFormat::H12, "12-hour"), (TimeFormat::H24, "24-hour")],
-            );
-            ui.end_row();
-
-            label(ui, p, "appearance");
-            let applies = theme_pref_applies(cfg);
-            ui.add_enabled_ui(applies, |ui| {
-                enum_combo(
-                    ui,
-                    "theme_pref",
-                    &mut cfg.theme,
-                    &[
-                        (ThemePref::System, "System"),
-                        (ThemePref::Light, "Light"),
-                        (ThemePref::Dark, "Dark"),
-                    ],
-                );
-            });
-            ui.end_row();
-
-            label(ui, p, "auto refresh");
-            let cur = cfg.auto_refresh_minutes;
-            let text = if cur == 0 {
-                "Off".to_string()
-            } else {
-                format!("{cur} min")
-            };
-            egui::ComboBox::from_id_salt("auto_refresh")
-                .selected_text(text)
-                .show_ui(ui, |ui| {
-                    for m in REFRESH_CHOICES {
-                        let l = if m == 0 {
-                            "Off".to_string()
-                        } else {
-                            format!("{m} min")
-                        };
-                        ui.selectable_value(&mut cfg.auto_refresh_minutes, m, l);
-                    }
-                });
-            ui.end_row();
-        });
-    if !theme_pref_applies(cfg) {
-        note(
+    kit::card(ui, p, "Forecast", |ui| {
+        let mut rows = Rows::new();
+        combo_row(
             ui,
             p,
-            "appearance is ignored while a named theme is selected (see THEMES)",
+            &mut rows,
+            "Weather source",
+            Some("Where forecasts and current conditions come from"),
+            "provider",
+            &mut cfg.provider,
+            &[
+                (WeatherProviderId::OpenMeteo, "Open-Meteo"),
+                (WeatherProviderId::AccuWeather, "AccuWeather"),
+            ],
         );
-    }
-    if cfg.provider == WeatherProviderId::AccuWeather {
-        section(ui, p, "ACCUWEATHER");
-        label(ui, p, "api key");
-        secret_field(ui, &mut cfg.accu_weather_api_key, &mut st.show_accu);
-        if cfg.accu_weather_api_key.is_none() {
-            note(
+        if cfg.provider == WeatherProviderId::AccuWeather {
+            rows.next(ui, p);
+            kit::row(
                 ui,
                 p,
-                "AccuWeather needs an API key (developer.accuweather.com); until one is set, forecasts come from Open-Meteo",
+                "AccuWeather API key",
+                Some("From developer.accuweather.com"),
+                FIELD_W,
+                |ui| {
+                    kit::secret_field(
+                        ui,
+                        p,
+                        &mut cfg.accu_weather_api_key,
+                        &mut st.show_accu,
+                        "required",
+                        FIELD_W,
+                    )
+                },
+            );
+        }
+        combo_row(
+            ui,
+            p,
+            &mut rows,
+            "Units",
+            None,
+            "units",
+            &mut cfg.units,
+            &[
+                (UnitPref::F, "Fahrenheit (°F, mph)"),
+                (UnitPref::C, "Celsius (°C, km/h)"),
+            ],
+        );
+        combo_row(
+            ui,
+            p,
+            &mut rows,
+            "Time format",
+            None,
+            "time_format",
+            &mut cfg.time_format,
+            &[(TimeFormat::H12, "12-hour"), (TimeFormat::H24, "24-hour")],
+        );
+        let opts: Vec<(u32, String)> = REFRESH_CHOICES
+            .iter()
+            .map(|&m| {
+                let l = if m == 0 {
+                    "Off".to_string()
+                } else {
+                    format!("Every {m} min")
+                };
+                (m, l)
+            })
+            .collect();
+        let opts: Vec<(u32, &str)> = opts.iter().map(|(m, l)| (*m, l.as_str())).collect();
+        combo_row(
+            ui,
+            p,
+            &mut rows,
+            "Auto refresh",
+            Some("How often forecasts and alerts reload"),
+            "auto_refresh",
+            &mut cfg.auto_refresh_minutes,
+            &opts,
+        );
+    });
+    if cfg.provider == WeatherProviderId::AccuWeather {
+        if cfg.accu_weather_api_key.is_none() {
+            warn(
+                ui,
+                p,
+                "AccuWeather needs an API key. Until one is set, forecasts come from Open-Meteo.",
             );
         } else {
             note(
                 ui,
                 p,
-                "free keys allow 50 requests a day: each place uses 3 per refresh, so forecasts are reused for an hour",
+                "Free AccuWeather keys allow 50 requests a day. Each place uses 3 per refresh, so forecasts are reused for an hour.",
             );
         }
     }
-    section(ui, p, "BEHAVIOUR");
-    ui.checkbox(&mut cfg.notifications_enabled, "desktop notifications");
-    ui.checkbox(&mut cfg.top_glow_enabled, "top glow bar");
-    ui.checkbox(
-        &mut cfg.storm_polygons_enabled,
-        "emphasised storm polygons on the radar",
-    );
+    let applies = theme_pref_applies(cfg);
+    kit::card(ui, p, "Appearance", |ui| {
+        let mut rows = Rows::new();
+        ui.add_enabled_ui(applies, |ui| {
+            combo_row(
+                ui,
+                p,
+                &mut rows,
+                "Light or dark",
+                Some(if applies {
+                    "Follow the system, or pick one"
+                } else {
+                    "Set by the theme chosen under Themes"
+                }),
+                "theme_pref",
+                &mut cfg.theme,
+                &[
+                    (ThemePref::System, "System"),
+                    (ThemePref::Light, "Light"),
+                    (ThemePref::Dark, "Dark"),
+                ],
+            );
+        });
+        toggle_row(
+            ui,
+            p,
+            &mut rows,
+            "Top glow bar",
+            Some("A coloured glow along the top edge for active alerts"),
+            &mut cfg.top_glow_enabled,
+        );
+    });
+    kit::card(ui, p, "Behaviour", |ui| {
+        let mut rows = Rows::new();
+        toggle_row(
+            ui,
+            p,
+            &mut rows,
+            "Desktop notifications",
+            Some("Notify when a new alert is issued for a saved place"),
+            &mut cfg.notifications_enabled,
+        );
+        toggle_row(
+            ui,
+            p,
+            &mut rows,
+            "Emphasised storm polygons",
+            Some("Draw warning polygons on the radar with a heavier outline"),
+            &mut cfg.storm_polygons_enabled,
+        );
+    });
 }
 
 fn sources_tab(ui: &mut Ui, cfg: &mut Config, p: &Palette, st: &mut SettingsState) {
-    section(ui, p, "WILLYWEATHER");
-    secret_field(ui, &mut cfg.willy_weather_api_key, &mut st.show_willy);
-    note(ui, p, "api key; enables BOM (Australia) warnings");
-
-    section(ui, p, "LIBREWXR RADAR HOST");
-    let mut buf = st
-        .host_buf
-        .clone()
-        .unwrap_or_else(|| cfg.libre_wxr_host.clone());
-    let resp = ui.add(
-        egui::TextEdit::singleline(&mut buf)
-            .font(egui::TextStyle::Monospace)
-            .desired_width(320.0),
-    );
-    if resp.changed() {
-        st.host_buf = Some(buf);
-    }
-    if resp.lost_focus() {
-        if let Some(b) = st.host_buf.take() {
-            let host = b.trim().trim_end_matches('/').to_string();
-            if host.starts_with("http://") || host.starts_with("https://") {
-                cfg.libre_wxr_host = host;
-            }
+    kit::card(ui, p, "Radar server", |ui| {
+        let mut rows = Rows::new();
+        rows.next(ui, p);
+        kit::row(
+            ui,
+            p,
+            "LibreWXR host",
+            Some("An http(s) URL; applied when you leave the field"),
+            FIELD_W,
+            |ui| {
+                let mut buf = st
+                    .host_buf
+                    .clone()
+                    .unwrap_or_else(|| cfg.libre_wxr_host.clone());
+                let resp = kit::text_field(ui, p, &mut buf, "https://…", FIELD_W);
+                if resp.changed() {
+                    st.host_buf = Some(buf);
+                }
+                if resp.lost_focus() {
+                    if let Some(b) = st.host_buf.take() {
+                        let host = b.trim().trim_end_matches('/').to_string();
+                        if host.starts_with("http://") || host.starts_with("https://") {
+                            cfg.libre_wxr_host = host;
+                        } else {
+                            st.notice = Some((
+                                true,
+                                "The radar host must start with http:// or https://".into(),
+                            ));
+                        }
+                    }
+                }
+            },
+        );
+    });
+    if let Some((true, text)) = &st.notice {
+        if text.starts_with("The radar host") {
+            warn(ui, p, &text.clone());
         }
     }
+    kit::card(ui, p, "API keys", |ui| {
+        let mut rows = Rows::new();
+        rows.next(ui, p);
+        kit::row(
+            ui,
+            p,
+            "AccuWeather",
+            Some("Forecasts, when chosen as the weather source"),
+            FIELD_W,
+            |ui| {
+                kit::secret_field(
+                    ui,
+                    p,
+                    &mut cfg.accu_weather_api_key,
+                    &mut st.show_accu,
+                    "not set",
+                    FIELD_W,
+                )
+            },
+        );
+        rows.next(ui, p);
+        kit::row(
+            ui,
+            p,
+            "WillyWeather",
+            Some("Bureau of Meteorology (Australia) warnings"),
+            FIELD_W,
+            |ui| {
+                kit::secret_field(
+                    ui,
+                    p,
+                    &mut cfg.willy_weather_api_key,
+                    &mut st.show_willy,
+                    "not set",
+                    FIELD_W,
+                )
+            },
+        );
+        rows.next(ui, p);
+        kit::row(
+            ui,
+            p,
+            "OpenWeatherMap",
+            Some("Wind, temperature and precipitation overlays"),
+            FIELD_W,
+            |ui| {
+                kit::secret_field(
+                    ui,
+                    p,
+                    &mut cfg.open_weather_map_api_key,
+                    &mut st.show_owm,
+                    "not set",
+                    FIELD_W,
+                )
+            },
+        );
+    });
     note(
         ui,
         p,
-        "http(s) URL; applied when the box loses focus (invalid values are discarded)",
+        "Keys are stored in your Silver Skies config file and only sent to their own service. \
+         Storm cells, storm reports, tropical cyclones, soundings and terrain use free services that need no key.",
     );
-
-    section(ui, p, "OPENWEATHERMAP");
-    secret_field(ui, &mut cfg.open_weather_map_api_key, &mut st.show_owm);
-    note(ui, p, "api key; enables the radar overlay layers");
 }
 
 fn radar_tab(ui: &mut Ui, sh: &mut Shared, p: &Palette, st: &mut SettingsState) {
@@ -545,30 +733,28 @@ fn radar_tab(ui: &mut Ui, sh: &mut Shared, p: &Palette, st: &mut SettingsState) 
         .is_some_and(|k| !k.trim().is_empty());
     let cfg = &mut sh.config;
 
-    section(ui, p, "COMPOSITE RADAR");
-    egui::Grid::new("radar_grid")
-        .num_columns(2)
-        .spacing([12.0, 6.0])
-        .show(ui, |ui| {
-            label(ui, p, "color scheme");
-            let opts: Vec<(u8, &str)> = schemes.iter().map(|(i, n)| (*i, n.as_str())).collect();
-            let cur = cfg.radar.color_scheme;
-            let text = opts
-                .iter()
-                .find(|(i, _)| *i == cur)
-                .map(|(_, n)| n.to_string())
-                .unwrap_or_else(|| format!("scheme {cur}"));
-            egui::ComboBox::from_id_salt("radar_scheme")
-                .selected_text(text)
-                .show_ui(ui, |ui| {
-                    for (id, name) in &opts {
-                        ui.selectable_value(&mut cfg.radar.color_scheme, *id, *name);
-                    }
-                });
-            ui.end_row();
-
-            label(ui, p, "opacity");
-            ui.add(
+    kit::card(ui, p, "Composite radar", |ui| {
+        let mut rows = Rows::new();
+        let mut opts: Vec<(u8, &str)> = schemes.iter().map(|(i, n)| (*i, n.as_str())).collect();
+        let cur_name = format!("Scheme {}", cfg.radar.color_scheme);
+        if !opts.iter().any(|(i, _)| *i == cfg.radar.color_scheme) {
+            opts.push((cfg.radar.color_scheme, cur_name.as_str()));
+        }
+        combo_row(
+            ui,
+            p,
+            &mut rows,
+            "Colour scheme",
+            None,
+            "radar_scheme",
+            &mut cfg.radar.color_scheme,
+            &opts,
+        );
+        rows.next(ui, p);
+        kit::row(ui, p, "Opacity", None, CTRL_W, |ui| {
+            kit::slider(
+                ui,
+                p,
                 egui::Slider::new(&mut cfg.radar.opacity, 0.0..=1.0)
                     .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
                     .custom_parser(|s| {
@@ -579,166 +765,357 @@ fn radar_tab(ui: &mut Ui, sh: &mut Shared, p: &Palette, st: &mut SettingsState) 
                             .map(|v| v / 100.0)
                     }),
             );
-            ui.end_row();
         });
-    ui.checkbox(&mut cfg.radar.smooth, "smooth tiles");
-    ui.checkbox(&mut cfg.radar.snow, "snow");
-    ui.checkbox(&mut cfg.radar.show_arrows, "storm motion arrows");
-    ui.checkbox(&mut cfg.radar.show_cells, "storm cell markers");
-    ui.checkbox(&mut cfg.radar.nowcast, "include nowcast frames");
-    ui.checkbox(&mut cfg.radar.legend, "legend");
-
-    section(ui, p, "LAYERS");
-    ui.checkbox(&mut cfg.radar.show_polygons, "alert polygons");
-    ui.checkbox(&mut cfg.radar.viewport_alerts, "Alerts in view");
-    ui.checkbox(&mut cfg.radar.satellite, "IR satellite");
-    ui.checkbox(&mut cfg.spc_outlook_enabled, "SPC Day 1 convective outlook");
-    ui.checkbox(&mut cfg.radar.md_polygons, "SPC mesoscale discussions");
-    ui.checkbox(&mut cfg.radar.wind_barbs, "wind barbs (METAR)");
-    ui.checkbox(&mut cfg.radar.show_stations, "radar sites");
-
-    section(ui, p, "NEXRAD SINGLE SITE");
-    let mut buf = st
-        .site_buf
-        .clone()
-        .unwrap_or_else(|| cfg.radar.nexrad_site.clone().unwrap_or_default());
-    ui.horizontal(|ui| {
-        label(ui, p, "site id");
-        let resp = ui.add(
-            egui::TextEdit::singleline(&mut buf)
-                .font(egui::TextStyle::Monospace)
-                .desired_width(80.0),
-        );
-        if resp.changed() {
-            st.site_buf = Some(buf.clone());
-        }
-        if resp.lost_focus() {
-            st.site_buf = None;
-            cfg.radar.nexrad_site = opt_string(&buf).map(|s| s.to_ascii_uppercase());
-        }
-    });
-    note(ui, p, "e.g. KFSX; blank uses the composite radar");
-    ui.horizontal(|ui| {
-        label(ui, p, "product");
-        let opts: Vec<(RadarProduct, &str)> =
-            RadarProduct::ALL.iter().map(|p| (*p, p.label())).collect();
-        enum_combo(ui, "radar_product", &mut cfg.radar.nexrad_product, &opts);
-    });
-
-    section(ui, p, "OPENWEATHERMAP OVERLAYS");
-    ui.checkbox(&mut cfg.radar.owm_wind, "wind");
-    ui.checkbox(&mut cfg.radar.owm_temp, "temperature");
-    ui.checkbox(&mut cfg.radar.owm_precip, "precipitation");
-    ui.checkbox(&mut cfg.radar.aqi_badge, "air quality badge");
-    if !key_set {
-        note(
+        toggle_row(
             ui,
             p,
-            "set an OpenWeatherMap API key in SOURCES to enable these overlays",
+            &mut rows,
+            "Smooth tiles",
+            None,
+            &mut cfg.radar.smooth,
+        );
+        toggle_row(
+            ui,
+            p,
+            &mut rows,
+            "Snow",
+            Some("Show snow in its own colours"),
+            &mut cfg.radar.snow,
+        );
+        toggle_row(
+            ui,
+            p,
+            &mut rows,
+            "Nowcast frames",
+            Some("Extend the loop with short-range forecast frames"),
+            &mut cfg.radar.nowcast,
+        );
+        toggle_row(ui, p, &mut rows, "Legend", None, &mut cfg.radar.legend);
+        toggle_row(
+            ui,
+            p,
+            &mut rows,
+            "Terrain",
+            Some("Shaded relief under the radar"),
+            &mut cfg.radar.terrain,
+        );
+    });
+
+    kit::card(ui, p, "Severe weather", |ui| {
+        let mut rows = Rows::new();
+        toggle_row(
+            ui,
+            p,
+            &mut rows,
+            "Storm cells",
+            Some("Tornado, mesocyclone and hail signatures with projected tracks"),
+            &mut cfg.radar.storm_cells,
+        );
+        toggle_row(
+            ui,
+            p,
+            &mut rows,
+            "Storm reports",
+            Some("Tornado, hail, wind and flood reports from the last 24 hours (US)"),
+            &mut cfg.radar.storm_reports,
+        );
+        toggle_row(
+            ui,
+            p,
+            &mut rows,
+            "Tropical cyclones",
+            Some("Centres, tracks and wind swaths worldwide"),
+            &mut cfg.radar.tropical,
+        );
+        toggle_row(
+            ui,
+            p,
+            &mut rows,
+            "Storm motion arrows",
+            None,
+            &mut cfg.radar.show_arrows,
+        );
+        toggle_row(
+            ui,
+            p,
+            &mut rows,
+            "Mosaic cell markers",
+            None,
+            &mut cfg.radar.show_cells,
+        );
+    });
+
+    kit::card(ui, p, "Overlays", |ui| {
+        let mut rows = Rows::new();
+        toggle_row(
+            ui,
+            p,
+            &mut rows,
+            "Alert polygons",
+            None,
+            &mut cfg.radar.show_polygons,
+        );
+        toggle_row(
+            ui,
+            p,
+            &mut rows,
+            "Alerts in view",
+            Some("Load alerts for whatever area the map shows"),
+            &mut cfg.radar.viewport_alerts,
+        );
+        toggle_row(
+            ui,
+            p,
+            &mut rows,
+            "IR satellite",
+            None,
+            &mut cfg.radar.satellite,
+        );
+        toggle_row(
+            ui,
+            p,
+            &mut rows,
+            "SPC Day 1 outlook",
+            None,
+            &mut cfg.spc_outlook_enabled,
+        );
+        toggle_row(
+            ui,
+            p,
+            &mut rows,
+            "SPC mesoscale discussions",
+            None,
+            &mut cfg.radar.md_polygons,
+        );
+        toggle_row(
+            ui,
+            p,
+            &mut rows,
+            "Wind barbs",
+            Some("From METAR observations"),
+            &mut cfg.radar.wind_barbs,
+        );
+        toggle_row(
+            ui,
+            p,
+            &mut rows,
+            "Radar sites",
+            None,
+            &mut cfg.radar.show_stations,
+        );
+    });
+
+    kit::card(ui, p, "NEXRAD single site", |ui| {
+        let mut rows = Rows::new();
+        rows.next(ui, p);
+        kit::row(
+            ui,
+            p,
+            "Site",
+            Some("A WSR-88D id such as KFSX; blank uses the composite"),
+            CTRL_W,
+            |ui| {
+                let mut buf = st
+                    .site_buf
+                    .clone()
+                    .unwrap_or_else(|| cfg.radar.nexrad_site.clone().unwrap_or_default());
+                let resp = kit::text_field(ui, p, &mut buf, "composite", CTRL_W - 4.0);
+                if resp.changed() {
+                    st.site_buf = Some(buf.clone());
+                }
+                if resp.lost_focus() {
+                    st.site_buf = None;
+                    cfg.radar.nexrad_site = opt_string(&buf).map(|s| s.to_ascii_uppercase());
+                }
+            },
+        );
+        let opts: Vec<(RadarProduct, &str)> =
+            RadarProduct::ALL.iter().map(|p| (*p, p.label())).collect();
+        combo_row(
+            ui,
+            p,
+            &mut rows,
+            "Product",
+            None,
+            "radar_product",
+            &mut cfg.radar.nexrad_product,
+            &opts,
+        );
+    });
+
+    kit::card(ui, p, "OpenWeatherMap overlays", |ui| {
+        ui.add_enabled_ui(key_set, |ui| {
+            let mut rows = Rows::new();
+            toggle_row(ui, p, &mut rows, "Wind", None, &mut cfg.radar.owm_wind);
+            toggle_row(
+                ui,
+                p,
+                &mut rows,
+                "Temperature",
+                None,
+                &mut cfg.radar.owm_temp,
+            );
+            toggle_row(
+                ui,
+                p,
+                &mut rows,
+                "Precipitation",
+                None,
+                &mut cfg.radar.owm_precip,
+            );
+            toggle_row(
+                ui,
+                p,
+                &mut rows,
+                "Air quality badge",
+                None,
+                &mut cfg.radar.aqi_badge,
+            );
+        });
+    });
+    if !key_set {
+        warn(
+            ui,
+            p,
+            "Add an OpenWeatherMap API key under Data sources to use these overlays.",
         );
     }
 }
 
 fn alerts_tab(ui: &mut Ui, cfg: &mut Config, p: &Palette, st: &mut SettingsState) {
     ui.horizontal(|ui| {
-        label(ui, p, "filter");
-        ui.add(
-            egui::TextEdit::singleline(&mut st.alert_filter)
-                .font(egui::TextStyle::Monospace)
-                .desired_width(200.0),
-        );
-        if ui.button("reset all").clicked() {
-            cfg.alert_type_overrides.clear();
+        ui.set_min_height(kit::CONTROL_H);
+        let w = (ui.available_width() - 120.0).clamp(160.0, 360.0);
+        kit::text_field(ui, p, &mut st.alert_filter, "Filter alert types…", w);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let any = !cfg.alert_type_overrides.is_empty();
+            if ui
+                .add_enabled_ui(any, |ui| kit::button(ui, p, "Reset all"))
+                .inner
+                .clicked()
+            {
+                cfg.alert_type_overrides.clear();
+            }
+        });
+    });
+    ui.add_space(12.0);
+    let f = st.alert_filter.trim().to_lowercase();
+    let shown: Vec<_> = ALL_CLASSES
+        .iter()
+        .filter(|(class, name, _)| {
+            f.is_empty() || class.contains(&f) || name.to_lowercase().contains(&f)
+        })
+        .collect();
+    kit::card(ui, p, &format!("Alert types ({})", shown.len()), |ui| {
+        let mut rows = Rows::new();
+        for (class, name, _) in shown {
+            let mut rgb = effective_color(class, &cfg.alert_type_overrides);
+            let mut vis = effective_visible(class, &cfg.alert_type_overrides);
+            rows.next(ui, p);
+            kit::row(ui, p, name, Some(class), 170.0, |ui| {
+                let has = cfg.alert_type_overrides.contains_key(*class);
+                if ui
+                    .add_enabled_ui(has, |ui| kit::button(ui, p, "Reset"))
+                    .inner
+                    .on_hover_text("Back to the default colour and visibility")
+                    .clicked()
+                {
+                    reset_override(&mut cfg.alert_type_overrides, class);
+                }
+                if kit::toggle(ui, p, &mut vis)
+                    .on_hover_text("Show this alert type")
+                    .changed()
+                {
+                    set_override_visible(&mut cfg.alert_type_overrides, class, vis);
+                }
+                ui.spacing_mut().interact_size = egui::vec2(28.0, 22.0);
+                if egui::color_picker::color_edit_button_srgb(ui, &mut rgb).changed() {
+                    set_override_color(&mut cfg.alert_type_overrides, class, rgb);
+                }
+            });
         }
     });
     note(
         ui,
         p,
-        "color, visibility and reset per class. Hidden classes are dropped everywhere.",
+        "Hidden alert types are dropped everywhere: lists, the radar and notifications.",
     );
-    ui.add_space(4.0);
-    let f = st.alert_filter.trim().to_lowercase();
-    for (class, name, _) in ALL_CLASSES {
-        if !f.is_empty() && !class.contains(&f) && !name.to_lowercase().contains(&f) {
-            continue;
-        }
-        let mut rgb = effective_color(class, &cfg.alert_type_overrides);
-        let mut vis = effective_visible(class, &cfg.alert_type_overrides);
-        ui.horizontal(|ui| {
-            if egui::color_picker::color_edit_button_srgb(ui, &mut rgb).changed() {
-                set_override_color(&mut cfg.alert_type_overrides, class, rgb);
-            }
-            if ui.checkbox(&mut vis, "").changed() {
-                set_override_visible(&mut cfg.alert_type_overrides, class, vis);
-            }
-            let has = cfg.alert_type_overrides.contains_key(*class);
-            if ui.add_enabled(has, egui::Button::new("reset")).clicked() {
-                reset_override(&mut cfg.alert_type_overrides, class);
-            }
-            ui.label(mono(*name, c32(p.text)));
-            ui.label(mono(*class, c32a(p.text3)));
-        });
-    }
 }
 
 fn radio_tab(ui: &mut Ui, cfg: &mut Config, p: &Palette) {
-    section(ui, p, "WEATHER RADIO");
-    ui.checkbox(&mut cfg.weather_radio_enabled, "weather radio enabled");
-    egui::Grid::new("radio_grid")
-        .num_columns(2)
-        .spacing([12.0, 6.0])
-        .show(ui, |ui| {
-            label(ui, p, "mode");
-            enum_combo(
+    kit::card(ui, p, "Weather radio", |ui| {
+        let mut rows = Rows::new();
+        toggle_row(
+            ui,
+            p,
+            &mut rows,
+            "Weather radio",
+            Some("Play a NOAA Weather Radio-style broadcast"),
+            &mut cfg.weather_radio_enabled,
+        );
+        let on_ = cfg.weather_radio_enabled;
+        ui.add_enabled_ui(on_, |ui| {
+            combo_row(
                 ui,
+                p,
+                &mut rows,
+                "Mode",
+                None,
                 "radio_mode",
                 &mut cfg.weather_radio_mode,
                 &[
                     (RadioMode::Simulated, "Simulated"),
-                    (RadioMode::Live, "Live"),
+                    (RadioMode::Live, "Live stream"),
                 ],
             );
-            ui.end_row();
-            label(ui, p, "live feed");
-            enum_combo(
+            combo_row(
                 ui,
+                p,
+                &mut rows,
+                "Live feed",
+                Some("Pick the nearest transmitter, or give a stream URL"),
                 "radio_feed",
                 &mut cfg.weather_radio_live_feed_mode,
                 &[
-                    (LiveFeedMode::Auto, "Auto"),
-                    (LiveFeedMode::Manual, "Manual"),
+                    (LiveFeedMode::Auto, "Nearest (auto)"),
+                    (LiveFeedMode::Manual, "Stream URL"),
                 ],
             );
-            ui.end_row();
+            if cfg.weather_radio_live_feed_mode == LiveFeedMode::Manual {
+                rows.next(ui, p);
+                kit::row(ui, p, "Stream URL", None, FIELD_W, |ui| {
+                    let mut url = cfg
+                        .weather_radio_live_stream_url
+                        .clone()
+                        .unwrap_or_default();
+                    kit::text_field(ui, p, &mut url, "https://…", FIELD_W);
+                    let new = opt_string(&url);
+                    if new != cfg.weather_radio_live_stream_url {
+                        cfg.weather_radio_live_stream_url = new;
+                    }
+                });
+            }
         });
-    if cfg.weather_radio_live_feed_mode == LiveFeedMode::Manual {
-        let mut url = cfg
-            .weather_radio_live_stream_url
-            .clone()
-            .unwrap_or_default();
-        ui.horizontal(|ui| {
-            label(ui, p, "stream url");
-            ui.add(
-                egui::TextEdit::singleline(&mut url)
-                    .font(egui::TextStyle::Monospace)
-                    .desired_width(300.0),
-            );
-        });
-        let new = opt_string(&url);
-        if new != cfg.weather_radio_live_stream_url {
-            cfg.weather_radio_live_stream_url = new;
-        }
-    }
+    });
 
-    section(ui, p, "SPOKEN ALERTS (TTS)");
-    ui.checkbox(&mut cfg.tts_alerts_enabled, "read new alerts aloud");
-    egui::Grid::new("tts_grid")
-        .num_columns(2)
-        .spacing([12.0, 6.0])
-        .show(ui, |ui| {
-            label(ui, p, "severity");
-            enum_combo(
+    kit::card(ui, p, "Spoken alerts", |ui| {
+        let mut rows = Rows::new();
+        toggle_row(
+            ui,
+            p,
+            &mut rows,
+            "Read new alerts aloud",
+            None,
+            &mut cfg.tts_alerts_enabled,
+        );
+        let on_ = cfg.tts_alerts_enabled;
+        ui.add_enabled_ui(on_, |ui| {
+            combo_row(
                 ui,
+                p,
+                &mut rows,
+                "Which alerts",
+                None,
                 "tts_filter",
                 &mut cfg.tts_severity_filter,
                 &[
@@ -748,34 +1125,149 @@ fn radio_tab(ui: &mut Ui, cfg: &mut Config, p: &Palette) {
                     (TtsSeverityFilter::All, "All"),
                 ],
             );
-            ui.end_row();
-            label(ui, p, "rate");
-            let mut r = cfg.tts_rate;
-            if ui
-                .add(egui::Slider::new(&mut r, 0.5..=2.0).step_by(0.05))
+            rows.next(ui, p);
+            kit::row(ui, p, "Speaking rate", None, CTRL_W, |ui| {
+                let mut r = cfg.tts_rate;
+                if kit::slider(
+                    ui,
+                    p,
+                    egui::Slider::new(&mut r, 0.5..=2.0)
+                        .step_by(0.05)
+                        .custom_formatter(|v, _| format!("{v:.2}×")),
+                )
                 .changed()
-            {
-                cfg.tts_rate = r.clamp(0.5, 2.0);
-            }
-            ui.end_row();
+                {
+                    cfg.tts_rate = r.clamp(0.5, 2.0);
+                }
+            });
+            toggle_row(
+                ui,
+                p,
+                &mut rows,
+                "Attention tone",
+                Some("Play a tone before each alert"),
+                &mut cfg.tts_attention_tone,
+            );
+            toggle_row(
+                ui,
+                p,
+                &mut rows,
+                "All saved places",
+                Some("Announce alerts for every saved place, not just the active one"),
+                &mut cfg.tts_all_saved_locations,
+            );
         });
-    ui.checkbox(
-        &mut cfg.tts_attention_tone,
-        "attention tone before each alert",
+    });
+}
+
+fn ai_tab(ui: &mut Ui, ai: &mut AiSettings, p: &Palette, st: &mut SettingsState) {
+    kit::card(ui, p, "Assistant", |ui| {
+        let mut rows = Rows::new();
+        toggle_row(
+            ui,
+            p,
+            &mut rows,
+            "Turn on AI",
+            Some("AI summaries, answers and the assistant chat (Ctrl+J)"),
+            &mut ai.enabled,
+        );
+        let on_ = ai.enabled;
+        ui.add_enabled_ui(on_, |ui| {
+            let before = ai.provider;
+            let opts: Vec<(AiProvider, &str)> =
+                AiProvider::ALL.iter().map(|p| (*p, p.label())).collect();
+            combo_row(
+                ui,
+                p,
+                &mut rows,
+                "Provider",
+                None,
+                "ai_provider",
+                &mut ai.provider,
+                &opts,
+            );
+            if ai.provider != before {
+                // Defaults follow the provider unless overridden.
+                ai.base_url.clear();
+                ai.model.clear();
+            }
+            rows.next(ui, p);
+            let base_hint = match ai.provider {
+                AiProvider::Custom => "https://…/v1".to_string(),
+                pr => pr.default_base_url().to_string(),
+            };
+            kit::row(
+                ui,
+                p,
+                "Base URL",
+                Some("Leave blank for the provider's standard address"),
+                FIELD_W,
+                |ui| kit::text_field(ui, p, &mut ai.base_url, &base_hint, FIELD_W),
+            );
+            rows.next(ui, p);
+            let needs = ai.provider.needs_key();
+            kit::row(
+                ui,
+                p,
+                "API key",
+                Some(if needs {
+                    "Required by this provider"
+                } else {
+                    "Optional for this provider"
+                }),
+                FIELD_W,
+                |ui| {
+                    kit::secret_field(
+                        ui,
+                        p,
+                        &mut ai.api_key,
+                        &mut st.show_ai_key,
+                        if needs { "required" } else { "optional" },
+                        FIELD_W,
+                    )
+                },
+            );
+            rows.next(ui, p);
+            kit::row(ui, p, "Model", None, FIELD_W, |ui| {
+                kit::text_field(ui, p, &mut ai.model, ai.provider.model_hint(), FIELD_W)
+            });
+        });
+    });
+    if ai.enabled {
+        match ai.problem() {
+            Some(problem) => warn(ui, p, problem),
+            None => {
+                let model = ai.endpoint().map(|e| e.model).unwrap_or_default();
+                kit::status(
+                    ui,
+                    c32(p.safe),
+                    kit::muted(p),
+                    &format!("Ready: {} · {model}", ai.provider.label()),
+                );
+                ui.add_space(12.0);
+            }
+        }
+    }
+    if let Some(n) = ai.provider.note() {
+        note(ui, p, n);
+    }
+    note(
+        ui,
+        p,
+        "Uses your own account with an AI provider: Claude, OpenAI, OpenRouter, OpenCode Go or the \
+         OpenCode Console, a local model in Ollama, or any OpenAI-compatible service (LM Studio, a \
+         company gateway). The forecasts for your saved places are sent with each request; nothing else is.",
     );
-    ui.checkbox(
-        &mut cfg.tts_all_saved_locations,
-        "announce alerts for all saved locations",
-    );
+    note(ui, p, AI_DISCLAIMER);
 }
 
 fn swatches(ui: &mut Ui, p: &Palette) {
-    for c in [p.bg, p.surface, p.a0, p.text, p.danger] {
-        let (r, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
-        ui.painter().rect_filled(r, 0.0, c32(c));
+    for c in [p.danger, p.text, p.a0, p.surface, p.bg] {
+        let (r, _) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+        ui.painter().rect_filled(r, 3.0, c32(c));
         ui.painter().rect_stroke(
             r,
-            0.0,
+            3.0,
             egui::Stroke::new(1.0, egui::Color32::from_gray(90)),
             egui::StrokeKind::Inside,
         );
@@ -789,65 +1281,92 @@ fn themes_tab(ui: &mut Ui, sh: &mut Shared, p: &Palette, st: &mut SettingsState)
     if let Some(c) = &sh.config.custom_theme {
         ids.push(("custom".into(), format!("Custom: {}", c.name)));
     }
-    for (id, name) in &ids {
-        let sel = sh.config.theme_id == *id;
-        let pv = preview_palette(&sh.config, id);
-        ui.horizontal(|ui| {
-            let color = if sel { c32(p.a0) } else { c32a(p.text2) };
-            if ui
-                .selectable_label(sel, mono(name.as_str(), color))
-                .clicked()
-            {
-                sh.config.theme_id = id.clone();
-            }
-            swatches(ui, &pv);
-        });
-    }
-
-    section(ui, p, "CUSTOM THEME");
-    note(
-        ui,
-        p,
-        "paste theme JSON: {\"name\": \"..\", \"colors\": {\"a0\": \"255, 45, 155\", \"bg\": \"#180510\"}}",
-    );
-    ui.add(
-        egui::TextEdit::multiline(&mut st.theme_json)
-            .font(egui::TextStyle::Monospace)
-            .desired_rows(6)
-            .desired_width(f32::INFINITY),
-    );
-    let mut parsed: Option<Result<ThemeDefinition, String>> = None;
-    ui.horizontal(|ui| {
-        if ui.button("Apply JSON").clicked() {
-            parsed = Some(parse_theme_json(&st.theme_json));
-        }
-        if ui.button("Export current theme").clicked() {
-            let json =
-                serde_json::to_string_pretty(&palette_to_theme(&sh.palette)).unwrap_or_default();
-            ui.ctx().copy_text(json);
-            st.notice = Some((false, "current theme copied to the clipboard".to_string()));
+    kit::card(ui, p, "Theme", |ui| {
+        let mut rows = Rows::new();
+        for (id, name) in &ids {
+            let sel = sh.config.theme_id == *id;
+            let pv = preview_palette(&sh.config, id);
+            rows.next(ui, p);
+            kit::row(ui, p, name, None, 210.0, |ui| {
+                if sel {
+                    ui.add_sized(
+                        [76.0, kit::CONTROL_H],
+                        egui::Label::new(
+                            RichText::new("✓ In use")
+                                .font(saira(13.0, "medium"))
+                                .color(c32(p.a0)),
+                        ),
+                    );
+                } else if kit::button(ui, p, "Use").clicked() {
+                    sh.config.theme_id = id.clone();
+                }
+                ui.add_space(8.0);
+                swatches(ui, &pv);
+            });
         }
     });
-    ui.horizontal(|ui| {
-        label(ui, p, "file");
+
+    let mut parsed: Option<Result<ThemeDefinition, String>> = None;
+    kit::card(ui, p, "Custom theme", |ui| {
+        ui.add_space(10.0);
         ui.add(
-            egui::TextEdit::singleline(&mut st.theme_path)
-                .font(egui::TextStyle::Monospace)
-                .desired_width(260.0),
+            egui::Label::new(
+                RichText::new(
+                    "Paste theme JSON, e.g. {\"name\": \"Neon\", \"colors\": {\"a0\": \"255, 45, 155\", \"bg\": \"#180510\"}}",
+                )
+                .font(saira(12.5, "light"))
+                .color(kit::muted(p)),
+            )
+            .wrap(),
         );
-        if ui.button("Load file").clicked() {
-            match std::fs::read_to_string(st.theme_path.trim()) {
-                Ok(text) => {
-                    st.theme_json = text;
-                    parsed = Some(parse_theme_json(&st.theme_json));
-                }
-                Err(e) => st.notice = Some((true, format!("cannot read file: {e}"))),
+        ui.add_space(6.0);
+        ui.scope(|ui| {
+            kit::field_style(ui, p);
+            ui.add(
+                egui::TextEdit::multiline(&mut st.theme_json)
+                    .font(crate::theme::code(13.0))
+                    .hint_text("{ \"name\": …, \"colors\": { … } }")
+                    .margin(egui::Margin::same(8))
+                    .desired_rows(6)
+                    .desired_width(f32::INFINITY),
+            );
+        });
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            if kit::primary_button(ui, p, "Apply JSON").clicked() {
+                parsed = Some(parse_theme_json(&st.theme_json));
             }
-        }
+            if kit::button(ui, p, "Copy current theme")
+                .on_hover_text("Copy the theme in use as JSON")
+                .clicked()
+            {
+                let json = serde_json::to_string_pretty(&palette_to_theme(&sh.palette))
+                    .unwrap_or_default();
+                ui.ctx().copy_text(json);
+                st.notice = Some((false, "Current theme copied to the clipboard".to_string()));
+            }
+        });
+        ui.add_space(10.0);
+        divider(ui, p);
+        ui.add_space(10.0);
+        ui.horizontal(|ui| {
+            let w = (ui.available_width() - 100.0).max(160.0);
+            kit::text_field(ui, p, &mut st.theme_path, "/path/to/theme.json", w);
+            if kit::button(ui, p, "Load file").clicked() {
+                match std::fs::read_to_string(st.theme_path.trim()) {
+                    Ok(text) => {
+                        st.theme_json = text;
+                        parsed = Some(parse_theme_json(&st.theme_json));
+                    }
+                    Err(e) => st.notice = Some((true, format!("Cannot read the file: {e}"))),
+                }
+            }
+        });
+        ui.add_space(12.0);
     });
     match parsed {
         Some(Ok(def)) => {
-            st.notice = Some((false, format!("applied custom theme {:?}", def.name)));
+            st.notice = Some((false, format!("Applied custom theme “{}”", def.name)));
             sh.config.custom_theme = Some(def);
             sh.config.theme_id = "custom".to_string();
         }
@@ -856,7 +1375,7 @@ fn themes_tab(ui: &mut Ui, sh: &mut Shared, p: &Palette, st: &mut SettingsState)
     }
     if let Some((is_err, text)) = &st.notice {
         let c = if *is_err { c32(p.danger) } else { c32(p.safe) };
-        ui.add(egui::Label::new(mono(text.as_str(), c)).wrap());
+        kit::status(ui, c, kit::muted(p), text);
     }
 }
 
@@ -867,93 +1386,167 @@ fn developer_tab(
     st: &mut SettingsState,
     emit: &mut Vec<Command>,
 ) {
-    ui.checkbox(&mut sh.config.dev_tools_enabled, "enable developer tools");
+    kit::card(ui, p, "", |ui| {
+        let mut rows = Rows::new();
+        toggle_row(
+            ui,
+            p,
+            &mut rows,
+            "Developer tools",
+            Some("Demo alerts and other testing aids"),
+            &mut sh.config.dev_tools_enabled,
+        );
+    });
     if !sh.config.dev_tools_enabled {
         return;
     }
-    section(ui, p, "DEMO ALERTS");
     st.demo_group = st.demo_group.min(DEMO_GROUPS.len().saturating_sub(1));
     st.demo_item = st
         .demo_item
         .min(DEMO_GROUPS[st.demo_group].items.len().saturating_sub(1));
-    ui.horizontal(|ui| {
-        egui::ComboBox::from_id_salt("demo_group")
-            .selected_text(DEMO_GROUPS[st.demo_group].name)
-            .show_ui(ui, |ui| {
-                for (i, g) in DEMO_GROUPS.iter().enumerate() {
-                    if ui.selectable_value(&mut st.demo_group, i, g.name).changed() {
-                        st.demo_item = 0;
-                    }
-                }
-            });
+    kit::card(ui, p, "Demo alerts", |ui| {
+        let mut rows = Rows::new();
+        let groups: Vec<(usize, &str)> = DEMO_GROUPS
+            .iter()
+            .enumerate()
+            .map(|(i, g)| (i, g.name))
+            .collect();
+        let before = st.demo_group;
+        combo_row(
+            ui,
+            p,
+            &mut rows,
+            "Region",
+            None,
+            "demo_group",
+            &mut st.demo_group,
+            &groups,
+        );
+        if st.demo_group != before {
+            st.demo_item = 0;
+        }
         let group = &DEMO_GROUPS[st.demo_group];
+        let items: Vec<(usize, &str)> = group
+            .items
+            .iter()
+            .enumerate()
+            .map(|(i, (e, _))| (i, *e))
+            .collect();
+        combo_row(
+            ui,
+            p,
+            &mut rows,
+            "Alert",
+            None,
+            "demo_item",
+            &mut st.demo_item,
+            &items,
+        );
         let item = group.items.get(st.demo_item).map(|(e, _)| *e).unwrap_or("");
-        egui::ComboBox::from_id_salt("demo_item")
-            .selected_text(item)
-            .show_ui(ui, |ui| {
-                for (i, (e, _)) in group.items.iter().enumerate() {
-                    ui.selectable_value(&mut st.demo_item, i, *e);
+        rows.next(ui, p);
+        let count = sh.demo_alerts.len();
+        kit::row(
+            ui,
+            p,
+            "Active demo alerts",
+            Some(&count.to_string()),
+            360.0,
+            |ui| {
+                if kit::button(ui, p, "Clear").clicked() {
+                    sh.demo_alerts.clear();
+                    sh.asteroid = None;
+                    sh.bump_alerts();
                 }
-            });
-        if ui.button("Add alert").clicked() && !item.is_empty() {
-            emit.push(Command::Demo {
-                group: Some(item.to_string()),
-            });
-        }
+                let idle = sh.asteroid.is_none();
+                if ui
+                    .add_enabled_ui(idle, |ui| kit::button(ui, p, "Asteroid warning"))
+                    .inner
+                    .clicked()
+                {
+                    emit.push(Command::Asteroid);
+                }
+                if kit::primary_button(ui, p, "Add alert").clicked() && !item.is_empty() {
+                    emit.push(Command::Demo {
+                        group: Some(item.to_string()),
+                    });
+                }
+            },
+        );
     });
-    ui.horizontal(|ui| {
-        let idle = sh.asteroid.is_none();
-        if ui
-            .add_enabled(idle, egui::Button::new("Asteroid impact warning"))
-            .clicked()
-        {
-            emit.push(Command::Asteroid);
-        }
-        if ui.button("Clear demo alerts").clicked() {
-            sh.demo_alerts.clear();
-            sh.asteroid = None;
-            sh.bump_alerts();
-        }
-    });
-    label(
-        ui,
-        p,
-        &format!("active demo alerts: {}", sh.demo_alerts.len()),
-    );
 }
 
 fn about_tab(ui: &mut Ui, sh: &Shared, p: &Palette) {
-    ui.label(mono(
-        format!("Silver Skies Pro {}", ss_core::version::version_label()),
-        c32(p.a0),
-    ));
-    let dir = sh
-        .data_dir
-        .as_ref()
-        .map(|d| d.display().to_string())
-        .unwrap_or_else(|| "(unknown)".to_string());
-    label(ui, p, &format!("data directory  {dir}"));
-    ui.horizontal(|ui| {
-        label(ui, p, "repository");
-        ui.hyperlink_to(mono(REPO_URL, c32(p.a0)), REPO_URL);
-    });
-    section(ui, p, "KEY COMMANDS");
-    for l in [
-        ":help              list commands",
-        ":goto <place>      search and select a location",
-        ":refresh           reload forecasts and alerts",
-        ":theme <id>        switch theme",
-        ":set <key> <val>   change a setting",
-        ":settings          open this window",
-    ] {
-        label(ui, p, l);
-    }
-    ui.add_space(8.0);
-    egui::CollapsingHeader::new(mono("raw config (secrets masked)", c32a(p.text2)))
-        .id_salt("raw_config")
-        .show(ui, |ui| {
-            ui.label(mono(config_text(&sh.config), c32a(p.text3)));
+    kit::card(ui, p, "", |ui| {
+        let mut rows = Rows::new();
+        rows.next(ui, p);
+        kit::row(ui, p, "Version", None, 300.0, |ui| {
+            ui.label(
+                RichText::new(format!(
+                    "Silver Skies Pro {}",
+                    ss_core::version::version_label()
+                ))
+                .color(c32(p.a0)),
+            );
         });
+        let dir = sh
+            .data_dir
+            .as_ref()
+            .map(|d| d.display().to_string())
+            .unwrap_or_else(|| "(unknown)".to_string());
+        rows.next(ui, p);
+        kit::row(ui, p, "Data folder", Some(&dir), 120.0, |ui| {
+            if kit::button(ui, p, "Copy path").clicked() {
+                ui.ctx().copy_text(dir.clone());
+            }
+        });
+        rows.next(ui, p);
+        kit::row(ui, p, "Source code", Some(REPO_URL), 120.0, |ui| {
+            if kit::button(ui, p, "Open").clicked() {
+                ui.ctx().open_url(egui::OpenUrl::new_tab(REPO_URL));
+            }
+        });
+    });
+    kit::card(ui, p, "Key commands", |ui| {
+        let mut rows = Rows::new();
+        for (cmd, what) in [
+            (":help", "List all commands"),
+            (":goto <place>", "Search for and select a place"),
+            (":refresh", "Reload forecasts and alerts"),
+            (":theme <id>", "Switch theme"),
+            (":set <key> <value>", "Change a setting"),
+            (":settings", "Open this window (Ctrl+,)"),
+            (":assistant", "Open the AI assistant (Ctrl+J)"),
+        ] {
+            rows.next(ui, p);
+            kit::row(ui, p, what, None, 220.0, |ui| {
+                ui.label(
+                    RichText::new(cmd)
+                        .font(crate::theme::code(13.0))
+                        .color(c32(p.a0)),
+                );
+            });
+        }
+    });
+    egui::CollapsingHeader::new(
+        RichText::new("Raw config (secrets masked)")
+            .font(saira(13.0, "medium"))
+            .color(kit::muted(p)),
+    )
+    .id_salt("raw_config")
+    .show(ui, |ui| {
+        egui::Frame::new()
+            .fill(kit::raised(p))
+            .corner_radius(kit::R)
+            .inner_margin(egui::Margin::same(10))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.label(
+                    RichText::new(config_text(&sh.config))
+                        .font(crate::theme::code(12.0))
+                        .color(kit::muted(p)),
+                );
+            });
+    });
 }
 
 #[cfg(test)]

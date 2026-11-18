@@ -175,52 +175,95 @@ pub fn apply_palette(ctx: &Context, p: &Palette) {
     ctx.set_visuals_of(Theme::Light, v);
 }
 
-/// Monospace everywhere, tight spacing. Call once at startup.
-///
-/// DejaVu Sans Mono is the primary face (full box-drawing, arrows and
-/// weather-symbol coverage); DejaVu Sans is the last-resort fallback for any
-/// glyph the mono face lacks. Both are Bitstream-Vera licensed (see
-/// `crates/ss-assets/assets/fonts/LICENSE`).
+/// Saira — the typeface of the Silver Skies Pro wordmark — for all UI text,
+/// with tabular digits so numbers line up. DejaVu Sans Mono / Sans follow as
+/// fallbacks for the box-drawing and symbol glyphs Saira lacks (both
+/// Bitstream-Vera licensed, see `crates/ss-assets/assets/fonts/LICENSE`).
+/// Call once at startup.
 pub fn install_fonts(ctx: &Context) {
     ctx.set_fonts(font_definitions());
     apply_text_styles(ctx);
 }
 
-/// egui default fonts plus the bundled DejaVu faces.
+/// Saira weights plus the DejaVu fallbacks. `Monospace` (which most Pro
+/// code asks for) and `Proportional` both resolve to Saira; named families
+/// `saira-light`, `saira-medium` and `saira-semibold` give other weights.
 pub fn font_definitions() -> FontDefinitions {
+    use ss_assets::fonts as f;
     let mut fonts = FontDefinitions::default();
-    fonts.font_data.insert(
-        "DejaVuSansMono".to_owned(),
-        Arc::new(FontData::from_static(ss_assets::fonts::DEJAVU_SANS_MONO)),
-    );
-    fonts.font_data.insert(
-        "DejaVuSans".to_owned(),
-        Arc::new(FontData::from_static(ss_assets::fonts::DEJAVU_SANS)),
-    );
-    if let Some(mono) = fonts.families.get_mut(&FontFamily::Monospace) {
-        mono.insert(0, "DejaVuSansMono".to_owned());
-        mono.push("DejaVuSans".to_owned());
+    for (name, bytes) in [
+        ("SairaLight", f::SAIRA_LIGHT),
+        ("SairaRegular", f::SAIRA_REGULAR),
+        ("SairaMedium", f::SAIRA_MEDIUM),
+        ("SairaSemiBold", f::SAIRA_SEMIBOLD),
+        ("DejaVuSansMono", f::DEJAVU_SANS_MONO),
+        ("DejaVuSans", f::DEJAVU_SANS),
+    ] {
+        fonts
+            .font_data
+            .insert(name.to_owned(), Arc::new(FontData::from_static(bytes)));
     }
-    // Let the proportional family fall back to the monospace font first, so any
-    // widget that explicitly asks for Proportional still looks terminal-like.
-    if let Some(mono) = fonts.families.get(&FontFamily::Monospace).cloned() {
-        fonts.families.insert(FontFamily::Proportional, mono);
-    }
+    let chain = |first: &str| -> Vec<String> {
+        vec![
+            first.to_owned(),
+            "DejaVuSansMono".to_owned(),
+            "DejaVuSans".to_owned(),
+        ]
+    };
     fonts
+        .families
+        .insert(FontFamily::Monospace, chain("SairaRegular"));
+    fonts
+        .families
+        .insert(FontFamily::Proportional, chain("SairaRegular"));
+    for (fam, first) in [
+        ("saira-light", "SairaLight"),
+        ("saira-medium", "SairaMedium"),
+        ("saira-semibold", "SairaSemiBold"),
+    ] {
+        fonts
+            .families
+            .insert(FontFamily::Name(fam.into()), chain(first));
+    }
+    // True monospace for code, JSON and the raw config.
+    fonts.families.insert(
+        FontFamily::Name("code".into()),
+        vec!["DejaVuSansMono".to_owned(), "DejaVuSans".to_owned()],
+    );
+    fonts
+}
+
+/// The monospace face for code and JSON.
+pub fn code(size: f32) -> FontId {
+    FontId::new(size, FontFamily::Name("code".into()))
+}
+
+/// Saira at a weight: `light`, `medium` or `semibold` (anything else: regular).
+pub fn saira(size: f32, weight: &str) -> FontId {
+    match weight {
+        "light" | "medium" | "semibold" => {
+            FontId::new(size, FontFamily::Name(format!("saira-{weight}").into()))
+        }
+        _ => FontId::new(size, FontFamily::Monospace),
+    }
 }
 
 fn apply_text_styles(ctx: &Context) {
     ctx.all_styles_mut(|s| {
-        let mono = |size: f32| FontId::new(size, FontFamily::Monospace);
-        s.text_styles.insert(TextStyle::Body, mono(13.0));
-        s.text_styles.insert(TextStyle::Button, mono(13.0));
-        s.text_styles.insert(TextStyle::Heading, mono(16.0));
-        s.text_styles.insert(TextStyle::Small, mono(10.5));
-        s.text_styles.insert(TextStyle::Monospace, mono(13.0));
-        s.spacing.item_spacing = Vec2::new(4.0, 4.0);
+        let ui = |size: f32| FontId::new(size, FontFamily::Monospace);
+        // Saira is narrower and taller than a mono face: a touch larger.
+        s.text_styles.insert(TextStyle::Body, ui(14.0));
+        s.text_styles.insert(TextStyle::Button, ui(14.0));
+        s.text_styles.insert(
+            TextStyle::Heading,
+            FontId::new(17.0, FontFamily::Name("saira-medium".into())),
+        );
+        s.text_styles.insert(TextStyle::Small, ui(11.5));
+        s.text_styles.insert(TextStyle::Monospace, ui(14.0));
+        s.spacing.item_spacing = Vec2::new(5.0, 4.0);
         s.spacing.window_margin = Margin::same(6);
-        s.spacing.button_padding = Vec2::new(6.0, 2.0);
-        s.spacing.interact_size.y = 18.0;
+        s.spacing.button_padding = Vec2::new(8.0, 3.0);
+        s.spacing.interact_size.y = 22.0;
         s.spacing.scroll = ScrollStyle {
             bar_width: 6.0,
             ..ScrollStyle::solid()
@@ -241,11 +284,14 @@ mod tests {
             font_definitions(),
         );
         let text = String::from("▸▾▴◂×●○⊕…·≋°→←↑↓│─┌┐└┘├┤┬┴┼█▓▒░");
-        let mono = FontId::new(13.0, FontFamily::Monospace);
-        let missing: Vec<char> = text
-            .chars()
-            .filter(|c| !fonts.has_glyph(&mono, *c))
-            .collect();
-        assert!(missing.is_empty(), "missing glyphs: {missing:?}");
+        for fam in [
+            FontFamily::Monospace,
+            FontFamily::Proportional,
+            FontFamily::Name("saira-medium".into()),
+        ] {
+            let id = FontId::new(13.0, fam.clone());
+            let missing: Vec<char> = text.chars().filter(|c| !fonts.has_glyph(&id, *c)).collect();
+            assert!(missing.is_empty(), "{fam:?} missing glyphs: {missing:?}");
+        }
     }
 }

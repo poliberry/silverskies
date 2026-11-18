@@ -320,8 +320,14 @@ pub fn chat_theme(p: &Palette) -> ss_ai::chat::ChatTheme {
         accent: s.primary,
         user_bubble: s.primary_container,
         danger: s.error,
+        user_text: s.on_primary_container,
+        on_accent: s.on_primary,
+        ok: c32(p.safe),
         corner: corner::LARGE_INCREASED,
         caption: medium_font(12.0),
+        body: body_font(14.5),
+        strong: medium_font(14.5),
+        title: medium_font(20.0),
     }
 }
 

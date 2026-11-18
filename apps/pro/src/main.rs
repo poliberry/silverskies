@@ -6,6 +6,7 @@ mod commands;
 mod events;
 mod header;
 mod icons;
+mod kit;
 mod layout;
 mod panels;
 mod settings;
