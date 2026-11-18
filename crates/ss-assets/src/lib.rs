@@ -28,6 +28,15 @@ pub mod fonts {
     /// Flex at width 125, weight 500: compact temperatures.
     pub const GOOGLE_SANS_FLEX_WIDE_MEDIUM: &[u8] =
         include_bytes!("../assets/fonts/google-sans/GoogleSansFlex-WideMedium.ttf");
+    /// Flex, rounded (ROND 100): Material 3 Expressive display numbers.
+    pub const GOOGLE_SANS_FLEX_ROUND_DISPLAY: &[u8] =
+        include_bytes!("../assets/fonts/google-sans/GoogleSansFlex-RoundDisplay.ttf");
+    /// Flex, rounded, medium weight: titles and labels.
+    pub const GOOGLE_SANS_FLEX_ROUND_MEDIUM: &[u8] =
+        include_bytes!("../assets/fonts/google-sans/GoogleSansFlex-RoundMedium.ttf");
+    /// Flex, rounded, regular weight: body text.
+    pub const GOOGLE_SANS_FLEX_ROUND_REGULAR: &[u8] =
+        include_bytes!("../assets/fonts/google-sans/GoogleSansFlex-RoundRegular.ttf");
     pub const GOOGLE_SANS_CODE: &[u8] =
         include_bytes!("../assets/fonts/google-sans/GoogleSansCode-Regular.ttf");
     pub const GOOGLE_SANS_CODE_MEDIUM: &[u8] =

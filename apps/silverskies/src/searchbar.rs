@@ -9,7 +9,7 @@ use ss_core::{Location, SavedLocation};
 
 use crate::app::Action;
 use crate::search;
-use crate::theme::{alpha, c32, c32a};
+use crate::theme::c32;
 
 const DEBOUNCE: Duration = Duration::from_millis(350);
 const MAX_PLACES: usize = 4;
@@ -174,17 +174,33 @@ impl SearchBar {
         } else {
             "Search city or keyword… (e.g. Tucson, AZ · radar · weather in Paris tomorrow)"
         };
-        // A fixed-height square field: magnifier, text, SEARCH button, all
-        // vertically centred; the outline turns accent while typing.
-        let field_h = 40.0;
-        let (field_rect, _) = ui.allocate_exact_size(egui::vec2(width, field_h), Sense::hover());
-        ui.painter().rect_filled(field_rect, 0.0, c32(p.surface));
-        let btn_w = 92.0;
-        let text_w = (width - 12.0 - 18.0 - 8.0 - btn_w - 4.0 - 8.0).max(80.0);
+        // Material 3 search bar: a full-round container, leading magnifier,
+        // trailing filled "Search" button; it lifts a tone while focused.
+        let sch = crate::theme::scheme(p);
+        let field_h = 52.0;
+        let (field_rect, field_resp) =
+            ui.allocate_exact_size(egui::vec2(width, field_h), Sense::hover());
+        let edit_id = ui.make_persistent_id("search_text");
+        let focused_before = ui.memory(|m| m.has_focus(edit_id));
+        let fill = if focused_before {
+            sch.surface_container_highest
+        } else if field_resp.hovered() {
+            sch.surface_container_high
+                .lerp_to_gamma(sch.on_surface, 0.05)
+        } else {
+            sch.surface_container_high
+        };
+        ui.painter()
+            .rect_filled(field_rect, CornerRadius::same(255), fill);
+        let btn_w = 96.0;
+        let text_w = (width - 18.0 - 22.0 - 8.0 - btn_w - 8.0 - 8.0).max(80.0);
         let edit = egui::TextEdit::singleline(&mut self.text)
-            .hint_text(RichText::new(hint).color(c32a(p.text3)))
+            .id(edit_id)
+            .hint_text(RichText::new(hint).color(sch.on_surface_variant))
+            .font(egui::FontId::proportional(15.5))
+            .text_color(sch.on_surface)
             .desired_width(text_w)
-            .min_size(egui::vec2(text_w, field_h - 8.0))
+            .min_size(egui::vec2(text_w, field_h - 12.0))
             .align(egui::Align2::LEFT_CENTER)
             .margin(Margin::symmetric(4, 0))
             .frame(egui::Frame::NONE);
@@ -192,45 +208,32 @@ impl SearchBar {
         let mut child = ui.new_child(
             egui::UiBuilder::new()
                 .id_salt("search_field")
-                .max_rect(field_rect.shrink2(egui::vec2(0.0, 4.0)))
+                .max_rect(field_rect.shrink2(egui::vec2(0.0, 6.0)))
                 .layout(egui::Layout::left_to_right(egui::Align::Center)),
         );
         child.spacing_mut().item_spacing.x = 4.0;
-        child.add_space(12.0);
+        child.add_space(18.0);
         // Magnifier, painted (no font has a reliable glyph for it).
-        let (r, _) = child.allocate_exact_size(egui::vec2(18.0, 18.0), Sense::hover());
-        let stroke = egui::Stroke::new(1.6, c32a(p.text2));
+        let (r, _) = child.allocate_exact_size(egui::vec2(22.0, 22.0), Sense::hover());
+        let stroke = egui::Stroke::new(2.2, sch.on_surface_variant);
         let c = r.center() - egui::vec2(1.5, 1.5);
-        child.painter().circle_stroke(c, 5.5, stroke);
-        child
-            .painter()
-            .line_segment([c + egui::vec2(4.0, 4.0), c + egui::vec2(8.0, 8.0)], stroke);
-        child.add_space(4.0);
+        child.painter().circle_stroke(c, 6.5, stroke);
+        crate::m3::rounded_line(
+            child.painter(),
+            c + egui::vec2(4.8, 4.8),
+            c + egui::vec2(9.0, 9.0),
+            2.4,
+            sch.on_surface_variant,
+        );
+        child.add_space(6.0);
         let resp = child.add(edit);
-        // The design's square SEARCH button, flush right inside the field.
         child.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.add_space(4.0);
-            let btn =
-                egui::Button::new(crate::theme::caps("Search", 11.0, crate::theme::accent2(p)))
-                    .fill(crate::theme::glow(p))
-                    .stroke(egui::Stroke::new(1.0, alpha(p.a0, 128)))
-                    .min_size(egui::vec2(btn_w, field_h - 10.0));
+            ui.add_space(6.0);
+            let btn = egui::Button::new(crate::theme::label("Search", 14.0, sch.on_primary))
+                .fill(sch.primary)
+                .min_size(egui::vec2(btn_w, field_h - 12.0));
             search_clicked = ui.add(btn).clicked();
         });
-        let focused_now = resp.has_focus();
-        ui.painter().rect_stroke(
-            field_rect,
-            0.0,
-            egui::Stroke::new(
-                1.0,
-                if focused_now {
-                    alpha(p.a0, 160)
-                } else {
-                    c32a(p.border)
-                },
-            ),
-            egui::StrokeKind::Inside,
-        );
 
         if resp.changed() {
             self.edited_at = Some(Instant::now());
@@ -293,15 +296,15 @@ impl SearchBar {
                 .fixed_pos(field_rect.left_bottom() + egui::vec2(0.0, 6.0));
             let inner = area.show(ui.ctx(), |ui| {
                 egui::Frame::popup(ui.style())
-                    .fill(c32(p.surface))
-                    .corner_radius(CornerRadius::ZERO)
-                    .stroke(egui::Stroke::new(1.0, c32a(p.border)))
-                    .inner_margin(Margin::same(4))
+                    .fill(sch.surface_container_high)
+                    .corner_radius(CornerRadius::same(crate::m3::corner::EXTRA_LARGE))
+                    .stroke(egui::Stroke::NONE)
+                    .inner_margin(Margin::same(8))
                     .show(ui, |ui| {
                         ui.set_width(field_rect.width() - 12.0);
                         for (i, s) in items.iter().enumerate() {
                             let row = ui.allocate_response(
-                                egui::vec2(ui.available_width(), 38.0),
+                                egui::vec2(ui.available_width(), 44.0),
                                 Sense::click(),
                             );
                             let hot = row.hovered() || i == self.selected;
@@ -309,31 +312,43 @@ impl SearchBar {
                                 self.selected = i;
                             }
                             if hot {
-                                ui.painter()
-                                    .rect_filled(row.rect, 0.0, crate::theme::glow(p));
                                 ui.painter().rect_filled(
-                                    egui::Rect::from_min_size(
-                                        row.rect.min,
-                                        egui::vec2(2.0, row.rect.height()),
-                                    ),
-                                    0.0,
-                                    c32(p.a0),
+                                    row.rect,
+                                    CornerRadius::same(255),
+                                    sch.secondary_container,
                                 );
                             }
                             let painter = ui.painter_at(row.rect);
                             let y = row.rect.center().y;
-                            painter.text(
-                                egui::pos2(row.rect.left() + 12.0, y),
-                                egui::Align2::LEFT_CENTER,
-                                s.kind.to_uppercase(),
-                                crate::theme::mono_medium_font(10.0),
-                                crate::theme::accent2(p),
+                            // Kind as a small tonal chip.
+                            let kg = painter.layout_no_wrap(
+                                s.kind.to_string(),
+                                crate::theme::medium_font(11.5),
+                                sch.on_tertiary_container,
                             );
-                            let title_x = row.rect.left() + 76.0;
+                            let chip = egui::Rect::from_min_size(
+                                egui::pos2(row.rect.left() + 10.0, y - 11.0),
+                                egui::vec2(kg.size().x + 16.0, 22.0),
+                            );
+                            painter.rect_filled(
+                                chip,
+                                CornerRadius::same(255),
+                                sch.tertiary_container,
+                            );
+                            painter.galley(
+                                chip.center() - kg.size() / 2.0,
+                                kg,
+                                sch.on_tertiary_container,
+                            );
+                            let title_x = row.rect.left() + 96.0;
                             let g = painter.layout_no_wrap(
                                 s.title.clone(),
-                                egui::FontId::proportional(14.5),
-                                c32(p.text),
+                                egui::FontId::proportional(15.0),
+                                if hot {
+                                    sch.on_secondary_container
+                                } else {
+                                    sch.on_surface
+                                },
                             );
                             let tw = g.size().x;
                             painter.galley(
@@ -346,8 +361,8 @@ impl SearchBar {
                                     egui::pos2(title_x + tw + 10.0, y),
                                     egui::Align2::LEFT_CENTER,
                                     d,
-                                    egui::FontId::proportional(12.0),
-                                    c32a(p.text3),
+                                    egui::FontId::proportional(12.5),
+                                    sch.on_surface_variant,
                                 );
                             }
                             if row.clicked() {

@@ -239,9 +239,9 @@ pub fn about(ctx: &Context, app: &mut App) {
         .show(ctx, |ui| {
             let logo = crate::theme::logomark(ui, &p, 56.0);
             ui.add(logo);
-            ui.label(crate::theme::caps(
+            ui.label(crate::theme::label(
                 &format!("Version {}", env!("CARGO_PKG_VERSION")),
-                10.0,
+                13.0,
                 c32a(p.text3),
             ));
             ui.add_space(6.0);

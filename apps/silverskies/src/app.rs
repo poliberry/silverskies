@@ -22,11 +22,11 @@ use crate::radar::Radar;
 use crate::search::{self, DayRef, Intent, Parsed, Topic};
 use crate::searchbar::SearchBar;
 use crate::summary;
-use crate::theme::{self, c32, c32a};
+use crate::theme::{self, c32};
 use crate::worker::{Event, Worker};
 
 /// Height of the top header.
-const HEADER_H: f32 = 78.0;
+const HEADER_H: f32 = 80.0;
 /// Width of the places sidebar.
 const SIDEBAR_W: f32 = 270.0;
 const MAPS_EVERY: Duration = Duration::from_secs(5 * 60);
@@ -771,6 +771,7 @@ impl App {
 
     fn top_bar(&mut self, ui: &mut Ui, actions: &mut Vec<Action>) {
         let p = self.palette;
+        let s = theme::scheme(&p);
         let tf = self.config.time_format;
         let clock_fmt = match tf {
             ss_core::TimeFormat::H12 => "%-I:%M %p",
@@ -783,40 +784,29 @@ impl App {
         ui.horizontal_centered(|ui| {
             // Brand + last refresh, as wide as the sidebar below it.
             ui.allocate_ui_with_layout(
-                egui::vec2(SIDEBAR_W - 16.0, 56.0),
+                egui::vec2(SIDEBAR_W - 20.0, 58.0),
                 Layout::top_down(Align::Min),
                 |ui| {
-                    ui.spacing_mut().item_spacing.y = 2.0;
-                    let logo = theme::logomark(ui, &p, 38.0);
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    let logo = theme::logomark(ui, &p, 36.0);
                     ui.add(logo);
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 6.0;
-                        let (dot, _) =
-                            ui.allocate_exact_size(egui::vec2(6.0, 12.0), egui::Sense::hover());
-                        ui.painter().rect_filled(
-                            egui::Rect::from_center_size(dot.center(), egui::vec2(5.0, 5.0)),
-                            0.0,
-                            c32(p.a0),
-                        );
-                        ui.label(theme::caps("Last refresh", 10.0, c32a(p.text3)));
-                        let stamp = self
-                            .last_refresh
-                            .map(|t| {
-                                // Same zone as the clock.
-                                let at = now
-                                    - chrono::Duration::from_std(t.elapsed()).unwrap_or_default();
-                                at.format(clock_fmt).to_string()
-                            })
-                            .unwrap_or_else(|| "—".into());
-                        ui.label(theme::caps(&stamp, 10.0, theme::accent2(&p)));
-                    });
+                    let stamp = self
+                        .last_refresh
+                        .map(|t| {
+                            // Same zone as the clock.
+                            let at =
+                                now - chrono::Duration::from_std(t.elapsed()).unwrap_or_default();
+                            format!("Updated {}", at.format(clock_fmt))
+                        })
+                        .unwrap_or_else(|| "Not updated yet".into());
+                    ui.label(RichText::new(stamp).size(12.5).color(s.on_surface_variant));
                 },
             );
-            ui.add_space(8.0);
+            ui.add_space(4.0);
 
-            // Fill the space up to the right-hand controls.
-            let right_w = 300.0;
-            let search_w = (ui.available_width() - right_w - 8.0).clamp(240.0, 980.0);
+            // The search bar fills the space up to the right-hand controls.
+            let right_w = 360.0;
+            let search_w = (ui.available_width() - right_w - 8.0).clamp(240.0, 900.0);
             let places = &self.locations.saved_locations;
             if let Some(a) = self.search.show(ui, &p, search_w, places, self.ai_ready()) {
                 actions.push(a);
@@ -825,167 +815,115 @@ impl App {
                 self.worker.geocode(q);
             }
 
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.allocate_ui_with_layout(
-                    egui::vec2(right_w - 20.0, 56.0),
-                    Layout::top_down(Align::Max),
-                    |ui| {
-                        ui.spacing_mut().item_spacing.y = 6.0;
-                        let date = now.format("%a %-d %b %Y").to_string();
-                        ui.label(theme::caps(
-                            &format!("{date} — {}", now.format(clock_fmt)),
-                            10.5,
-                            c32a(p.text3),
-                        ));
-                        ui.horizontal(|ui| {
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                ui.spacing_mut().item_spacing.x = 4.0;
-                                let sq = egui::vec2(32.0, 28.0);
-                                if ui
-                                    .add(
-                                        egui::Button::new(theme::caps(
-                                            "Settings",
-                                            10.0,
-                                            c32a(p.text2),
-                                        ))
-                                        .min_size(sq),
-                                    )
-                                    .clicked()
-                                {
-                                    actions.push(Action::OpenSettings);
-                                }
-                                for (u, label) in [(UnitPref::C, "°C"), (UnitPref::F, "°F")] {
-                                    let on = self.config.units == u;
-                                    let btn = egui::Button::new(theme::caps(
-                                        label,
-                                        11.0,
-                                        if on {
-                                            theme::accent2(&p)
-                                        } else {
-                                            c32a(p.text2)
-                                        },
-                                    ))
-                                    .min_size(sq)
-                                    .fill(if on { theme::glow(&p) } else { c32(p.surface) })
-                                    .stroke(
-                                        egui::Stroke::new(
-                                            1.0,
-                                            if on {
-                                                theme::alpha(p.a0, 140)
-                                            } else {
-                                                c32a(p.border)
-                                            },
-                                        ),
-                                    );
-                                    if ui.add(btn).clicked() && !on {
-                                        actions.push(Action::Intent(Intent::Units(match u {
-                                            UnitPref::C => search::Units::Celsius,
-                                            UnitPref::F => search::Units::Fahrenheit,
-                                        })));
-                                    }
-                                }
-                                ui.add_space(6.0);
-                                if !self.loading.is_empty() {
-                                    ui.add(egui::Spinner::new().size(16.0).color(c32(p.a0)));
-                                } else if ui
-                                    .add(
-                                        egui::Button::new(theme::caps(
-                                            "↻ Refresh",
-                                            10.0,
-                                            c32a(p.text2),
-                                        ))
-                                        .min_size(sq),
-                                    )
-                                    .clicked()
-                                {
-                                    actions.push(Action::Intent(Intent::Refresh));
-                                }
-                            });
-                        });
-                    },
+            // Right-hand controls on one shared centre line (the search
+            // bar's), placed explicitly so they align exactly.
+            let row = ui.available_rect_before_wrap();
+            let cy = row.center().y;
+            ui.allocate_rect(row, egui::Sense::hover());
+            let h = 40.0;
+            let mut right = row.right();
+            let mut take = |w: f32| {
+                let r = egui::Rect::from_min_size(
+                    egui::pos2(right - w, cy - h / 2.0),
+                    egui::vec2(w, h),
                 );
-            });
+                right -= w + 8.0;
+                r
+            };
+            if crate::views::round_button_at(ui, &s, take(h), "⚙", "Settings (Ctrl+,)").clicked()
+            {
+                actions.push(Action::OpenSettings);
+            }
+            let items: Vec<(String, bool, Option<egui::Color32>)> = [UnitPref::F, UnitPref::C]
+                .iter()
+                .map(|u| {
+                    let t = if *u == UnitPref::F { "°F" } else { "°C" };
+                    (t.to_string(), self.config.units == *u, None)
+                })
+                .collect();
+            let gw = crate::views::connected_group_width(ui, &items, 54.0);
+            if let Some(i) = crate::views::connected_group_in(ui, &s, &items, take(gw), 54.0) {
+                let u = if i == 0 { UnitPref::F } else { UnitPref::C };
+                if u != self.config.units {
+                    actions.push(Action::Intent(Intent::Units(match u {
+                        UnitPref::C => search::Units::Celsius,
+                        UnitPref::F => search::Units::Fahrenheit,
+                    })));
+                }
+            }
+            let refresh = take(h);
+            if !self.loading.is_empty() {
+                crate::m3::loading_indicator(
+                    ui.painter(),
+                    refresh.center(),
+                    40.0,
+                    ui.input(|i| i.time),
+                    s.primary,
+                    Some(s.primary_container),
+                );
+            } else if crate::views::round_button_at(ui, &s, refresh, "↻", "Refresh (F5)").clicked()
+            {
+                actions.push(Action::Intent(Intent::Refresh));
+            }
+            ui.painter().text(
+                egui::pos2(right, cy),
+                egui::Align2::RIGHT_CENTER,
+                format!("{}\n{}", now.format("%a %-d %b"), now.format(clock_fmt)),
+                egui::FontId::proportional(12.5),
+                s.on_surface_variant,
+            );
         });
     }
 
     /// Place title and coordinates, with the view tabs on the right.
     fn title_row(&self, ui: &mut Ui, actions: &mut Vec<Action>) {
         let p = self.palette;
+        let s = theme::scheme(&p);
         let n = self.active_alerts().len();
         ui.horizontal(|ui| {
             if let Some(l) = self.active() {
                 ui.vertical(|ui| {
-                    ui.spacing_mut().item_spacing.y = 2.0;
+                    ui.spacing_mut().item_spacing.y = 0.0;
                     ui.label(
                         RichText::new(l.label.split(',').next().unwrap_or(&l.label).trim())
-                            .font(theme::light_font(36.0))
-                            .color(c32(p.text)),
+                            .font(theme::display_font(40.0))
+                            .color(s.on_surface),
                     );
-                    ui.label(theme::caps(
-                        &ss_core::Location::new(l.lat, l.lon, "").coord_label(),
-                        10.5,
-                        c32a(p.text3),
-                    ));
+                    ui.label(
+                        RichText::new(ss_core::Location::new(l.lat, l.lon, "").coord_label())
+                            .size(13.0)
+                            .color(s.on_surface_variant),
+                    );
                 });
             }
-            ui.with_layout(Layout::right_to_left(Align::Max), |ui| {
-                ui.spacing_mut().item_spacing.x = 2.0;
-                for (tab, label) in [
-                    (
-                        Tab::Alerts,
-                        if n > 0 {
-                            format!("Alerts · {n}")
-                        } else {
-                            "Alerts".into()
-                        },
-                    ),
-                    (Tab::Radar, "Radar".to_string()),
-                    (Tab::Forecast, "Forecast".to_string()),
-                ] {
-                    let on = self.tab == tab;
-                    let alert_tab = tab == Tab::Alerts && n > 0;
-                    let color = if on {
-                        theme::accent2(&p)
-                    } else if alert_tab {
-                        c32(p.danger)
-                    } else {
-                        c32a(p.text3)
-                    };
-                    let (rect, resp) =
-                        ui.allocate_exact_size(egui::vec2(110.0, 34.0), egui::Sense::click());
-                    if on {
-                        ui.painter().rect_filled(rect, 0.0, theme::glow(&p));
-                        ui.painter().rect_filled(
-                            egui::Rect::from_min_size(
-                                rect.left_bottom() - egui::vec2(0.0, 2.0),
-                                egui::vec2(rect.width(), 2.0),
-                            ),
-                            0.0,
-                            c32(p.a0),
-                        );
-                    } else if resp.hovered() {
-                        ui.painter().rect_filled(rect, 0.0, theme::alpha(p.a0, 14));
-                    }
-                    ui.painter().text(
-                        rect.center(),
-                        egui::Align2::CENTER_CENTER,
-                        label.to_uppercase(),
-                        theme::mono_medium_font(11.0),
-                        color,
-                    );
-                    if resp.clicked() {
-                        actions.push(Action::Tab(tab));
-                    }
-                }
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let tabs = [Tab::Forecast, Tab::Radar, Tab::Alerts];
+                let items: Vec<(String, bool, Option<egui::Color32>)> = tabs
+                    .iter()
+                    .map(|t| {
+                        let text = match t {
+                            Tab::Forecast => "Forecast".to_string(),
+                            Tab::Radar => "Radar".to_string(),
+                            Tab::Alerts if n > 0 => format!("Alerts · {n}"),
+                            Tab::Alerts => "Alerts".to_string(),
+                        };
+                        let badge = (*t == Tab::Alerts && n > 0).then_some(s.error);
+                        (text, self.tab == *t, badge)
+                    })
+                    .collect();
+                ui.allocate_ui_with_layout(
+                    egui::vec2(340.0, 44.0),
+                    Layout::left_to_right(Align::Center),
+                    |ui| {
+                        if let Some(i) = crate::views::connected_group(ui, &s, &items, 44.0, 104.0)
+                        {
+                            actions.push(Action::Tab(tabs[i]));
+                        }
+                    },
+                );
             });
         });
-        let r = ui.min_rect();
-        ui.painter().hline(
-            r.x_range(),
-            ui.cursor().top() + 2.0,
-            egui::Stroke::new(1.0, c32a(p.border)),
-        );
-        ui.add_space(10.0);
+        ui.add_space(12.0);
     }
 }
 
@@ -1015,6 +953,7 @@ impl eframe::App for App {
         let header = egui::Panel::top("top")
             .exact_size(HEADER_H)
             .resizable(false)
+            .show_separator_line(false)
             .frame(
                 egui::Frame::NONE
                     .fill(c32(p.bg))
@@ -1022,23 +961,10 @@ impl eframe::App for App {
             )
             .show(ui, |ui| self.top_bar(ui, &mut actions));
         let header_rect = header.response.rect;
-        let header_bottom = header_rect.bottom();
 
-        // A hairline under the header, then the shared top glow along the
-        // header's top edge (below an open menu bar): the sky accent, pulsing
+        // The shared top glow along the header's top edge (below an open menu bar): the sky accent, pulsing
         // in the alert's colour while a severe alert is active.
         {
-            let r = ui.ctx().content_rect();
-            ui.ctx()
-                .layer_painter(egui::LayerId::new(
-                    egui::Order::Middle,
-                    egui::Id::unique("header_rule"),
-                ))
-                .hline(
-                    r.x_range(),
-                    header_bottom - 0.5,
-                    egui::Stroke::new(1.0, c32a(p.border)),
-                );
             if self.config.top_glow_enabled {
                 let alerts = self.active_alerts();
                 let pulse = ss_core::alerts::colors::active_pulse_color(&alerts);
@@ -1057,6 +983,7 @@ impl eframe::App for App {
         egui::Panel::left("places")
             .exact_size(SIDEBAR_W)
             .resizable(false)
+            .show_separator_line(false)
             .frame(egui::Frame::NONE.fill(c32(p.bg)).inner_margin(Margin {
                 left: 20,
                 right: 10,
@@ -1106,10 +1033,14 @@ impl eframe::App for App {
                 egui::Area::new(egui::Id::unique("notice"))
                     .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -24.0))
                     .show(ui.ctx(), |ui| {
-                        theme::card_frame(&p)
-                            .inner_margin(Margin::symmetric(16, 10))
+                        // A Material snackbar: inverse surface, rounded.
+                        let s = theme::scheme(&p);
+                        egui::Frame::new()
+                            .fill(s.inverse_surface)
+                            .corner_radius(crate::m3::corner::SMALL)
+                            .inner_margin(Margin::symmetric(18, 14))
                             .show(ui, |ui| {
-                                ui.label(RichText::new(msg).color(c32(p.text)));
+                                ui.label(RichText::new(msg).color(s.inverse_on_surface));
                             });
                     });
                 ui.ctx().request_repaint_after(Duration::from_millis(500));
