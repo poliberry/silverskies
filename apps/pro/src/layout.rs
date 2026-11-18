@@ -355,18 +355,21 @@ fn run_panel(
     }
 }
 
-/// Tool strip buttons: (label, panel it toggles).
-const STRIP: [(&str, PanelKind); 9] = [
-    ("LOC", PanelKind::Locations),
-    ("RDR", PanelKind::Radar),
-    ("NOW", PanelKind::Conditions),
-    ("HRS", PanelKind::Hourly),
-    ("7DY", PanelKind::Forecast),
-    ("LOG", PanelKind::AuditLog),
-    ("RAD", PanelKind::Radio),
-    ("STM", PanelKind::Storms),
-    ("SKW", PanelKind::Sounding),
-];
+/// Tool strip buttons: (icon, panel it toggles).
+const STRIP: [(&str, PanelKind); 9] = {
+    use ss_assets::symbols as i;
+    [
+        (i::LOCATION_ON, PanelKind::Locations),
+        (i::RADAR, PanelKind::Radar),
+        (i::PARTLY_CLOUDY_DAY, PanelKind::Conditions),
+        (i::SCHEDULE, PanelKind::Hourly),
+        (i::CALENDAR_MONTH, PanelKind::Forecast),
+        (i::RECEIPT_LONG, PanelKind::AuditLog),
+        (i::RADIO, PanelKind::Radio),
+        (i::THUNDERSTORM, PanelKind::Storms),
+        (i::STACKED_LINE_CHART, PanelKind::Sounding),
+    ]
+};
 
 /// The vertical tool strip: one block per pane; filled = docked.
 fn tool_strip(
@@ -380,7 +383,7 @@ fn tool_strip(
     ui.painter()
         .vline(strip.left(), strip.y_range(), Stroke::new(1.5, c32(p.a0)));
     let mut y = strip.top() + 6.0;
-    for (label, kind) in STRIP {
+    for (glyph, kind) in STRIP {
         let b = Rect::from_min_size(
             pos2(strip.left() + 5.0, y),
             vec2(strip.width() - 10.0, 34.0),
@@ -410,8 +413,8 @@ fn tool_strip(
         ui.painter().text(
             b.center(),
             Align2::CENTER_CENTER,
-            label,
-            FontId::monospace(10.5),
+            glyph,
+            crate::theme::icon(20.0),
             fg,
         );
         if resp.clicked() {
@@ -470,29 +473,49 @@ fn dock_pane(
     }
 
     if hot && state.dragging.is_none() {
-        let buttons: [(&str, Option<LayoutAction>); 6] = [
-            ("×", Some(LayoutAction::Hide(kind))),
-            ("↗", Some(LayoutAction::Popout(kind))),
-            ("▾", neighbor_move(layout, kind, Dir::Down)),
-            ("▴", neighbor_move(layout, kind, Dir::Up)),
-            ("▸", neighbor_move(layout, kind, Dir::Right)),
-            ("◂", neighbor_move(layout, kind, Dir::Left)),
+        use ss_assets::symbols as i;
+        let buttons: [(&str, &str, Option<LayoutAction>); 6] = [
+            (i::CLOSE, "Hide pane", Some(LayoutAction::Hide(kind))),
+            (
+                i::OPEN_IN_NEW,
+                "Undock into its own window (or double-click the title)",
+                Some(LayoutAction::Popout(kind)),
+            ),
+            (
+                i::EXPAND_MORE,
+                "Move pane down",
+                neighbor_move(layout, kind, Dir::Down),
+            ),
+            (
+                i::EXPAND_LESS,
+                "Move pane up",
+                neighbor_move(layout, kind, Dir::Up),
+            ),
+            (
+                i::CHEVRON_RIGHT,
+                "Move pane right",
+                neighbor_move(layout, kind, Dir::Right),
+            ),
+            (
+                i::CHEVRON_LEFT,
+                "Move pane left",
+                neighbor_move(layout, kind, Dir::Left),
+            ),
         ];
         let mut x = title.right() - 2.0;
-        for (glyph, action) in buttons {
+        for (glyph, tip, action) in buttons {
             let Some(action) = action else { continue };
             let b = Rect::from_min_size(pos2(x - 20.0, title.top()), vec2(20.0, TITLE_H));
             x -= 20.0;
-            let tip = match glyph {
-                "×" => "Hide pane",
-                "↗" => "Undock into its own window (or double-click the title)",
-                _ => "Move pane",
-            };
             let bresp = ui
                 .interact(b, tid.with(glyph), Sense::click())
                 .on_hover_text(tip);
             if bresp.hovered() {
-                let fill = if glyph == "×" { p.danger } else { PRO_BLUE };
+                let fill = if glyph == i::CLOSE {
+                    p.danger
+                } else {
+                    PRO_BLUE
+                };
                 ui.painter().rect_filled(b, 0.0, c32(fill));
             }
             let col = if bresp.hovered() {
@@ -504,7 +527,7 @@ fn dock_pane(
                 b.center(),
                 Align2::CENTER_CENTER,
                 glyph,
-                FontId::monospace(13.0),
+                crate::theme::icon(15.0),
                 col,
             );
             if bresp.clicked() {

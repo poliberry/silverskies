@@ -21,15 +21,34 @@ pub const FUNCTION_KEYS: [(&str, &str, Key); 12] = [
     ("SYNC", "refresh", Key::F2),
     ("LIVE", "radar live", Key::F3),
     ("CENTER", "radar recenter", Key::F4),
-    ("NEW RADR", "radar new", Key::F5),
+    ("NEW RADAR", "radar new", Key::F5),
     ("NOWCAST", "radar nowcast", Key::F6),
-    ("SAT", "radar satellite", Key::F7),
+    ("SATELLITE", "radar satellite", Key::F7),
     ("CELLS", "radar cells", Key::F8),
-    ("ALRT", "alerts list", Key::F9),
+    ("ALERTS", "alerts list", Key::F9),
     ("RADIO", "radio toggle", Key::F10),
     ("LAYOUT", "reset-layout", Key::F11),
     ("SETTINGS", "open settings", Key::F12),
 ];
+
+/// The icon shown with each function key, in the same order.
+const FKEY_ICONS: [&str; 12] = {
+    use ss_assets::symbols as i;
+    [
+        i::BOOKMARK_ADD,
+        i::SYNC,
+        i::SENSORS,
+        i::MY_LOCATION,
+        i::ADD,
+        i::FAST_FORWARD,
+        i::SATELLITE_ALT,
+        i::RADIO_BUTTON_CHECKED,
+        i::WARNING,
+        i::RADIO,
+        i::VIEW_QUILT,
+        i::SETTINGS,
+    ]
+};
 
 fn push(cmds: &mut Vec<Command>, line: &str) {
     match parse(line) {
@@ -156,10 +175,19 @@ pub fn function_keys(ui: &mut Ui, sh: &Shared, cmds: &mut Vec<Command>) {
                 .inner_margin(egui::Margin::symmetric(8, 2)),
         )
         .show(ui, |ui| {
+            // Icon, number and label; icons and numbers only when the
+            // window is too narrow for the labels.
+            let font = FontId::monospace(11.5);
+            let full: f32 = FUNCTION_KEYS
+                .iter()
+                .enumerate()
+                .map(|(i, (label, _, _))| fkey_width(ui, &font, i + 1, Some(label)) + 2.0)
+                .sum();
+            let compact = full > ui.available_width();
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
                 for (i, (label, line, _)) in FUNCTION_KEYS.iter().enumerate() {
-                    if fkey(ui, &p, i + 1, label) {
+                    if fkey(ui, &p, i + 1, FKEY_ICONS[i], label, compact) {
                         push(cmds, line);
                     }
                 }
@@ -167,41 +195,72 @@ pub fn function_keys(ui: &mut Ui, sh: &Shared, cmds: &mut Vec<Command>) {
         });
 }
 
-/// `1) SAVE`: amber number, white label; blue when hovered.
-fn fkey(ui: &mut Ui, p: &ss_core::theme::Palette, n: usize, label: &str) -> bool {
+fn fkey_width(ui: &Ui, font: &FontId, n: usize, label: Option<&str>) -> f32 {
+    let w = |t: String| {
+        ui.painter()
+            .layout_no_wrap(t, font.clone(), Color32::WHITE)
+            .size()
+            .x
+    };
+    let nw = w(format!("{n})"));
+    let lw = label.map_or(0.0, |l| w(l.to_owned()) + 4.0);
+    6.0 + 16.0 + 4.0 + nw + lw + 8.0
+}
+
+/// `▣ 1) SAVE`: icon, amber number and white label (the label drops out
+/// when `compact`); blue when hovered.
+fn fkey(
+    ui: &mut Ui,
+    p: &ss_core::theme::Palette,
+    n: usize,
+    glyph: &str,
+    label: &str,
+    compact: bool,
+) -> bool {
     let font = FontId::monospace(11.5);
-    let num = format!("{n})");
-    let nw = ui
-        .painter()
-        .layout_no_wrap(num.clone(), font.clone(), Color32::WHITE)
-        .size()
-        .x;
-    let lw = ui
-        .painter()
-        .layout_no_wrap(label.to_owned(), font.clone(), Color32::WHITE)
-        .size()
-        .x;
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(nw + lw + 18.0, 20.0), Sense::click());
+    let width = fkey_width(ui, &font, n, (!compact).then_some(label));
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, 20.0), Sense::click());
     let hot = resp.hovered();
     if hot {
         ui.painter().rect_filled(rect, 0.0, c32(PRO_BLUE));
     }
     let y = rect.center().y;
+    let mut x = rect.left() + 6.0;
     ui.painter().text(
-        egui::pos2(rect.left() + 6.0, y),
+        egui::pos2(x + 8.0, y),
+        Align2::CENTER_CENTER,
+        glyph,
+        crate::theme::icon(16.0),
+        if hot { Color32::WHITE } else { c32(p.a0) },
+    );
+    x += 20.0;
+    let num = ui.painter().text(
+        egui::pos2(x, y),
         Align2::LEFT_CENTER,
-        num,
+        format!("{n})"),
         font.clone(),
         if hot { Color32::WHITE } else { c32(p.a0) },
     );
-    ui.painter().text(
-        egui::pos2(rect.left() + 10.0 + nw, y),
-        Align2::LEFT_CENTER,
-        label,
-        font,
-        if hot { Color32::WHITE } else { c32(p.text) },
-    );
-    resp.on_hover_text(format!("F{n}")).clicked()
+    x = num.right() + 4.0;
+    if !compact {
+        ui.painter().text(
+            egui::pos2(x, y),
+            Align2::LEFT_CENTER,
+            label,
+            font,
+            if hot { Color32::WHITE } else { c32(p.text) },
+        );
+    }
+    let tip = format!("{} (F{n})", title_case(label));
+    resp.on_hover_text(tip).clicked()
+}
+
+fn title_case(s: &str) -> String {
+    let lower = s.to_lowercase();
+    let mut c = lower.chars();
+    c.next()
+        .map(|f| f.to_uppercase().collect::<String>() + c.as_str())
+        .unwrap_or_default()
 }
 
 /// Temperature change over the next three hours, in °C.

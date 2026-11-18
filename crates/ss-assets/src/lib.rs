@@ -4,6 +4,7 @@
 
 pub mod glow;
 pub mod menubar;
+pub mod symbols;
 pub mod text;
 
 use egui::{ColorImage, Context, Id, TextureHandle, TextureOptions};

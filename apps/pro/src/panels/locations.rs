@@ -86,8 +86,8 @@ impl Panel for LocationsPanel {
                         painter.text(
                             x_rect.center(),
                             Align2::CENTER_CENTER,
-                            "×",
-                            font.clone(),
+                            ss_assets::symbols::CLOSE,
+                            crate::theme::icon(15.0),
                             c32(c),
                         );
                         right = x_rect.left() - 2.0;

@@ -213,10 +213,12 @@ impl Panel for StormsPanel {
                     );
                 }
                 ui.add_space(4.0);
-                ui.label(
-                    RichText::new(format!("-- TROPICAL CYCLONES, WORLDWIDE ({}) --", tropical.len()))
-                        .monospace()
-                        .color(c32(p.a0)),
+                section(
+                    ui,
+                    &p,
+                    ss_assets::symbols::CYCLONE,
+                    &format!("TROPICAL ({})", tropical.len()),
+                    "Tropical cyclones worldwide (GDACS)",
                 );
                 if tropical.is_empty() {
                     placeholder(ui, &p, "no active tropical cyclones");
@@ -236,37 +238,40 @@ impl Panel for StormsPanel {
                                 );
                             });
                         ui.label(RichText::new(&t.name).monospace().color(c32(p.text)));
-                        ui.label(
-                            RichText::new(format!(
-                                "{:.0} km {} · {:.0} km/h",
-                                km,
-                                compass_8(bearing_deg(lat, lon, t.lat, t.lon)),
-                                t.max_wind_kmh
-                            ))
-                            .monospace()
-                            .color(c32a(p.text2)),
-                        );
                     });
-                    ui.label(
-                        RichText::new(format!(
-                            "  {}{}",
-                            t.category,
-                            if t.country.is_empty() {
-                                String::new()
-                            } else {
-                                format!(" · {}", t.country)
-                            }
-                        ))
-                        .monospace()
-                        .size(11.5)
-                        .color(c32a(p.text3)),
+                    // Category without GDACS's "(maximum wind speed of …)"
+                    // (the wind is on the line below).
+                    let category = t.category.split(" (").next().unwrap_or_default();
+                    let mut detail = format!(
+                        "{:.0} km {} · {:.0} km/h",
+                        km,
+                        compass_8(bearing_deg(lat, lon, t.lat, t.lon)),
+                        t.max_wind_kmh
                     );
+                    if !category.is_empty() {
+                        detail = format!("{category} · {detail}");
+                    }
+                    if !t.country.is_empty() {
+                        detail.push_str(&format!(" · {}", t.country));
+                    }
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(detail)
+                                .monospace()
+                                .size(11.5)
+                                .color(c32a(p.text2)),
+                        )
+                        .wrap(),
+                    );
+                    ui.add_space(3.0);
                 }
                 ui.add_space(6.0);
-                ui.label(
-                    RichText::new(format!("-- CELLS WITHIN {NEAR_KM:.0} KM ({}) --", cells.len()))
-                        .monospace()
-                        .color(c32(p.a0)),
+                section(
+                    ui,
+                    &p,
+                    ss_assets::symbols::RADIO_BUTTON_CHECKED,
+                    &format!("CELLS ≤{NEAR_KM:.0} KM ({})", cells.len()),
+                    &format!("Storm cells within {NEAR_KM:.0} km of this place"),
                 );
                 if mosaic {
                     ui.label(
@@ -285,10 +290,12 @@ impl Panel for StormsPanel {
                     cell_row(ui, &p, c, lat, lon);
                 }
                 ui.add_space(6.0);
-                ui.label(
-                    RichText::new(format!("-- STORM REPORTS, 24 H, US ({}) --", reports.len()))
-                        .monospace()
-                        .color(c32(p.a0)),
+                section(
+                    ui,
+                    &p,
+                    ss_assets::symbols::CRISIS_ALERT,
+                    &format!("REPORTS 24 H ({})", reports.len()),
+                    "Local storm reports from the last 24 hours (US)",
                 );
                 if reports.is_empty() {
                     placeholder(ui, &p, "no storm reports nearby");
@@ -308,6 +315,23 @@ impl Panel for StormsPanel {
                 );
             });
     }
+}
+
+/// A section heading: an icon and a short title, the full description on hover.
+fn section(ui: &mut Ui, p: &ss_core::theme::Palette, glyph: &str, title: &str, tip: &str) {
+    ui.add_space(2.0);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 5.0;
+        ui.label(
+            RichText::new(glyph)
+                .font(crate::theme::icon(16.0))
+                .color(c32(p.a0)),
+        );
+        ui.label(RichText::new(title).monospace().color(c32(p.a0)));
+    })
+    .response
+    .on_hover_text(tip);
+    ui.add_space(1.0);
 }
 
 #[cfg(test)]

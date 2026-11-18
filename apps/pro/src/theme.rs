@@ -225,12 +225,26 @@ pub fn font_definitions() -> FontDefinitions {
             .families
             .insert(FontFamily::Name(fam.into()), chain(first));
     }
+    // Material Symbols icons (Private Use Area code points).
+    fonts.font_data.insert(
+        "MaterialSymbols".to_owned(),
+        Arc::new(FontData::from_static(ss_assets::symbols::FONT)),
+    );
+    fonts.families.insert(
+        FontFamily::Name("icons".into()),
+        vec!["MaterialSymbols".to_owned()],
+    );
     // True monospace for code, JSON and the raw config.
     fonts.families.insert(
         FontFamily::Name("code".into()),
         vec!["DejaVuSansMono".to_owned(), "DejaVuSans".to_owned()],
     );
     fonts
+}
+
+/// The icon font (draw `ss_assets::symbols` strings in it).
+pub fn icon(size: f32) -> FontId {
+    FontId::new(size, FontFamily::Name("icons".into()))
 }
 
 /// The monospace face for code and JSON.
@@ -292,6 +306,11 @@ mod tests {
             let id = FontId::new(13.0, fam.clone());
             let missing: Vec<char> = text.chars().filter(|c| !fonts.has_glyph(&id, *c)).collect();
             assert!(missing.is_empty(), "{fam:?} missing glyphs: {missing:?}");
+        }
+        let icons = icon(16.0);
+        for s in ss_assets::symbols::ALL {
+            let c = s.chars().next().unwrap();
+            assert!(fonts.has_glyph(&icons, c), "icon font lacks {:x}", c as u32);
         }
     }
 }

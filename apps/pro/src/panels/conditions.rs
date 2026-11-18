@@ -55,18 +55,35 @@ impl Panel for ConditionsPanel {
                     );
                 });
                 let wind_val = fmt_wind(c.wind_speed_kmh, units);
+                use ss_assets::symbols as i;
                 let rows = [
-                    ("T", fmt_temp(c.temperature_c, units), p.a0),
-                    ("FL", fmt_temp(c.apparent_temperature_c, units), PRO_BLUE),
-                    ("RH", format!("{:.0}%", c.relative_humidity_pct), p.a0),
                     (
-                        "W",
+                        i::DEVICE_THERMOSTAT,
+                        "Temperature",
+                        fmt_temp(c.temperature_c, units),
+                        p.a0,
+                    ),
+                    (
+                        i::ACCESSIBILITY_NEW,
+                        "Feels like",
+                        fmt_temp(c.apparent_temperature_c, units),
+                        PRO_BLUE,
+                    ),
+                    (
+                        i::HUMIDITY_PERCENTAGE,
+                        "Relative humidity",
+                        format!("{:.0}%", c.relative_humidity_pct),
+                        p.a0,
+                    ),
+                    (
+                        i::AIR,
+                        "Wind",
                         format!("{wind_val} {}", compass_8(c.wind_direction_deg)),
                         PRO_BLUE,
                     ),
                 ];
-                for (label, value, tag) in rows {
-                    readout_row(ui, &p, label, &value, tag);
+                for (glyph, what, value, tag) in rows {
+                    readout_row(ui, &p, glyph, &value, tag).on_hover_text(what);
                 }
                 ui.add_space(4.0);
 
@@ -116,9 +133,15 @@ impl Panel for ConditionsPanel {
 
 /// One DRO-style line: a coloured label block on the left and a large
 /// monospace value right-aligned on black.
-fn readout_row(ui: &mut Ui, p: &ss_core::theme::Palette, label: &str, value: &str, tag: [u8; 3]) {
+fn readout_row(
+    ui: &mut Ui,
+    p: &ss_core::theme::Palette,
+    glyph: &str,
+    value: &str,
+    tag: [u8; 3],
+) -> egui::Response {
     let h = 34.0;
-    let (rect, _) =
+    let (rect, resp) =
         ui.allocate_exact_size(egui::vec2(ui.available_width(), h), egui::Sense::hover());
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 0.0, egui::Color32::BLACK);
@@ -133,8 +156,8 @@ fn readout_row(ui: &mut Ui, p: &ss_core::theme::Palette, label: &str, value: &st
     painter.text(
         tag_rect.center(),
         egui::Align2::CENTER_CENTER,
-        label,
-        egui::FontId::monospace(16.0),
+        glyph,
+        crate::theme::icon(20.0),
         on(tag),
     );
     painter.text(
@@ -144,4 +167,5 @@ fn readout_row(ui: &mut Ui, p: &ss_core::theme::Palette, label: &str, value: &st
         egui::FontId::monospace(22.0),
         egui::Color32::WHITE,
     );
+    resp
 }

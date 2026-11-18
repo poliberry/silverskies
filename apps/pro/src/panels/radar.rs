@@ -972,6 +972,50 @@ fn mono_button(ui: &mut Ui, text: RichText) -> egui::Response {
     ui.add(egui::Button::new(text.monospace()))
 }
 
+/// A square icon button; `active` draws it in the accent colour.
+fn icon_button(
+    ui: &mut Ui,
+    p: &ss_core::theme::Palette,
+    glyph: &str,
+    active: Option<bool>,
+    tip: &str,
+) -> egui::Response {
+    let color = match active {
+        Some(true) => c32(p.a0),
+        Some(false) => c32a(p.text3),
+        None => c32(p.text),
+    };
+    let mut b = egui::Button::new(
+        RichText::new(glyph)
+            .font(crate::theme::icon(17.0))
+            .color(color),
+    )
+    .min_size(vec2(26.0, 22.0));
+    if active == Some(true) {
+        b = b
+            .fill(Color32::from_rgba_unmultiplied(
+                p.a0[0], p.a0[1], p.a0[2], 40,
+            ))
+            .stroke(egui::Stroke::new(1.0, c32(p.a0)));
+    }
+    let r = ui.add(b);
+    r.on_hover_text(tip)
+}
+
+/// Icon and description for a layer toggle from [`layer_toggles`].
+pub fn layer_icon(label: &str) -> (&'static str, &'static str) {
+    use ss_assets::symbols as i;
+    match label {
+        "SAT" => (i::SATELLITE_ALT, "IR satellite"),
+        "PLY" => (i::POLYLINE, "Alert polygons"),
+        "ARW" => (i::NAVIGATION, "Storm motion arrows"),
+        "CEL" => (i::RADIO_BUTTON_CHECKED, "Storm cell markers"),
+        "STN" => (i::CELL_TOWER, "Radar sites"),
+        "BRB" => (i::AIR, "Wind barbs"),
+        _ => (i::LAYERS, "Layer"),
+    }
+}
+
 fn frame_time_label(time: i64, fmt: TimeFormat) -> String {
     let Some(utc) = chrono::DateTime::from_timestamp(time, 0) else {
         return "--:--".to_string();
@@ -1024,29 +1068,34 @@ impl RadarPanel {
             );
             return;
         }
-        if mono_button(ui, RichText::new("[|◀]")).clicked() {
+        use ss_assets::symbols as i;
+        if icon_button(ui, &p, i::SKIP_PREVIOUS, None, "Previous frame").clicked() {
             self.playback.step(frames, -1);
         }
-        let play = if self.playback.playing {
-            "[❚❚]"
+        let (play, tip) = if self.playback.playing {
+            (i::PAUSE, "Pause the loop")
         } else {
-            "[▶]"
+            (i::PLAY_ARROW, "Play the loop")
         };
-        if mono_button(ui, RichText::new(play)).clicked() {
+        if icon_button(ui, &p, play, None, tip).clicked() {
             let on = !self.playback.playing;
             self.playback.set_playing(on);
         }
-        if mono_button(ui, RichText::new("[▶|]")).clicked() {
+        if icon_button(ui, &p, i::SKIP_NEXT, None, "Next frame").clicked() {
             self.playback.step(frames, 1);
         }
         let live = self.playback.is_live(frames);
-        let live_text = RichText::new("[LIVE]").monospace();
+        let live_text = RichText::new("LIVE").monospace();
         let live_text = if live {
             live_text.color(c32(p.a0)).strong()
         } else {
-            live_text
+            live_text.color(c32a(p.text3))
         };
-        if ui.add(egui::Button::new(live_text)).clicked() {
+        if ui
+            .add(egui::Button::new(live_text).min_size(vec2(0.0, 22.0)))
+            .on_hover_text("Jump to the newest frame")
+            .clicked()
+        {
             self.playback.go_live(frames);
         }
 
@@ -1102,13 +1151,9 @@ impl RadarPanel {
                             }
                         });
                     for (label, active, cmd) in layer_toggles(rs) {
-                        let text = RichText::new(format!("[{label}]")).monospace();
-                        let text = if active {
-                            text.color(c32(p.a0)).strong()
-                        } else {
-                            text.color(c32a(p.text3))
-                        };
-                        if ui.add(egui::Button::new(text)).clicked() {
+                        let (glyph, what) = layer_icon(label);
+                        let tip = format!("{what}: {}", if active { "on" } else { "off" });
+                        if icon_button(ui, &p, glyph, Some(active), &tip).clicked() {
                             cx.emit.push(cmd);
                         }
                     }
