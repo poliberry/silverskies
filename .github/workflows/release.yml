@@ -2,9 +2,11 @@ name: Release
 
 # Every push to main builds real installers of both apps — Silver Skies and
 # Silver Skies Pro — for all three platforms and publishes them together as
-# a new GitHub Release, tagged v<workspace version>.<run number> (for example
-# v2.0.0.42) and noted with every commit since the previous release. No tag
-# needs to be pushed: the release job creates it at the pushed commit.
+# a new GitHub Release, tagged v<workspace version>.<build> (for example
+# v2.0.2.1) and noted with every commit since the previous release. Builds
+# count from 1 for each workspace version: bump `version` in Cargo.toml and
+# the next push is build 1 of the new version. No tag needs to be pushed:
+# the release job creates it at the pushed commit.
 # `workflow_dispatch` builds the same matrix and uploads the installers as
 # workflow artifacts only, so the pipeline can be tested without releasing.
 on:
@@ -22,7 +24,34 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Work out the version and the next build number once, for every job.
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      build: ${{ steps.v.outputs.build }}
+      tag: ${{ steps.v.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: v
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(sed -n 's/^version *= *"\([^"]*\)"/\1/p' Cargo.toml | head -n 1)"
+          # Highest existing build of this version (tags v<version>.<n>), plus one.
+          LAST="$(git tag --list "v${VERSION}.*" \
+            | sed -n "s/^v${VERSION//./\\.}\.\([0-9][0-9]*\)$/\1/p" \
+            | sort -n | tail -n 1)"
+          BUILD=$(( ${LAST:-0} + 1 ))
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "build=$BUILD" >> "$GITHUB_OUTPUT"
+          echo "tag=v${VERSION}.${BUILD}" >> "$GITHUB_OUTPUT"
+          echo "Version $VERSION, build $BUILD"
+
   build:
+    needs: version
     name: build (${{ matrix.app.name }}, ${{ matrix.platform.asset_key }})
     strategy:
       fail-fast: false
@@ -67,6 +96,11 @@ jobs:
       APP_BIN: ${{ matrix.app.bin }}
       APP_FILE: ${{ matrix.app.file }}
       TARGET: ${{ matrix.platform.target }}
+      VERSION: ${{ needs.version.outputs.version }}
+      # Compiled into the apps (shown in About as "2.0.2 (build 1)").
+      SS_BUILD: ${{ needs.version.outputs.build }}
+      # Version as it appears in installer and package names: 2.0.2.1.
+      FULL_VERSION: ${{ needs.version.outputs.version }}.${{ needs.version.outputs.build }}
     steps:
       - uses: actions/checkout@v4
 
@@ -87,14 +121,6 @@ jobs:
             libxcb-shape0-dev libxcb-xfixes0-dev libgtk-3-dev libasound2-dev \
             libspeechd-dev libssl-dev pkg-config
 
-      - name: Resolve version
-        shell: bash
-        run: |
-          set -euo pipefail
-          VERSION="$(sed -n 's/^version *= *"\([^"]*\)"/\1/p' Cargo.toml | head -n 1)"
-          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-          echo "Release version: $VERSION (build ${GITHUB_RUN_NUMBER})"
-
       - name: Build
         run: cargo build --release --locked --target ${{ matrix.platform.target }} -p ${{ matrix.app.package }}
 
@@ -106,7 +132,7 @@ jobs:
           New-Item -ItemType Directory -Force stage | Out-Null
           Copy-Item "target/$env:TARGET/release/$env:APP_BIN.exe" stage/
           Copy-Item "$env:APP_DIR/README.md" stage/
-          Compress-Archive -Path stage/* -DestinationPath "$env:APP_FILE-$env:VERSION-windows-x86_64.zip"
+          Compress-Archive -Path stage/* -DestinationPath "$env:APP_FILE-$env:FULL_VERSION-windows-x86_64.zip"
 
       - name: Install Inno Setup (Windows)
         if: runner.os == 'Windows'
@@ -116,7 +142,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppVersion=$env:VERSION /O"$PWD" /F"$env:APP_FILE-Setup-$env:VERSION" "$env:APP_DIR\dist\windows\installer.iss"
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppVersion=$env:FULL_VERSION /O"$PWD" /F"$env:APP_FILE-Setup-$env:FULL_VERSION" "$env:APP_DIR\dist\windows\installer.iss"
 
       # --- macOS: .app bundle, .dmg and .zip --------------------------------
       - name: Package app bundle and disk image (macOS)
@@ -131,15 +157,15 @@ jobs:
           cp "$APP_DIR/dist/macos/Info.plist" "$APP/Contents/Info.plist"
           chmod +x "$APP/Contents/MacOS/$APP_BIN"
           /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" "$APP/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $SS_BUILD" "$APP/Contents/Info.plist"
           # Icon set from the 512px source (no 1024px @2x available).
           for spec in 16:16x16 32:16x16@2x 32:32x32 64:32x32@2x 128:128x128 256:128x128@2x 256:256x256 512:256x256@2x 512:512x512; do
             px="${spec%%:*}"; name="${spec#*:}"
             sips -z "$px" "$px" "$ICON" --out "AppIcon.iconset/icon_${name}.png" >/dev/null
           done
           iconutil -c icns AppIcon.iconset -o "$APP/Contents/Resources/AppIcon.icns"
-          DMG="$APP_FILE-${VERSION}-macos-${{ matrix.platform.dmg_arch }}.dmg"
-          ZIP="$APP_FILE-${VERSION}-macos-${{ matrix.platform.dmg_arch }}.zip"
+          DMG="$APP_FILE-${FULL_VERSION}-macos-${{ matrix.platform.dmg_arch }}.dmg"
+          ZIP="$APP_FILE-${FULL_VERSION}-macos-${{ matrix.platform.dmg_arch }}.zip"
           hdiutil create -volname "$APP_NAME" -srcfolder "$APP" -ov -format UDZO "$DMG"
           ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
 
@@ -163,11 +189,11 @@ jobs:
           ./linuxdeploy.AppImage --appimage-extract >/dev/null && mv squashfs-root ld-root
           ./linuxdeploy-plugin-appimage.AppImage --appimage-extract >/dev/null && mv squashfs-root ld-plugin-root
           export PATH="$PWD/ld-plugin-root/usr/bin:$PATH"
-          VERSION="$VERSION" ./ld-root/AppRun --appdir AppDir \
+          VERSION="$FULL_VERSION" ./ld-root/AppRun --appdir AppDir \
             -e "$BIN" -d "$DESKTOP" -i "stage/$APP_BIN.png" \
             --output appimage
           BUILT="$(ls ./*.AppImage | grep -vi linuxdeploy | head -n 1)"
-          mv "$BUILT" "$APP_FILE-${VERSION}-x86_64.AppImage"
+          mv "$BUILT" "$APP_FILE-${FULL_VERSION}-x86_64.AppImage"
           # Hand-rolled .deb (no extra tooling needed on the runner).
           PKG=deb-root
           mkdir -p "$PKG/DEBIAN" "$PKG/usr/bin" "$PKG/usr/share/applications" \
@@ -177,13 +203,13 @@ jobs:
           cp "$APP_DIR/assets/icon-dark.png" "$PKG/usr/share/icons/hicolor/512x512/apps/$APP_BIN.png"
           cat > "$PKG/DEBIAN/control" <<EOF
           Package: $APP_BIN
-          Version: $VERSION
+          Version: ${VERSION}-${SS_BUILD}
           Architecture: amd64
           Maintainer: Silver Skies <e993372@staff.poliberry.com>
           Description: $DEB_DESC
            $APP_NAME, part of the Silver Skies suite of weather apps.
           EOF
-          dpkg-deb --build "$PKG" "${APP_BIN}_${VERSION}_amd64.deb"
+          dpkg-deb --build "$PKG" "${APP_BIN}_${VERSION}-${SS_BUILD}_amd64.deb"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -201,7 +227,7 @@ jobs:
     # Pushes to main publish a GitHub Release; manual dispatches stop at the
     # downloadable workflow artifacts above.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: build
+    needs: [version, build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -217,11 +243,12 @@ jobs:
       - name: Publish GitHub Release with changelog
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.version.outputs.version }}
+          BUILD: ${{ needs.version.outputs.build }}
+          TAG: ${{ needs.version.outputs.tag }}
         run: |
           set -euo pipefail
-          VERSION="$(sed -n 's/^version *= *"\([^"]*\)"/\1/p' Cargo.toml | head -n 1)"
-          TAG="v${VERSION}.${GITHUB_RUN_NUMBER}"
-          TITLE="Silver Skies & Silver Skies Pro ${VERSION} (build ${GITHUB_RUN_NUMBER})"
+          TITLE="Silver Skies & Silver Skies Pro ${VERSION} (build ${BUILD})"
           # Previous release: the highest existing v* tag other than this one.
           PREV="$(git tag --list 'v*' --sort=-v:refname | grep -vx "$TAG" | head -n 1 || true)"
           if [[ -n "$PREV" ]]; then

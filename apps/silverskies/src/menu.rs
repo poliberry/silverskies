@@ -240,7 +240,7 @@ pub fn about(ctx: &Context, app: &mut App) {
             let logo = crate::theme::logomark(ui, &p, 56.0);
             ui.add(logo);
             ui.label(crate::theme::label(
-                &format!("Version {}", env!("CARGO_PKG_VERSION")),
+                &format!("Version {}", ss_core::version::version_label()),
                 13.0,
                 c32a(p.text3),
             ));

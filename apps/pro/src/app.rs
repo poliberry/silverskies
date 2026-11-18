@@ -117,7 +117,7 @@ impl App {
             LogLevel::Info,
             format!(
                 "silverskies {} - press : for commands",
-                env!("CARGO_PKG_VERSION")
+                ss_core::version::version_label()
             ),
         );
         shared.log(

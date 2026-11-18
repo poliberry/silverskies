@@ -3344,7 +3344,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "render-icons"
-version = "2.0.0"
+version = "2.0.2"
 dependencies = [
  "anyhow",
  "resvg",
@@ -3756,7 +3756,7 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
 name = "silverskies"
-version = "2.0.0"
+version = "2.0.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3783,7 +3783,7 @@ dependencies = [
 
 [[package]]
 name = "silverskies-pro"
-version = "2.0.0"
+version = "2.0.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3987,7 +3987,7 @@ dependencies = [
 
 [[package]]
 name = "ss-ai"
-version = "2.0.0"
+version = "2.0.2"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -4001,7 +4001,7 @@ dependencies = [
 
 [[package]]
 name = "ss-assets"
-version = "2.0.0"
+version = "2.0.2"
 dependencies = [
  "egui",
  "image",
@@ -4011,7 +4011,7 @@ dependencies = [
 
 [[package]]
 name = "ss-audio"
-version = "2.0.0"
+version = "2.0.2"
 dependencies = [
  "crossbeam-channel",
  "parking_lot 0.12.5",
@@ -4026,7 +4026,7 @@ dependencies = [
 
 [[package]]
 name = "ss-core"
-version = "2.0.0"
+version = "2.0.2"
 dependencies = [
  "chrono",
  "once_cell",
@@ -4038,7 +4038,7 @@ dependencies = [
 
 [[package]]
 name = "ss-map"
-version = "2.0.0"
+version = "2.0.2"
 dependencies = [
  "crossbeam-channel",
  "earcutr",
@@ -4056,7 +4056,7 @@ dependencies = [
 
 [[package]]
 name = "ss-net"
-version = "2.0.0"
+version = "2.0.2"
 dependencies = [
  "chrono",
  "futures",
@@ -4074,7 +4074,7 @@ dependencies = [
 
 [[package]]
 name = "ss-store"
-version = "2.0.0"
+version = "2.0.2"
 dependencies = [
  "directories",
  "parking_lot 0.12.5",

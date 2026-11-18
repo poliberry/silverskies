@@ -11,6 +11,7 @@ pub mod geo;
 pub mod same;
 pub mod theme;
 pub mod types;
+pub mod version;
 pub mod weather;
 
 pub use types::*;

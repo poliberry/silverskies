@@ -904,7 +904,7 @@ fn developer_tab(
 
 fn about_tab(ui: &mut Ui, sh: &Shared, p: &Palette) {
     ui.label(mono(
-        format!("Silver Skies Pro {}", env!("CARGO_PKG_VERSION")),
+        format!("Silver Skies Pro {}", ss_core::version::version_label()),
         c32(p.a0),
     ));
     let dir = sh

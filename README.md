@@ -48,9 +48,10 @@ in `apps/<app>/dist/`.
 
 Every push to `main` builds installers of both apps for Windows (installer + portable zip),
 macOS (Apple silicon and Intel `.dmg`/`.zip`) and Linux (AppImage + `.deb`) and publishes them
-together as a new GitHub Release, tagged `v<workspace version>.<build number>` (for example
-`v2.0.0.42`) with the commits since the previous release as its notes. Bump `version` in the
-workspace `Cargo.toml` to start a new version line. Running the Release workflow by hand
+together as a new GitHub Release, tagged `v<version>.<build>` (for example `v2.0.2.1`) with the
+commits since the previous release as its notes. Builds count from 1 for each version, and the
+build number is shown in each app's About screen ("2.0.2 (build 1)"). Bump `version` in the
+workspace `Cargo.toml` to start a new version at build 1. Running the Release workflow by hand
 builds the same installers as downloadable workflow artifacts without publishing.
 
 ## Credits
