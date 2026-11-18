@@ -9,9 +9,9 @@ pub fn ai_settings_form(ui: &mut Ui, ai: &mut AiSettings, muted: Color32, warn: 
     ui.label(
         RichText::new(
             "Optional. Powers AI forecast summaries, answers and the assistant chat, using your \
-             own account with an AI provider: Claude, OpenAI, OpenRouter, a local model in \
-             Ollama, or any other service with an OpenAI-compatible API (for example OpenCode, \
-             LM Studio or a company gateway). The forecasts for your saved places are sent with \
+             own account with an AI provider: Claude, OpenAI, OpenRouter, OpenCode Go or the \
+             OpenCode Console, a local model in Ollama, or any other service with an \
+             OpenAI-compatible API (for example LM Studio or a company gateway). The forecasts for your saved places are sent with \
              each request; nothing else is.",
         )
         .size(12.5)
@@ -66,18 +66,27 @@ pub fn ai_settings_form(ui: &mut Ui, ai: &mut AiSettings, muted: Color32, warn: 
                 } else {
                     "optional"
                 };
-                if ui
-                    .add(
-                        egui::TextEdit::singleline(&mut key)
-                            .password(true)
-                            .hint_text(key_hint)
-                            .desired_width(260.0),
-                    )
-                    .changed()
-                {
-                    ai.api_key = (!key.is_empty()).then_some(key);
-                    changed = true;
-                }
+                // Hidden by default; "Show" reveals it so it can be checked or
+                // copied (egui never copies out of a hidden password field).
+                let show_id = ui.make_persistent_id("ai_key_show");
+                let mut show = ui.data(|d| d.get_temp::<bool>(show_id).unwrap_or(false));
+                ui.horizontal(|ui| {
+                    if ui
+                        .add(
+                            egui::TextEdit::singleline(&mut key)
+                                .password(!show)
+                                .hint_text(key_hint)
+                                .desired_width(200.0),
+                        )
+                        .changed()
+                    {
+                        ai.api_key = (!key.is_empty()).then_some(key);
+                        changed = true;
+                    }
+                    if ui.checkbox(&mut show, "Show").changed() {
+                        ui.data_mut(|d| d.insert_temp(show_id, show));
+                    }
+                });
                 ui.end_row();
 
                 ui.label(RichText::new("Model").color(muted));
@@ -91,6 +100,9 @@ pub fn ai_settings_form(ui: &mut Ui, ai: &mut AiSettings, muted: Color32, warn: 
                 ui.end_row();
             });
     });
+    if let Some(note) = ai.provider.note() {
+        ui.label(RichText::new(note).size(12.0).color(muted));
+    }
     if ai.enabled {
         if let Some(problem) = ai.problem() {
             ui.label(RichText::new(problem).color(warn));

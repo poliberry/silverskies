@@ -53,6 +53,11 @@ pub struct Chat {
     error: Option<String>,
     scroll_to_end: bool,
     focus_input: bool,
+    /// This conversation's id (OpenCode's `x-opencode-session`); renewed
+    /// when the chat is cleared.
+    session: Option<String>,
+    /// The app showing this chat (for the request's user agent).
+    app: String,
 }
 
 impl Chat {
@@ -70,6 +75,7 @@ impl Chat {
     }
 
     pub fn clear(&mut self) {
+        self.session = None;
         self.messages.clear();
         self.error = None;
         self.pending = None;
@@ -95,6 +101,11 @@ impl Chat {
         let (tx, rx) = crossbeam_channel::bounded(1);
         self.pending = Some(rx);
         let history = self.messages.clone();
+        let session = self
+            .session
+            .get_or_insert_with(crate::new_session_id)
+            .clone();
+        let endpoint = endpoint.for_app(&self.app).in_session(&session);
         let (client, ctx) = (client.clone(), ctx.clone());
         rt.spawn(async move {
             let r = complete(&client, &endpoint, &system, &history).await;
@@ -139,6 +150,7 @@ impl Chat {
         client: &reqwest::Client,
     ) -> ChatAction {
         self.poll();
+        self.app = app_name.to_string();
         if !self.open {
             return ChatAction::None;
         }

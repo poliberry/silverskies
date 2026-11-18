@@ -68,8 +68,44 @@ pub struct HttpRequest {
     pub body: Value,
 }
 
+/// A new conversation id in OpenCode's `ses_…` style: unique per call
+/// (time plus a process-wide counter), not secret.
+pub fn new_session_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    // Mix so ids made in the same nanosecond still differ widely.
+    let mixed = (nanos ^ n.wrapping_mul(0x9E37_79B9_7F4A_7C15)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    format!("ses_{mixed:016x}{n:04x}")
+}
+
+/// Headers every request carries: who is calling, and for OpenCode the
+/// conversation it belongs to.
+fn common_headers(endpoint: &AiEndpoint) -> Vec<(&'static str, String)> {
+    let mut h = vec![(
+        "user-agent",
+        format!("{}/{}", endpoint.app, env!("CARGO_PKG_VERSION")),
+    )];
+    if endpoint.provider.is_opencode() {
+        let session = endpoint.session.clone().unwrap_or_else(new_session_id);
+        h.push(("x-opencode-session", session));
+    }
+    h
+}
+
 /// Build the request for `endpoint` with a system prompt and conversation.
 pub fn build_request(endpoint: &AiEndpoint, system: &str, messages: &[Message]) -> HttpRequest {
+    let common = common_headers(endpoint);
+    let mut req = build_request_inner(endpoint, system, messages);
+    req.headers.extend(common);
+    req
+}
+
+fn build_request_inner(endpoint: &AiEndpoint, system: &str, messages: &[Message]) -> HttpRequest {
     match endpoint.protocol {
         Protocol::Anthropic => {
             let msgs: Vec<Value> = messages
@@ -234,6 +270,61 @@ pub fn http_client() -> reqwest::Client {
 mod tests {
     use super::*;
     use ss_core::ai::AiSettings;
+
+    fn header<'a>(r: &'a HttpRequest, name: &str) -> Option<&'a str> {
+        r.headers
+            .iter()
+            .find(|(k, _)| *k == name)
+            .map(|(_, v)| v.as_str())
+    }
+
+    #[test]
+    fn opencode_requests_carry_session_and_user_agent() {
+        let e = AiSettings {
+            enabled: true,
+            provider: AiProvider::OpenCodeGo,
+            api_key: Some("oc_sk_x".into()),
+            model: "kimi-k3".into(),
+            ..Default::default()
+        }
+        .endpoint()
+        .unwrap()
+        .for_app("Silver Skies")
+        .in_session("ses_abc");
+        let r = build_request(&e, "sys", &[Message::user("hi")]);
+        assert_eq!(
+            r.url,
+            "https://opencode.ai/inference/go/openai/v1/chat/completions"
+        );
+        assert_eq!(header(&r, "authorization"), Some("Bearer oc_sk_x"));
+        assert_eq!(header(&r, "x-opencode-session"), Some("ses_abc"));
+        let ua = header(&r, "user-agent").unwrap();
+        assert!(ua.starts_with("silver-skies/"), "{ua}");
+        assert_eq!(r.body["model"], "kimi-k3");
+    }
+
+    #[test]
+    fn one_off_opencode_requests_get_fresh_sessions_others_none() {
+        let mut s = AiSettings {
+            enabled: true,
+            provider: AiProvider::OpenCodeConsole,
+            api_key: Some("k".into()),
+            model: "m".into(),
+            ..Default::default()
+        };
+        let e = s.endpoint().unwrap();
+        let a = build_request(&e, "s", &[]);
+        let b = build_request(&e, "s", &[]);
+        let (sa, sb) = (
+            header(&a, "x-opencode-session").unwrap(),
+            header(&b, "x-opencode-session").unwrap(),
+        );
+        assert!(sa.starts_with("ses_") && sa != sb);
+        s.provider = AiProvider::OpenAi;
+        let r = build_request(&s.endpoint().unwrap(), "s", &[]);
+        assert!(header(&r, "x-opencode-session").is_none());
+        assert!(header(&r, "user-agent").is_some());
+    }
 
     fn endpoint(provider: AiProvider, key: Option<&str>, model: &str) -> AiEndpoint {
         AiSettings {

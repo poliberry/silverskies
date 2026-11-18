@@ -460,7 +460,8 @@ impl App {
     }
 
     fn start_ai(&mut self, task: AiTask, target: Option<String>, loc_id: &str) -> Option<u64> {
-        let endpoint = self.config.ai.endpoint()?;
+        // One-off request: its own OpenCode session (made per request).
+        let endpoint = self.config.ai.endpoint()?.for_app("Silver Skies");
         let digest = self.digest_for(loc_id)?;
         self.ai_seq += 1;
         let seq = self.ai_seq;
