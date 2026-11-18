@@ -1,23 +1,24 @@
 name: Release
 
-# Push a tag matching v* (keep it in sync with the workspace version in
-# Cargo.toml) to build real installers of both apps — Silver Skies and
-# Silver Skies Pro — for all three platforms and publish
-# (or update) the GitHub Release for that tag, with notes generated from
-# every commit since the previous release. `workflow_dispatch` builds the
-# same matrix and uploads the installers as workflow artifacts instead, so
-# the pipeline can be tested without cutting a release.
+# Every push to main builds real installers of both apps — Silver Skies and
+# Silver Skies Pro — for all three platforms and publishes them together as
+# a new GitHub Release, tagged v<workspace version>.<run number> (for example
+# v2.0.0.42) and noted with every commit since the previous release. No tag
+# needs to be pushed: the release job creates it at the pushed commit.
+# `workflow_dispatch` builds the same matrix and uploads the installers as
+# workflow artifacts only, so the pipeline can be tested without releasing.
 on:
   push:
-    tags:
-      - "v*"
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: write
 
+# One release at a time, in push order; a newer push never cancels an older
+# one mid-publish.
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-main
   cancel-in-progress: false
 
 jobs:
@@ -92,13 +93,7 @@ jobs:
           set -euo pipefail
           VERSION="$(sed -n 's/^version *= *"\([^"]*\)"/\1/p' Cargo.toml | head -n 1)"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-          echo "Release version: $VERSION"
-          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
-            if [[ "${GITHUB_REF_NAME}" != "v$VERSION" ]]; then
-              echo "::error::tag ${GITHUB_REF_NAME} does not match Cargo.toml version v$VERSION"
-              exit 1
-            fi
-          fi
+          echo "Release version: $VERSION (build ${GITHUB_RUN_NUMBER})"
 
       - name: Build
         run: cargo build --release --locked --target ${{ matrix.platform.target }} -p ${{ matrix.app.package }}
@@ -203,9 +198,9 @@ jobs:
           if-no-files-found: error
 
   release:
-    # Only tag pushes publish to GitHub Releases; manual dispatches stop at
-    # the downloadable workflow artifacts above.
-    if: startsWith(github.ref, 'refs/tags/v')
+    # Pushes to main publish a GitHub Release; manual dispatches stop at the
+    # downloadable workflow artifacts above.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
     steps:
@@ -224,60 +219,35 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          TAG="${GITHUB_REF_NAME}"
-          VERSION="${TAG#v}"
-          # Previous release tag (highest version below this one).
-          PREV="$(git tag --list 'v*' --sort=-v:refname | grep -v "^${TAG}$" | head -n 1 || true)"
+          VERSION="$(sed -n 's/^version *= *"\([^"]*\)"/\1/p' Cargo.toml | head -n 1)"
+          TAG="v${VERSION}.${GITHUB_RUN_NUMBER}"
+          TITLE="Silver Skies & Silver Skies Pro ${VERSION} (build ${GITHUB_RUN_NUMBER})"
+          # Previous release: the highest existing v* tag other than this one.
+          PREV="$(git tag --list 'v*' --sort=-v:refname | grep -vx "$TAG" | head -n 1 || true)"
           if [[ -n "$PREV" ]]; then
-            RANGE="$PREV..$TAG"
-            COMMITS="$(git log "$RANGE" --pretty=format:'- %s (%h, %an)' | head -n 200)"
-            COUNT="$(git rev-list --count "$RANGE")"
+            RANGE="$PREV..$GITHUB_SHA"
           else
-            RANGE="$TAG"
-            COMMITS="$(git log "$TAG" --pretty=format:'- %s (%h, %an)' -n 200)"
-            COUNT="$(git rev-list --count "$TAG" | head -n 1)"
+            RANGE="$GITHUB_SHA"
           fi
+          COMMITS="$(git log "$RANGE" --no-merges -n 200 --pretty=format:'- %s (%h, %an)')"
+          COUNT="$(git rev-list --no-merges --count "$RANGE")"
           {
-            echo "<!-- changelog:commits -->"
-            echo "## Changes since ${PREV:-the beginning} ($COUNT commits)"
+            echo "## $TITLE"
             echo ""
-            echo "$COMMITS"
+            echo "Built from ${GITHUB_SHA::7} on main. Installers for Windows (setup + portable"
+            echo "zip), macOS (Apple silicon and Intel .dmg/.zip) and Linux (AppImage + .deb)."
             echo ""
-            echo "<!-- changelog:commits -->"
-          } > changelog-section.md
+            echo "### Changes since ${PREV:-the beginning} ($COUNT commits)"
+            echo ""
+            echo "${COMMITS:-- No code changes.}"
+          } > notes.md
 
-          NOTES_TMP="$(mktemp)"
-          if gh release view "$TAG" --json body --jq .body > existing.md 2>/dev/null; then
-            if grep -q '<!-- changelog:commits -->' existing.md; then
-              # Refresh our own section in place; keep any hand-written notes.
-              awk '
-                BEGIN { in_section = 0 }
-                /<!-- changelog:commits -->/ {
-                  if (in_section == 0) { while ((getline line < "changelog-section.md") > 0) print line; in_section = 1; next }
-                  else { in_section = 0; next }
-                }
-                in_section == 0 { print }
-              ' existing.md > "$NOTES_TMP"
-            elif [[ -s existing.md ]]; then
-              cat existing.md > "$NOTES_TMP"
-              echo "" >> "$NOTES_TMP"
-              cat changelog-section.md >> "$NOTES_TMP"
-            else
-              {
-                echo "## Silver Skies & Silver Skies Pro $VERSION"
-                echo ""
-                cat changelog-section.md
-              } > "$NOTES_TMP"
-            fi
-            gh release edit "$TAG" --notes-file "$NOTES_TMP" --draft=false
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # A re-run of this workflow: refresh the notes and assets.
+            gh release edit "$TAG" --title "$TITLE" --notes-file notes.md --draft=false
             gh release upload "$TAG" release-assets/* --clobber
           else
-            {
-              echo "## Silver Skies & Silver Skies Pro $VERSION"
-              echo ""
-              cat changelog-section.md
-            } > "$NOTES_TMP"
             gh release create "$TAG" release-assets/* \
-              --title "Silver Skies & Silver Skies Pro $VERSION" --notes-file "$NOTES_TMP" --latest
+              --target "$GITHUB_SHA" --title "$TITLE" --notes-file notes.md --latest
           fi
           echo "Published ${TAG} with $(ls release-assets | wc -l) assets."

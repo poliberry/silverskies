@@ -46,9 +46,12 @@ in `apps/<app>/dist/`.
 
 ## Releases
 
-Pushing a `v*` tag that matches the workspace version builds installers of both apps for
-Windows (installer + portable zip), macOS (Apple silicon and Intel `.dmg`/`.zip`) and Linux
-(AppImage + `.deb`) and publishes them together in one GitHub Release.
+Every push to `main` builds installers of both apps for Windows (installer + portable zip),
+macOS (Apple silicon and Intel `.dmg`/`.zip`) and Linux (AppImage + `.deb`) and publishes them
+together as a new GitHub Release, tagged `v<workspace version>.<build number>` (for example
+`v2.0.0.42`) with the commits since the previous release as its notes. Bump `version` in the
+workspace `Cargo.toml` to start a new version line. Running the Release workflow by hand
+builds the same installers as downloadable workflow artifacts without publishing.
 
 ## Credits
 
