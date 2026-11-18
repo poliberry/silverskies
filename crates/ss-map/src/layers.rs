@@ -590,6 +590,55 @@ impl PolygonLayer {
     }
 }
 
+/// Make a screen-space outline safe to stroke: drop points within half a
+/// pixel of the previous one and hairpin turns (near-180° reversals). egui's
+/// path stroker turns those into long miter spikes — a "fan" of lines across
+/// the map with detailed polygons such as European warning areas.
+pub fn clean_path(pts: &[Pos2], closed: bool) -> Vec<Pos2> {
+    let mut out: Vec<Pos2> = Vec::with_capacity(pts.len());
+    for &p in pts {
+        if !p.x.is_finite() || !p.y.is_finite() {
+            continue;
+        }
+        if out.last().is_some_and(|q: &Pos2| (*q - p).length() < 0.5) {
+            continue;
+        }
+        out.push(p);
+    }
+    if closed && out.len() > 1 && (out[0] - out[out.len() - 1]).length() < 0.5 {
+        out.pop();
+    }
+    // Remove reversals until none remain (each pass can expose another).
+    for _ in 0..8 {
+        let n = out.len();
+        if n < 3 {
+            break;
+        }
+        let mut keep = vec![true; n];
+        let mut changed = false;
+        let range = if closed { 0..n } else { 1..n - 1 };
+        for i in range {
+            let a = out[(i + n - 1) % n];
+            let b = out[i];
+            let c = out[(i + 1) % n];
+            let (u, v) = ((b - a).normalized(), (c - b).normalized());
+            if u.dot(v) < -0.94 {
+                keep[i] = false;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+        out = out
+            .into_iter()
+            .zip(keep)
+            .filter_map(|(p, k)| k.then_some(p))
+            .collect();
+    }
+    out
+}
+
 impl Layer for PolygonLayer {
     layer_boilerplate!();
 
@@ -656,7 +705,10 @@ impl Layer for PolygonLayer {
                     }
                     if stroke_w > 0.0 {
                         for &(s, n) in &tri.rings {
-                            painter.add(Shape::closed_line(pts[s..s + n].to_vec(), stroke));
+                            let ring = clean_path(&pts[s..s + n], true);
+                            if ring.len() >= 3 {
+                                painter.add(Shape::closed_line(ring, stroke));
+                            }
                         }
                     }
                 }
@@ -665,7 +717,7 @@ impl Layer for PolygonLayer {
                         .iter()
                         .map(|p| vp.screen_from_lonlat(p[0], p[1], ctx.rect))
                         .collect();
-                    painter.add(Shape::line(pts, stroke));
+                    painter.add(Shape::line(clean_path(&pts, false), stroke));
                 }
                 Geometry::Point(p) => {
                     let c = vp.screen_from_lonlat(p[0], p[1], ctx.rect);
@@ -1094,6 +1146,43 @@ impl Layer for SelectionLayer {
     }
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
+    }
+}
+
+#[cfg(test)]
+mod clean_path_tests {
+    use super::*;
+
+    #[test]
+    fn drops_duplicates_and_hairpins() {
+        let pts = [
+            pos2(0.0, 0.0),
+            pos2(10.0, 0.0),
+            pos2(10.2, 0.0), // near-duplicate
+            pos2(30.0, 0.0),
+            pos2(12.0, 0.1), // hairpin back along the edge
+            pos2(30.0, 10.0),
+            pos2(0.0, 10.0),
+        ];
+        let c = clean_path(&pts, true);
+        assert!(c.len() < pts.len());
+        // No remaining near-reversal.
+        let n = c.len();
+        for i in 0..n {
+            let (a, b, d) = (c[(i + n - 1) % n], c[i], c[(i + 1) % n]);
+            assert!(
+                (b - a).normalized().dot((d - b).normalized()) >= -0.94,
+                "{c:?}"
+            );
+        }
+        // A plain square is untouched.
+        let sq = [
+            pos2(0.0, 0.0),
+            pos2(5.0, 0.0),
+            pos2(5.0, 5.0),
+            pos2(0.0, 5.0),
+        ];
+        assert_eq!(clean_path(&sq, true), sq.to_vec());
     }
 }
 

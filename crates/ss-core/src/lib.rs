@@ -6,6 +6,7 @@
 
 pub mod ai;
 pub mod alerts;
+pub mod cells;
 pub mod command;
 pub mod geo;
 pub mod same;

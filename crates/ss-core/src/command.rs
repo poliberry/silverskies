@@ -595,6 +595,7 @@ pub const LAYER_NAMES: &[&str] = &[
     "terrain",
     "storms",
     "reports",
+    "tropical",
 ];
 
 /// Map-layer names accepted by `:layer`. Returns the canonical name.
@@ -619,6 +620,7 @@ pub fn canonical_layer(name: &str) -> Option<&'static str> {
         "terrain" | "topo" | "topography" | "relief" | "hillshade" => "terrain",
         "storms" | "storm-cells" | "tvs" | "meso" | "tracks" => "storms",
         "reports" | "lsr" | "storm-reports" => "reports",
+        "tropical" | "cyclones" | "hurricanes" | "typhoons" | "tc" => "tropical",
         _ => return None,
     };
     LAYER_NAMES.iter().copied().find(|l| *l == canon)

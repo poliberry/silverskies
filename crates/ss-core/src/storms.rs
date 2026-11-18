@@ -13,7 +13,17 @@ pub enum Tvs {
     Tvs,
 }
 
-/// One storm cell as detected by a NEXRAD radar.
+/// Where a cell came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum CellSource {
+    /// A US WSR-88D's storm-cell algorithms (with TVS/meso/hail).
+    #[default]
+    Nexrad,
+    /// Found in the global radar mosaic (reflectivity and motion only).
+    Mosaic,
+}
+
+/// One storm cell, from a NEXRAD radar or the global radar mosaic.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StormCell {
     /// Detecting radar (e.g. `TLX`).
@@ -44,6 +54,11 @@ pub struct StormCell {
     pub speed_kt: f64,
     /// Observation time, RFC 3339.
     pub valid: String,
+    #[serde(default)]
+    pub source: CellSource,
+    /// Area of the ≥ 40 dBZ core, km² (mosaic cells; 0 when unknown).
+    #[serde(default)]
+    pub area_km2: f64,
 }
 
 impl StormCell {
@@ -91,10 +106,61 @@ impl StormCell {
             ));
         }
         parts.push(format!("{:.0} dBZ", self.max_dbz));
+        if self.area_km2 > 0.0 {
+            parts.push(format!("{:.0} km² core", self.area_km2));
+        }
         if self.top_kft > 0.0 {
             parts.push(format!("top {:.0}k ft", self.top_kft));
         }
         parts.join(" · ")
+    }
+}
+
+/// A tropical cyclone (GDACS: JTWC / NOAA advisories worldwide).
+/// One leg of a cyclone track: (from lon/lat, to lon/lat, storm class
+/// label, is forecast).
+pub type TrackSegment = ((f64, f64), (f64, f64), String, bool);
+/// A wind swath: (label like `120 km/h`, alert colour name, outer ring).
+pub type WindSwath = (String, String, Vec<(f64, f64)>);
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TropicalCyclone {
+    pub id: String,
+    /// `AKVAN-26`.
+    pub name: String,
+    /// GDACS alert level: Green, Orange or Red.
+    pub alert: String,
+    /// `Tropical Storm (maximum wind speed of 83 km/h)`.
+    pub category: String,
+    pub max_wind_kmh: f64,
+    /// Current centre.
+    pub lon: f64,
+    pub lat: f64,
+    pub country: String,
+    /// Advisory source (JTWC, NOAA…).
+    pub source: String,
+    /// Last update, local to GDACS (UTC), `YYYY-MM-DDTHH:MM:SS`.
+    pub updated: String,
+    /// Track segments: (from, to, storm class label, is forecast).
+    pub track: Vec<TrackSegment>,
+    /// Wind swaths: (label like `120 km/h`, alert colour name, outer ring).
+    pub swaths: Vec<WindSwath>,
+    pub report_url: String,
+}
+
+impl TropicalCyclone {
+    /// Alert colour (GDACS green/orange/red).
+    pub fn color(&self) -> [u8; 3] {
+        alert_color(&self.alert)
+    }
+}
+
+/// GDACS alert level → colour.
+pub fn alert_color(level: &str) -> [u8; 3] {
+    match level.to_ascii_lowercase().as_str() {
+        "red" => [0xff, 0x2a, 0x2a],
+        "orange" => [0xff, 0x9f, 0x1c],
+        _ => [0x2e, 0xd1, 0x5a],
     }
 }
 
@@ -246,6 +312,8 @@ mod tests {
             motion_from_deg: 240.0,
             speed_kt: 30.0,
             valid: "2026-11-18T11:00:00Z".into(),
+            source: CellSource::Nexrad,
+            area_km2: 0.0,
         }
     }
 

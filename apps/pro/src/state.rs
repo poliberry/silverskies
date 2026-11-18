@@ -175,6 +175,12 @@ pub struct Shared {
     pub storm_reports: Vec<ss_core::storms::StormReport>,
     pub storms_at: Option<chrono::DateTime<chrono::Local>>,
     pub storms_error: Option<String>,
+    /// Tropical cyclones worldwide (GDACS).
+    pub tropical: Vec<ss_core::storms::TropicalCyclone>,
+    /// Storm cells from the radar mosaic for places without NEXRAD
+    /// coverage, and the location they were computed for.
+    pub mosaic_cells: Vec<ss_core::storms::StormCell>,
+    pub mosaic_for: Option<String>,
     /// Forecast soundings by location id, and locations with a fetch in flight.
     pub soundings: HashMap<String, Vec<ss_core::sounding::Sounding>>,
     pub soundings_pending: std::collections::HashSet<String>,
@@ -238,6 +244,9 @@ impl Shared {
             storm_reports: Vec::new(),
             storms_at: None,
             storms_error: None,
+            tropical: Vec::new(),
+            mosaic_cells: Vec::new(),
+            mosaic_for: None,
             soundings: HashMap::new(),
             soundings_pending: Default::default(),
             sounding_errors: HashMap::new(),

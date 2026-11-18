@@ -18,6 +18,7 @@ reqwest.workspace = true
 futures.workspace = true
 tracing.workspace = true
 percent-encoding = "2"
+image.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

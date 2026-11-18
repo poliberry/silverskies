@@ -70,6 +70,8 @@ pub fn parse_storm_cells(json: &str) -> Result<Vec<StormCell>> {
                 motion_from_deg: num(p, "drct"),
                 speed_kt: num(p, "sknt"),
                 valid: text(p, "valid"),
+                source: ss_core::storms::CellSource::Nexrad,
+                area_km2: 0.0,
             })
         })
         .collect())

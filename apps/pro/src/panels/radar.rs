@@ -364,8 +364,10 @@ impl RadarPanel {
         l.push(PolygonLayer::new("md"));
         l.push(PolygonLayer::new("alerts"));
         l.push(WindBarbLayer::new("barbs", Color32::GRAY));
+        l.push(PolygonLayer::new("tc-swaths"));
         l.push(StormLayer::new("storm-reports"));
         l.push(StormLayer::new("storm-cells"));
+        l.push(StormLayer::new("tropical"));
         l.push(MarkerLayer::new("locations"));
         l.push(MarkerLayer::new("radar-sites"));
         Self {
@@ -475,15 +477,23 @@ pub fn storm_cell_marks(cells: &[ss_core::storms::StormCell]) -> Vec<StormMark> 
             } else {
                 "nearly stationary".to_string()
             };
-            let tooltip = format!(
-                "{}/{} — {}\n{motion}\nVIL {:.0} kg/m² · max {:.0} dBZ at {:.0}k ft",
-                c.radar,
-                c.id,
-                c.summary(),
-                c.vil,
-                c.max_dbz,
-                c.max_dbz_height_kft,
-            );
+            let tooltip = if c.source == ss_core::storms::CellSource::Mosaic {
+                format!(
+                    "Radar-mosaic cell {} — {}\n{motion}\nReflectivity and motion only (no TVS/meso/hail outside NEXRAD)",
+                    c.id,
+                    c.summary(),
+                )
+            } else {
+                format!(
+                    "{}/{} — {}\n{motion}\nVIL {:.0} kg/m² · max {:.0} dBZ at {:.0}k ft",
+                    c.radar,
+                    c.id,
+                    c.summary(),
+                    c.vil,
+                    c.max_dbz,
+                    c.max_dbz_height_kft,
+                )
+            };
             StormMark {
                 id: format!("{}/{}", c.radar, c.id),
                 lon: c.lon,
@@ -491,6 +501,7 @@ pub fn storm_cell_marks(cells: &[ss_core::storms::StormCell]) -> Vec<StormMark> 
                 color: c32(super::storms::threat_color(c.threat())),
                 shape,
                 track,
+                segments: Vec::new(),
                 tooltip,
             }
         })
@@ -504,6 +515,57 @@ pub fn storm_cell_marks(cells: &[ss_core::storms::StormCell]) -> Vec<StormMark> 
         _ => 4,
     });
     marks
+}
+
+/// Map marks for tropical cyclones: centre symbol, past track (solid) and
+/// forecast track (dashed).
+pub fn tropical_marks(tcs: &[ss_core::storms::TropicalCyclone]) -> Vec<StormMark> {
+    tcs.iter()
+        .map(|t| {
+            let tooltip = format!(
+                "{} — {} alert\n{}\n{} · source {} · updated {} UTC\nsolid: past track · dashed: forecast",
+                t.name,
+                t.alert,
+                t.category,
+                if t.country.is_empty() { "open ocean" } else { &t.country },
+                t.source,
+                t.updated.replace('T', " "),
+            );
+            StormMark {
+                id: format!("tc{}", t.id),
+                lon: t.lon,
+                lat: t.lat,
+                color: c32(t.color()),
+                shape: StormShape::Cyclone,
+                track: Vec::new(),
+                segments: t.track.iter().map(|(a, b, _, fc)| (*a, *b, *fc)).collect(),
+                tooltip,
+            }
+        })
+        .collect()
+}
+
+/// Wind-swath polygons for tropical cyclones (GDACS 60/90/120 km/h areas).
+pub fn tropical_swaths(tcs: &[ss_core::storms::TropicalCyclone]) -> Vec<PolyItem> {
+    let mut items = Vec::new();
+    for t in tcs {
+        for (i, (label, level, ring)) in t.swaths.iter().enumerate() {
+            let rgb = ss_core::storms::alert_color(level);
+            items.push(PolyItem {
+                id: format!("tc{}-{i}", t.id),
+                geometry: ss_core::Geometry::Polygon(vec![ring
+                    .iter()
+                    .map(|(lo, la)| [*lo, *la])
+                    .collect()]),
+                fill: Color32::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], 26),
+                stroke: Color32::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], 150),
+                stroke_width: 1.0,
+                pulse: false,
+                label: Some(format!("{} — winds ≥ {label}", t.name)),
+            });
+        }
+    }
+    items
 }
 
 /// Map marks for local storm reports (newest drawn on top).
@@ -538,6 +600,7 @@ pub fn storm_report_marks(reports: &[ss_core::storms::StormReport]) -> Vec<Storm
                 color: c32(r.kind.color()),
                 shape: StormShape::Report(r.kind.letter()),
                 track: Vec::new(),
+                segments: Vec::new(),
                 tooltip: tip,
             }
         })
@@ -837,15 +900,17 @@ impl Panel for RadarPanel {
         // the SPC outlook.
         if let Some(h) = r.response.hover_pos() {
             let vp = self.map.viewport.clone();
-            let storm_tip = ["storm-cells", "storm-reports"].iter().find_map(|n| {
-                self.map
-                    .layers
-                    .get_mut::<StormLayer>(n)
-                    .and_then(|l| l.hit_test(h, 10.0, &vp, r.rect))
-                    .map(|m| m.tooltip.clone())
-            });
+            let storm_tip = ["tropical", "storm-cells", "storm-reports"]
+                .iter()
+                .find_map(|n| {
+                    self.map
+                        .layers
+                        .get_mut::<StormLayer>(n)
+                        .and_then(|l| l.hit_test(h, 10.0, &vp, r.rect))
+                        .map(|m| m.tooltip.clone())
+                });
             let tip = storm_tip.or_else(|| {
-                ["alerts", "md", "spc-outlook"]
+                ["alerts", "md", "spc-outlook", "tc-swaths"]
                     .iter()
                     .find_map(|n| hit_polygon(&mut self.map, n, h, r.rect))
                     .and_then(|(_, label)| label)
@@ -1179,15 +1244,29 @@ impl RadarPanel {
         // --- storm cells and storm reports ---
         layers.set_visible("storm-cells", rs.storm_cells);
         layers.set_visible("storm-reports", rs.storm_reports);
+        layers.set_visible("tropical", rs.tropical);
+        layers.set_visible("tc-swaths", rs.tropical);
         let sig = hash_of(&(
             sh.storms_at.map(|t| t.timestamp()),
             sh.storm_cells.len(),
             sh.storm_reports.len(),
+            sh.mosaic_cells.len(),
+            sh.mosaic_cells.first().map(|c| c.valid.clone()),
+            sh.tropical.len(),
+            sh.tropical.first().map(|t| t.updated.clone()),
         ));
         if sig != self.storms_sig {
             self.storms_sig = sig;
             if let Some(l) = layers.get_mut::<StormLayer>("storm-cells") {
-                l.marks = storm_cell_marks(&sh.storm_cells);
+                let mut all = sh.storm_cells.clone();
+                all.extend(sh.mosaic_cells.iter().cloned());
+                l.marks = storm_cell_marks(&all);
+            }
+            if let Some(l) = layers.get_mut::<StormLayer>("tropical") {
+                l.marks = tropical_marks(&sh.tropical);
+            }
+            if let Some(l) = layers.get_mut::<PolygonLayer>("tc-swaths") {
+                l.set_items(tropical_swaths(&sh.tropical));
             }
             if let Some(l) = layers.get_mut::<StormLayer>("storm-reports") {
                 l.marks = storm_report_marks(&sh.storm_reports);

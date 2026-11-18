@@ -4060,6 +4060,7 @@ version = "2.0.2"
 dependencies = [
  "chrono",
  "futures",
+ "image",
  "once_cell",
  "percent-encoding",
  "regex",

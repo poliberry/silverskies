@@ -424,6 +424,8 @@ pub struct RadarSettings {
     pub storm_cells: bool,
     /// Local storm reports (tornado, hail, wind, flood) from the last 24 h.
     pub storm_reports: bool,
+    /// Tropical cyclones worldwide (GDACS): centres, tracks, wind swaths.
+    pub tropical: bool,
     /// Auto-load alerts whose polygons fall inside the visible map area.
     pub viewport_alerts: bool,
 }
@@ -453,6 +455,7 @@ impl Default for RadarSettings {
             terrain: true,
             storm_cells: true,
             storm_reports: true,
+            tropical: true,
             viewport_alerts: true,
         }
     }

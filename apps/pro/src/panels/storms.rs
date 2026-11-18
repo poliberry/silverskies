@@ -148,11 +148,21 @@ impl Panel for StormsPanel {
             return;
         };
         let (lat, lon) = (loc.lat, loc.lon);
+        // NEXRAD cells where the US network covers; radar-mosaic cells
+        // (computed for the active place) everywhere else.
+        let mosaic = sh.mosaic_for.as_deref() == Some(loc.id.as_str());
         let mut cells: Vec<&StormCell> = sh
             .storm_cells
             .iter()
+            .chain(sh.mosaic_cells.iter().filter(|_| mosaic))
             .filter(|c| haversine_km(lat, lon, c.lat, c.lon) <= NEAR_KM)
             .collect();
+        let mut tropical: Vec<(f64, &ss_core::storms::TropicalCyclone)> = sh
+            .tropical
+            .iter()
+            .map(|t| (haversine_km(lat, lon, t.lat, t.lon), t))
+            .collect();
+        tropical.sort_by(|a, b| a.0.total_cmp(&b.0));
         cells.sort_by(|a, b| {
             b.threat().cmp(&a.threat()).then(
                 haversine_km(lat, lon, a.lat, a.lon)
@@ -204,10 +214,70 @@ impl Panel for StormsPanel {
                 }
                 ui.add_space(4.0);
                 ui.label(
+                    RichText::new(format!("-- TROPICAL CYCLONES, WORLDWIDE ({}) --", tropical.len()))
+                        .monospace()
+                        .color(c32(p.a0)),
+                );
+                if tropical.is_empty() {
+                    placeholder(ui, &p, "no active tropical cyclones");
+                }
+                for (km, t) in &tropical {
+                    let col = t.color();
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        egui::Frame::new()
+                            .fill(c32(col))
+                            .inner_margin(egui::Margin::symmetric(4, 0))
+                            .show(ui, |ui| {
+                                ui.label(
+                                    RichText::new(t.alert.to_uppercase())
+                                        .monospace()
+                                        .color(on(col)),
+                                );
+                            });
+                        ui.label(RichText::new(&t.name).monospace().color(c32(p.text)));
+                        ui.label(
+                            RichText::new(format!(
+                                "{:.0} km {} · {:.0} km/h",
+                                km,
+                                compass_8(bearing_deg(lat, lon, t.lat, t.lon)),
+                                t.max_wind_kmh
+                            ))
+                            .monospace()
+                            .color(c32a(p.text2)),
+                        );
+                    });
+                    ui.label(
+                        RichText::new(format!(
+                            "  {}{}",
+                            t.category,
+                            if t.country.is_empty() {
+                                String::new()
+                            } else {
+                                format!(" · {}", t.country)
+                            }
+                        ))
+                        .monospace()
+                        .size(11.5)
+                        .color(c32a(p.text3)),
+                    );
+                }
+                ui.add_space(6.0);
+                ui.label(
                     RichText::new(format!("-- CELLS WITHIN {NEAR_KM:.0} KM ({}) --", cells.len()))
                         .monospace()
                         .color(c32(p.a0)),
                 );
+                if mosaic {
+                    ui.label(
+                        RichText::new(
+                            "no NEXRAD here: cells found in the radar mosaic (intensity and motion only)",
+                        )
+                        .monospace()
+                        .size(11.0)
+                        .color(c32a(p.text3)),
+                    );
+                }
                 if cells.is_empty() {
                     placeholder(ui, &p, "no storm cells nearby");
                 }
@@ -216,7 +286,7 @@ impl Panel for StormsPanel {
                 }
                 ui.add_space(6.0);
                 ui.label(
-                    RichText::new(format!("-- STORM REPORTS, 24 H ({}) --", reports.len()))
+                    RichText::new(format!("-- STORM REPORTS, 24 H, US ({}) --", reports.len()))
                         .monospace()
                         .color(c32(p.a0)),
                 );
@@ -228,7 +298,10 @@ impl Panel for StormsPanel {
                 }
                 ui.add_space(4.0);
                 ui.label(
-                    RichText::new("Storm cells and reports: NEXRAD / NWS via Iowa Environmental Mesonet (US only)")
+                    RichText::new(
+                        "Cells: NEXRAD via Iowa Environmental Mesonet (US), or found in the global radar mosaic elsewhere. \
+                         Reports: NWS (US only). Tropical cyclones: GDACS (JTWC/NOAA), worldwide.",
+                    )
                         .monospace()
                         .size(10.5)
                         .color(c32a(p.text3)),
@@ -259,6 +332,8 @@ mod tests {
             motion_from_deg: from,
             speed_kt: kt,
             valid: String::new(),
+            source: ss_core::storms::CellSource::Nexrad,
+            area_km2: 0.0,
         }
     }
 

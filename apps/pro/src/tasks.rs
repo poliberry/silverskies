@@ -171,6 +171,36 @@ impl Tasks {
         });
     }
 
+    /// Tropical cyclones worldwide (GDACS).
+    pub fn tropical(&self) {
+        let (net, tx, ctx) = (self.net.clone(), self.tx.clone(), self.ctx.clone());
+        self.rt.spawn(async move {
+            let r = net.tropical_cyclones().await.map_err(|e| e.to_string());
+            Self::post(&tx, &ctx, AppEvent::Tropical(r));
+        });
+    }
+
+    /// Storm cells from the radar mosaic around a location (for places
+    /// without NEXRAD coverage).
+    pub fn mosaic_cells(&self, loc: &SavedLocation, host: String, past: Vec<ss_core::RadarFrame>) {
+        let (net, tx, ctx) = (self.net.clone(), self.tx.clone(), self.ctx.clone());
+        let (id, lat, lon) = (loc.id.clone(), loc.lat, loc.lon);
+        self.rt.spawn(async move {
+            let result = net
+                .mosaic_storm_cells(&host, &past, lat, lon)
+                .await
+                .map_err(|e| e.to_string());
+            Self::post(
+                &tx,
+                &ctx,
+                AppEvent::MosaicCells {
+                    location_id: id,
+                    result,
+                },
+            );
+        });
+    }
+
     /// Hourly forecast soundings for a location.
     pub fn soundings(&self, loc: &SavedLocation) {
         let (net, tx, ctx) = (self.net.clone(), self.tx.clone(), self.ctx.clone());

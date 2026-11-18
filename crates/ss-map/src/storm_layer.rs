@@ -23,7 +23,12 @@ pub enum StormShape {
     Cell,
     /// A storm report: lettered disc.
     Report(&'static str),
+    /// A tropical cyclone centre: the classic two-armed symbol.
+    Cyclone,
 }
+
+/// A line from one lon/lat to another; `true` draws it dashed.
+pub type Segment = ((f64, f64), (f64, f64), bool);
 
 #[derive(Debug, Clone)]
 pub struct StormMark {
@@ -34,6 +39,9 @@ pub struct StormMark {
     pub shape: StormShape,
     /// Projected positions (e.g. +15/30/45/60 min), drawn as a dashed track.
     pub track: Vec<(f64, f64)>,
+    /// Extra line segments (from, to, dashed): e.g. a cyclone's past track
+    /// (solid) and forecast track (dashed).
+    pub segments: Vec<Segment>,
     /// Hover text.
     pub tooltip: String,
 }
@@ -110,6 +118,22 @@ impl Layer for StormLayer {
                 continue;
             }
             let c = ctx.viewport.screen_from_lonlat(m.lon, m.lat, ctx.rect);
+            for (a, b, dashed) in &m.segments {
+                let pa = ctx.viewport.screen_from_lonlat(a.0, a.1, ctx.rect);
+                let pb = ctx.viewport.screen_from_lonlat(b.0, b.1, ctx.rect);
+                let col = m.color.gamma_multiply(if *dashed { 0.85 } else { 1.0 });
+                if *dashed {
+                    painter.add(Shape::dashed_line(
+                        &[pa, pb],
+                        Stroke::new(2.0, col),
+                        6.0,
+                        4.0,
+                    ));
+                } else {
+                    painter.line_segment([pa, pb], Stroke::new(2.4, col));
+                }
+                painter.circle_filled(pb, 2.5, col);
+            }
             if !clip.contains(c) {
                 continue;
             }
@@ -180,6 +204,27 @@ impl Layer for StormLayer {
                 }
                 StormShape::Cell => {
                     painter.circle_filled(c, 2.5, m.color);
+                }
+                StormShape::Cyclone => {
+                    // Centre disc with two curved arms (the TC map symbol).
+                    let r = 9.0;
+                    let arm = |sign: f32| -> Vec<Pos2> {
+                        (0..=10)
+                            .map(|i| {
+                                let t = i as f32 / 10.0;
+                                let a = sign * std::f32::consts::PI * (0.5 + t * 0.9);
+                                let rr = r * (0.6 + 1.1 * t);
+                                c + vec2(a.cos() * rr * sign, a.sin() * rr)
+                            })
+                            .collect()
+                    };
+                    for sign in [1.0, -1.0] {
+                        painter.add(Shape::line(arm(sign), Stroke::new(4.0, outline)));
+                        painter.add(Shape::line(arm(sign), Stroke::new(2.5, m.color)));
+                    }
+                    painter.circle_filled(c, r * 0.6, m.color);
+                    painter.circle_stroke(c, r * 0.6, Stroke::new(1.5, outline));
+                    painter.circle_filled(c, r * 0.22, outline);
                 }
                 StormShape::Report(letter) => {
                     painter.circle_filled(c, 7.0, m.color);

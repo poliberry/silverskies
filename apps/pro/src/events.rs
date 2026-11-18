@@ -10,6 +10,13 @@ use crate::state::{LogLevel, RadioStatus, WindObs};
 pub enum AppEvent {
     /// NEXRAD storm cells (IEM).
     StormCells(Result<Vec<ss_core::storms::StormCell>, String>),
+    /// Tropical cyclones worldwide (GDACS).
+    Tropical(Result<Vec<ss_core::storms::TropicalCyclone>, String>),
+    /// Storm cells found in the radar mosaic around a location.
+    MosaicCells {
+        location_id: String,
+        result: Result<Vec<ss_core::storms::StormCell>, String>,
+    },
     /// Local storm reports (IEM).
     StormReports(Result<Vec<ss_core::storms::StormReport>, String>),
     /// Forecast soundings for a location (Open-Meteo pressure levels).
