@@ -204,7 +204,7 @@ fn fkey_width(ui: &Ui, font: &FontId, n: usize, label: Option<&str>) -> f32 {
     };
     let nw = w(format!("{n})"));
     let lw = label.map_or(0.0, |l| w(l.to_owned()) + 4.0);
-    6.0 + 16.0 + 4.0 + nw + lw + 8.0
+    6.0 + 13.0 + 4.0 + nw + lw + 8.0
 }
 
 /// `▣ 1) SAVE`: icon, amber number and white label (the label drops out
@@ -227,13 +227,13 @@ fn fkey(
     let y = rect.center().y;
     let mut x = rect.left() + 6.0;
     ui.painter().text(
-        egui::pos2(x + 8.0, y),
+        egui::pos2(x + 6.5, y),
         Align2::CENTER_CENTER,
         glyph,
-        crate::theme::icon(16.0),
+        crate::theme::icon(13.0),
         if hot { Color32::WHITE } else { c32(p.a0) },
     );
-    x += 20.0;
+    x += 17.0;
     let num = ui.painter().text(
         egui::pos2(x, y),
         Align2::LEFT_CENTER,
