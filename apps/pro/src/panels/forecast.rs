@@ -39,7 +39,8 @@ impl Panel for ForecastPanel {
         }
         let wmin = days.iter().map(|d| d.temp_min_c).fold(f64::MAX, f64::min);
         let wmax = days.iter().map(|d| d.temp_max_c).fold(f64::MIN, f64::max);
-        let bar_w = (ui.available_width() - 190.0).clamp(24.0, 160.0);
+        // Date 64 + icon 16 + low 44 + high 48 + rain 40 + 5 gaps of 6.
+        let bar_w = (ui.available_width() - 242.0).clamp(24.0, 160.0);
 
         for d in days {
             ui.horizontal(|ui| {
@@ -72,11 +73,17 @@ impl Panel for ForecastPanel {
                     ),
                 );
                 ui.painter().rect_filled(bar, 0.0, c32(p.a0));
-                ui.label(RichText::new(fmt_temp(d.temp_max_c, units)));
-                ui.label(
-                    RichText::new(format!("{:.0}%", d.precipitation_probability_max_pct))
-                        .small()
-                        .color(c32a(p.text2)),
+                ui.add_sized(
+                    [48.0, 16.0],
+                    egui::Label::new(RichText::new(fmt_temp(d.temp_max_c, units))),
+                );
+                // Same size as the temperatures so the row shares a baseline.
+                ui.add_sized(
+                    [40.0, 16.0],
+                    egui::Label::new(
+                        RichText::new(format!("{:.0}%", d.precipitation_probability_max_pct))
+                            .color(c32a(p.text2)),
+                    ),
                 );
             });
         }

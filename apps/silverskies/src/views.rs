@@ -90,49 +90,7 @@ fn cell(ui: &mut Ui, rect: Rect, fill: Color32, salt: &str, add: impl FnOnce(&mu
     add(&mut child);
 }
 
-/// Distance from a galley's top to its first line's baseline.
-pub fn galley_baseline(g: &egui::Galley) -> f32 {
-    g.rows
-        .first()
-        .map(|r| {
-            r.pos.y
-                + r.row
-                    .glyphs
-                    .first()
-                    .map_or(r.row.size.y * 0.8, |gl| gl.pos.y)
-        })
-        .unwrap_or(g.size().y * 0.8)
-}
-
-/// Paint one line of text with its baseline at `y`, anchored at `x` by
-/// `align` (left, centre or right). Mixed fonts on a row share a baseline
-/// this way instead of being centred box-by-box.
-pub fn text_on_baseline(
-    painter: &Painter,
-    x: f32,
-    y: f32,
-    align: Align,
-    text: impl ToString,
-    font: egui::FontId,
-    color: Color32,
-) -> Rect {
-    let g = painter.layout_no_wrap(text.to_string(), font, color);
-    let w = g.size().x;
-    let left = match align {
-        Align::Min => x,
-        Align::Center => x - w / 2.0,
-        Align::Max => x - w,
-    };
-    let r = Rect::from_min_size(pos2(left, y - galley_baseline(&g)), g.size());
-    painter.galley(r.min, g, color);
-    r
-}
-
-/// The baseline that visually centres text of `size` points on `center_y`
-/// (half the cap height below the centre).
-pub fn baseline_for_center(center_y: f32, size: f32) -> f32 {
-    center_y + size * 0.36
-}
+pub use ss_assets::text::{baseline_for_center, galley_baseline, text_on_baseline};
 
 /// Lay out runs of differently sized text left to right on one shared
 /// baseline, allocating their space in `ui`. Returns the rect and baseline.
@@ -210,13 +168,15 @@ fn badge_row(
 ) {
     let r = ui
         .horizontal_top(|ui| {
-            let (col, _) = ui.allocate_exact_size(vec2(badge, badge), Sense::hover());
+            // Reserve the badge's column only; the block sets the height and
+            // the badge is centred on it afterwards.
+            let (col, _) = ui.allocate_exact_size(vec2(badge, 1.0), Sense::hover());
             let block = ui.vertical(content).response.rect;
             (col, block)
         })
         .inner;
     let (col, block) = r;
-    let cy = block.center().y.max(col.top() + badge / 2.0);
+    let cy = block.center().y;
     paint(ui.painter(), pos2(col.center().x, cy));
 }
 
@@ -807,14 +767,19 @@ pub fn forecast(ui: &mut Ui, app: &mut App, actions: &mut Vec<Action>) {
             }
 
             let s = scheme(&p);
-            ui.horizontal(|ui| {
-                ui.label(label("Silver Skies", 12.5, s.primary));
-                ui.label(
-                    RichText::new("· Open-Meteo · WMO alerts via LibreWXR · Google weather icons")
-                        .size(12.0)
-                        .color(s.outline),
-                );
-            });
+            // Footer: brand and sources on one baseline.
+            runs(
+                ui,
+                &[
+                    ("Silver Skies".into(), medium_font(12.5), s.primary),
+                    (
+                        "· Open-Meteo · WMO alerts via LibreWXR · Google weather icons".into(),
+                        body_font(12.0),
+                        s.outline,
+                    ),
+                ],
+                6.0,
+            );
             ui.add_space(14.0);
         });
 

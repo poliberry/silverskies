@@ -304,9 +304,11 @@ impl CommandBar {
                 for line in &shared.log {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 6.0;
+                        // Same size as the message so both share a baseline;
+                        // the dimmer colour is what sets the time apart.
                         ui.label(
                             RichText::new(line.time.format("%H:%M:%S").to_string())
-                                .small()
+                                .monospace()
                                 .color(c32a(p.text3)),
                         );
                         let (text, color) = match line.level {
@@ -315,7 +317,9 @@ impl CommandBar {
                             LogLevel::Error => (format!("error: {}", line.text), c32(p.danger)),
                             LogLevel::Cmd => (format!(":{}", line.text), c32(p.a0)),
                         };
-                        ui.add(egui::Label::new(RichText::new(text).color(color)).wrap());
+                        ui.add(
+                            egui::Label::new(RichText::new(text).monospace().color(color)).wrap(),
+                        );
                     });
                 }
             });
@@ -357,7 +361,9 @@ impl CommandBar {
         );
         let ui = &mut child;
         if self.open {
-            ui.label(RichText::new(":").color(c32(p.a0)).strong());
+            // The ":" prompt is painted on the input's own baseline once the
+            // input is laid out; reserve its width now.
+            let (prompt, _) = ui.allocate_exact_size(egui::vec2(10.0, 1.0), egui::Sense::hover());
             ui.input_mut(|i| {
                 if i.consume_key(Modifiers::SHIFT, Key::Tab) {
                     self.tab_back();
@@ -372,15 +378,34 @@ impl CommandBar {
                 }
             });
             let esc = ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape));
-            let r = ui.add(
-                TextEdit::singleline(&mut self.input)
-                    .id(Id::unique("cmdbar_input"))
-                    .font(TextStyle::Monospace)
-                    .frame(egui::Frame::NONE)
-                    .desired_width(f32::INFINITY)
-                    .lock_focus(true)
-                    .hint_text("command  (help, log, clear)"),
-            );
+            let out_te = TextEdit::singleline(&mut self.input)
+                .id(Id::unique("cmdbar_input"))
+                .font(TextStyle::Monospace)
+                .frame(egui::Frame::NONE)
+                .desired_width(f32::INFINITY)
+                .lock_focus(true)
+                .hint_text("command  (help, log, clear)")
+                .show(ui);
+            let r = out_te.response;
+            {
+                // The ":" prompt goes on the input text's own baseline.
+                let font = ui
+                    .style()
+                    .text_styles
+                    .get(&TextStyle::Monospace)
+                    .cloned()
+                    .unwrap_or_else(|| egui::FontId::monospace(13.0));
+                let base = out_te.galley_pos.y + ss_assets::text::galley_baseline(&out_te.galley);
+                ss_assets::text::text_on_baseline(
+                    ui.painter(),
+                    prompt.left(),
+                    base,
+                    egui::Align::Min,
+                    ":",
+                    font,
+                    c32(p.a0),
+                );
+            }
             if self.request_focus {
                 r.request_focus();
                 self.request_focus = false;

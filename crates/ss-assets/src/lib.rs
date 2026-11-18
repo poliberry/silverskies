@@ -4,6 +4,7 @@
 
 pub mod glow;
 pub mod menubar;
+pub mod text;
 
 use egui::{ColorImage, Context, Id, TextureHandle, TextureOptions};
 use ss_core::weather::icons::v1_icon;

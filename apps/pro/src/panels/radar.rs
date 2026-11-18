@@ -387,6 +387,29 @@ fn overlay_text(
     painter.text(pos, align, text, font, color);
 }
 
+/// Shadowed overlay text with its baseline at `y`.
+fn overlay_text_on_baseline(
+    painter: &egui::Painter,
+    x: f32,
+    y: f32,
+    align: egui::Align,
+    text: &str,
+    color: Color32,
+) {
+    use ss_assets::text::text_on_baseline;
+    let font = FontId::monospace(11.0);
+    text_on_baseline(
+        painter,
+        x + 1.0,
+        y + 1.0,
+        align,
+        text,
+        font.clone(),
+        Color32::from_black_alpha(200),
+    );
+    text_on_baseline(painter, x, y, align, text, font, color);
+}
+
 /// Topmost visible polygon under `pos` in the named layer: `(id, label)`.
 fn hit_polygon(
     map: &mut MapWidget,
@@ -625,12 +648,16 @@ impl Panel for RadarPanel {
             .unwrap_or_else(|| "no location".to_string());
         let painter = ui.painter_at(r.rect);
         let text = format!("{label}  z{:.1}", self.map.viewport.zoom);
-        let (label_pos, label_align) = if overlay {
-            (r.rect.center_top() + vec2(0.0, 6.0), Align2::CENTER_TOP)
+        // Same baseline as the "RADR <GO>" tag text along the top edge
+        // (the tag is 10.5 pt monospace, 3 pt below the viewport top).
+        let tag = painter.layout_no_wrap("R".into(), FontId::monospace(10.5), c32(p.a0));
+        let base = r.rect.top() + 3.0 + ss_assets::text::galley_baseline(&tag);
+        let (x, align) = if overlay {
+            (r.rect.center().x, egui::Align::Center)
         } else {
-            (r.rect.left_top() + vec2(8.0, 6.0), Align2::LEFT_TOP)
+            (r.rect.left() + 8.0, egui::Align::Min)
         };
-        overlay_text(&painter, label_pos, label_align, &text, c32(p.a0));
+        overlay_text_on_baseline(&painter, x, base, align, &text, c32(p.a0));
         if rs.aqi_badge {
             let key_blank = cx
                 .shared

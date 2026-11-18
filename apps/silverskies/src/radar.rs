@@ -4,7 +4,7 @@
 
 use std::time::{Duration, Instant};
 
-use egui::{CornerRadius, Margin, RichText, Ui};
+use egui::{CornerRadius, Margin, Ui};
 use ss_core::alerts::colors::class_color;
 use ss_core::theme::Palette;
 use ss_core::{Alert, RadarFrame, WeatherMaps};
@@ -14,7 +14,7 @@ use ss_map::{
 };
 use ss_net::librewxr::radar_tile_url;
 
-use crate::theme::{alpha, c32, c32a, RADIUS_SMALL};
+use crate::theme::{alpha, c32, RADIUS_SMALL};
 
 /// "Universal Blue" — the same calm default the Pro app starts with.
 const COLOR_SCHEME: u8 = 2;
@@ -197,59 +197,101 @@ impl Radar {
         // --- floating controls ---
         let bar = egui::Rect::from_min_size(
             egui::pos2(rect.left() + 16.0, rect.bottom() - 64.0),
-            egui::vec2((rect.width() - 32.0).min(520.0), 48.0),
+            egui::vec2((rect.width() - 32.0).min(440.0), 48.0),
         );
-        let mut child = ui.new_child(
-            egui::UiBuilder::new()
-                .max_rect(bar)
-                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        // A floating pill: play/pause, scrubber and time, each placed at a
+        // fixed position on the bar's centre line so they align exactly.
+        let sch = crate::theme::scheme(p);
+        ui.painter().rect_filled(
+            bar.translate(egui::vec2(0.0, 2.0)),
+            CornerRadius::same(255),
+            egui::Color32::from_black_alpha(if sch.dark { 80 } else { 28 }),
         );
-        egui::Frame::new()
-            .fill(c32(p.surface).gamma_multiply(0.94))
-            .corner_radius(CornerRadius::same(RADIUS_SMALL + 4))
-            .inner_margin(Margin::symmetric(10, 6))
-            .show(&mut child, |ui| {
-                ui.set_width(bar.width() - 20.0);
-                ui.horizontal_centered(|ui| {
-                    let label = if self.playing {
-                        "❚❚ Pause"
-                    } else {
-                        "▶ Play"
-                    };
-                    if ui.button(label).clicked() {
-                        self.playing = !self.playing;
-                        if !self.playing {
-                            self.frame = live_idx;
-                        }
-                    }
-                    if !all.is_empty() {
-                        let mut f = self.frame.min(all.len() - 1);
-                        let slider = egui::Slider::new(&mut f, 0..=all.len() - 1).show_value(false);
-                        if ui.add_sized([150.0, 20.0], slider).changed() {
-                            self.frame = f;
-                            self.playing = false;
-                        }
-                        let t = all[f].time;
-                        // Frame time in the place's own zone (falls back to this computer's).
-                        let when = chrono::DateTime::from_timestamp(t, 0)
-                            .map(|d| match tz.and_then(|z| z.parse::<chrono_tz::Tz>().ok()) {
-                                Some(z) => d.with_timezone(&z).format("%H:%M").to_string(),
-                                None => d.with_timezone(&chrono::Local).format("%H:%M").to_string(),
-                            })
-                            .unwrap_or_default();
-                        let tag = if f > live_idx {
-                            "forecast"
-                        } else if f == live_idx {
-                            "now"
-                        } else {
-                            "past"
-                        };
-                        ui.label(RichText::new(format!("{when} · {tag}")).color(c32a(p.text2)));
-                    } else {
-                        ui.label(RichText::new("Loading radar…").color(c32a(p.text3)));
-                    }
-                });
-            });
+        ui.painter()
+            .rect_filled(bar, CornerRadius::same(255), sch.surface_container_high);
+        let cy = bar.center().y;
+        let btn = egui::Rect::from_min_size(
+            egui::pos2(bar.left() + 6.0, cy - 18.0),
+            egui::vec2(100.0, 36.0),
+        );
+        let label = if self.playing {
+            "❚❚  Pause"
+        } else {
+            "▶  Play"
+        };
+        // Drawn directly so its size is fixed (a Button would wrap the label).
+        let play = ui.interact(btn, ui.scope_id().with("radar_play"), egui::Sense::click());
+        let fill = if play.hovered() {
+            sch.primary.lerp_to_gamma(sch.on_primary, 0.08)
+        } else {
+            sch.primary
+        };
+        ui.painter().rect_filled(btn, CornerRadius::same(255), fill);
+        crate::views::text_on_baseline(
+            ui.painter(),
+            btn.center().x,
+            crate::views::baseline_for_center(cy, 14.0),
+            egui::Align::Center,
+            label,
+            crate::theme::medium_font(14.0),
+            sch.on_primary,
+        );
+        let play = play.on_hover_cursor(egui::CursorIcon::PointingHand);
+        if play.clicked() {
+            self.playing = !self.playing;
+            if !self.playing {
+                self.frame = live_idx;
+            }
+        }
+        if !all.is_empty() {
+            let mut f = self.frame.min(all.len() - 1);
+            let slider_r = egui::Rect::from_min_size(
+                egui::pos2(btn.right() + 14.0, cy - 12.0),
+                egui::vec2(170.0, 24.0),
+            );
+            ui.spacing_mut().slider_width = slider_r.width();
+            let slider = egui::Slider::new(&mut f, 0..=all.len() - 1).show_value(false);
+            let sr = ui.put(slider_r, slider);
+            let text_x = sr.rect.right() + 14.0;
+            if sr.changed() {
+                self.frame = f;
+                self.playing = false;
+            }
+            let t = all[f].time;
+            // Frame time in the place's own zone (falls back to this computer's).
+            let when = chrono::DateTime::from_timestamp(t, 0)
+                .map(|d| match tz.and_then(|z| z.parse::<chrono_tz::Tz>().ok()) {
+                    Some(z) => d.with_timezone(&z).format("%H:%M").to_string(),
+                    None => d.with_timezone(&chrono::Local).format("%H:%M").to_string(),
+                })
+                .unwrap_or_default();
+            let tag = if f > live_idx {
+                "forecast"
+            } else if f == live_idx {
+                "now"
+            } else {
+                "past"
+            };
+            crate::views::text_on_baseline(
+                ui.painter(),
+                text_x,
+                crate::views::baseline_for_center(cy, 14.5),
+                egui::Align::Min,
+                format!("{when} · {tag}"),
+                egui::FontId::proportional(14.5),
+                sch.on_surface_variant,
+            );
+        } else {
+            crate::views::text_on_baseline(
+                ui.painter(),
+                btn.right() + 14.0,
+                crate::views::baseline_for_center(cy, 14.5),
+                egui::Align::Min,
+                "Loading radar…",
+                egui::FontId::proportional(14.5),
+                sch.on_surface_variant,
+            );
+        }
 
         // Rain-intensity legend, top-right.
         let legend = egui::Rect::from_min_size(
