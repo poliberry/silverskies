@@ -193,6 +193,33 @@ fn terrain_color(h: f32, shade: f32, dark: bool) -> Color32 {
     Color32::from_rgb(c(base[0]), c(base[1]), c(base[2]))
 }
 
+/// A sky behind the scene: deep blue overhead fading to a pale horizon.
+fn sky(painter: &egui::Painter, rect: Rect, dark: bool) {
+    let (top, bottom) = if dark {
+        (Color32::from_rgb(6, 12, 28), Color32::from_rgb(58, 82, 112))
+    } else {
+        (
+            Color32::from_rgb(70, 120, 190),
+            Color32::from_rgb(196, 214, 232),
+        )
+    };
+    let mut m = Mesh::default();
+    for (pos, col) in [
+        (rect.left_top(), top),
+        (rect.right_top(), top),
+        (rect.right_bottom(), bottom),
+        (rect.left_bottom(), bottom),
+    ] {
+        m.vertices.push(Vertex {
+            pos,
+            uv: WHITE_UV,
+            color: col,
+        });
+    }
+    m.indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
+    painter.add(Shape::mesh(m));
+}
+
 /// A soft round sprite: white, alpha falling smoothly to 0 at the edge, so
 /// overlapping echoes blend into continuous volumes instead of squares.
 pub fn soft_sprite(size: usize) -> egui::ColorImage {
@@ -209,8 +236,16 @@ pub fn soft_sprite(size: usize) -> egui::ColorImage {
 }
 
 /// The terrain as one mesh: every height sample a vertex (projected, with
-/// its own lit colour, so shading is smooth), quads sorted far to near.
-fn terrain_mesh(t: &ss_core::radar3d::Terrain, view: &View, ex: f32, dark: bool) -> Mesh {
+/// its own lighting, so shading is smooth), quads sorted far to near. With
+/// `imagery`, the satellite image is draped over it (lit by the relief);
+/// otherwise it is coloured by height.
+fn terrain_mesh(
+    t: &ss_core::radar3d::Terrain,
+    view: &View,
+    ex: f32,
+    dark: bool,
+    imagery: Option<egui::TextureId>,
+) -> Mesh {
     let n = t.n;
     let half = (n as f32 - 1.0) * t.cell_km / 2.0;
     let h = |c: usize, r: usize| t.heights_m[r.min(n - 1) * n + c.min(n - 1)] / 1000.0;
@@ -229,7 +264,19 @@ fn terrain_mesh(t: &ss_core::radar3d::Terrain, view: &View, ex: f32, dark: bool)
             let dy = (h(c, r.saturating_sub(1)) - h(c, r + 1)) * ex * 0.6;
             let nrm = V3::new(-dx, -dy, 2.0 * t.cell_km).norm();
             let shade = nrm.dot(light).max(0.0);
-            let col = terrain_color(t.heights_m[r * n + c], shade, dark);
+            let (col, uv) = match imagery {
+                // Daylight on the photo: flat ground at full brightness,
+                // slopes facing away from the sun darker.
+                Some(_) => {
+                    let k = (0.35 + 0.75 * shade / light.z).clamp(0.3, 1.0);
+                    let g = (k * 255.0) as u8;
+                    (
+                        Color32::from_rgb(g, g, g),
+                        pos2(c as f32 / (n - 1) as f32, r as f32 / (n - 1) as f32),
+                    )
+                }
+                None => (terrain_color(t.heights_m[r * n + c], shade, dark), WHITE_UV),
+            };
             let (pos, d) = match view.project(p) {
                 Some((pos, d)) => (pos, d),
                 None => (Pos2::ZERO, f32::NAN),
@@ -237,10 +284,13 @@ fn terrain_mesh(t: &ss_core::radar3d::Terrain, view: &View, ex: f32, dark: bool)
             depth[r * n + c] = d;
             mesh.vertices.push(Vertex {
                 pos,
-                uv: WHITE_UV,
+                uv,
                 color: col,
             });
         }
+    }
+    if let Some(tex) = imagery {
+        mesh.texture_id = tex;
     }
     let mut quads: Vec<(f32, u32)> = Vec::with_capacity((n - 1) * (n - 1));
     for r in 0..n - 1 {
@@ -319,6 +369,10 @@ pub struct Radar3dPanel {
     requested: std::collections::HashMap<String, Instant>,
     /// Soft round sprite the echoes are drawn with.
     sprite: Option<egui::TextureHandle>,
+    /// Drape satellite imagery over the terrain (else colour by height).
+    show_imagery: bool,
+    /// The uploaded imagery and the scene it belongs to.
+    imagery_tex: Option<(String, egui::TextureHandle)>,
 }
 
 impl Default for Radar3dPanel {
@@ -333,6 +387,8 @@ impl Default for Radar3dPanel {
             spin: false,
             requested: Default::default(),
             sprite: None,
+            show_imagery: true,
+            imagery_tex: None,
         }
     }
 }
@@ -369,6 +425,13 @@ impl Radar3dPanel {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
             Self::toggle(ui, p, &mut self.show_terrain, i::LANDSCAPE, "Terrain");
+            Self::toggle(
+                ui,
+                p,
+                &mut self.show_imagery,
+                i::SATELLITE_ALT,
+                "Satellite imagery on the terrain (off: colour by height)",
+            );
             Self::toggle(ui, p, &mut self.show_radar, i::RADAR, "Radar echoes");
             Self::toggle(
                 ui,
@@ -493,15 +556,7 @@ impl Panel for Radar3dPanel {
         self.interact(ui, &resp);
         let dark = crate::theme::is_dark(&p);
         let painter = ui.painter_at(rect);
-        painter.rect_filled(
-            rect,
-            0.0,
-            if dark {
-                Color32::from_rgb(8, 10, 16)
-            } else {
-                Color32::from_rgb(200, 214, 230)
-            },
-        );
+
         if self.sprite.is_none() {
             self.sprite = Some(ui.ctx().load_texture(
                 "radar3d-sprite",
@@ -509,6 +564,17 @@ impl Panel for Radar3dPanel {
                 egui::TextureOptions::LINEAR,
             ));
         }
+        if let Some(img) = &scene.imagery {
+            let key = format!("{}:{:?}:{}", loc.id, scene.source, img.rgb.len());
+            if self.imagery_tex.as_ref().is_none_or(|(k, _)| *k != key) {
+                let ci = egui::ColorImage::from_rgb([img.size, img.size], &img.rgb);
+                let tex =
+                    ui.ctx()
+                        .load_texture("radar3d-imagery", ci, egui::TextureOptions::LINEAR);
+                self.imagery_tex = Some((key, tex));
+            }
+        }
+        sky(&painter, rect, dark);
         let view = View::new(&self.cam, rect);
         let marks = self.draw_scene(&painter, &view, &scene, cx, dark);
         self.overlay(&painter, rect, &view, &p);
@@ -579,7 +645,12 @@ impl Radar3dPanel {
                 .map_or(0.0, |t| t.height_at(x, y) / 1000.0)
         };
         if let (true, Some(t)) = (self.show_terrain, &scene.terrain) {
-            painter.add(Shape::mesh(terrain_mesh(t, view, ex, dark)));
+            let photo = self
+                .imagery_tex
+                .as_ref()
+                .filter(|_| self.show_imagery && scene.imagery.is_some())
+                .map(|(_, tex)| tex.id());
+            painter.add(Shape::mesh(terrain_mesh(t, view, ex, dark, photo)));
         }
         if let (true, Some(sprite)) = (self.show_radar, &self.sprite) {
             painter.add(Shape::mesh(voxel_mesh(
@@ -813,10 +884,15 @@ impl Radar3dPanel {
                 );
             }
         }
+        let credit = if self.show_imagery && self.imagery_tex.is_some() {
+            "Imagery: Esri, Maxar, Earthstar Geographics · Terrain: AWS Terrain Tiles · "
+        } else {
+            "Terrain: AWS Terrain Tiles · "
+        };
         painter.text(
             rect.right_bottom() + vec2(-8.0, -6.0),
             Align2::RIGHT_BOTTOM,
-            "drag: rotate · shift/right-drag: pan · scroll: zoom",
+            format!("{credit}drag: rotate · shift/right-drag: pan · scroll: zoom"),
             FontId::monospace(9.5),
             Color32::from_white_alpha(140),
         );

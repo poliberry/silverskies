@@ -7,13 +7,19 @@ use std::collections::HashMap;
 
 use crate::{Net, NetError, Result};
 use ss_core::radar3d::{
-    local_km, mosaic_voxels, nearest_site, terrain_from_tiles, volume_voxels, RadarSource, Scene,
-    Terrain, VoxelSpec,
+    imagery_from_tiles, local_km, mosaic_voxels, nearest_site, terrain_from_tiles, volume_voxels,
+    Imagery, RadarSource, Scene, Terrain, VoxelSpec,
 };
 use ss_core::{RadarFrame, RadarStation};
 
 /// Terrarium-encoded elevation tiles (Mapzen / AWS Open Data, keyless).
 pub const TERRAIN_URL: &str = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium";
+/// Esri World Imagery tiles (`{z}/{y}/{x}`): free with attribution.
+pub const IMAGERY_URL: &str =
+    "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile";
+pub const IMAGERY_CREDIT: &str = "Imagery: Esri, Maxar, Earthstar Geographics";
+/// Imagery pixels per side of the scene.
+pub const IMAGERY_SIZE: usize = 1536;
 /// Half the scene's width, km.
 pub const HALF_KM: f32 = 200.0;
 /// Terrain samples per side.
@@ -29,9 +35,13 @@ pub const MAX_VOXELS: usize = 140_000;
 
 /// The zoom whose tiles give about one terrain sample per pixel.
 fn terrain_zoom(lat: f64) -> u8 {
-    let km_per_px_needed = 2.0 * f64::from(HALF_KM) / TERRAIN_N as f64;
+    zoom_for(lat, 2.0 * f64::from(HALF_KM) / TERRAIN_N as f64)
+}
+
+/// The smallest zoom with pixels no bigger than `km_per_px_needed`.
+fn zoom_for(lat: f64, km_per_px_needed: f64) -> u8 {
     let mut z = 4u8;
-    while z < 11 {
+    while z < 14 {
         let km_per_px = 40_075.0 * lat.to_radians().cos() / (256.0 * 2f64.powi(i32::from(z)));
         if km_per_px <= km_per_px_needed {
             break;
@@ -92,6 +102,75 @@ impl Net {
         ))
     }
 
+    /// Fetch the tiles at `z` covering the scene around (`lat`, `lon`).
+    async fn scene_tiles(
+        &self,
+        lat: f64,
+        lon: f64,
+        z: u8,
+        url: impl Fn(u32, u32) -> String,
+    ) -> HashMap<(u32, u32), image::RgbImage> {
+        use futures::StreamExt;
+        let n = 1u32 << z;
+        let deg_lat = f64::from(HALF_KM) / 111.2;
+        let deg_lon = deg_lat / lat.to_radians().cos().max(0.05);
+        let (x0, y0) = ss_core::geo::lonlat_to_world(lon - deg_lon, lat + deg_lat, f64::from(z));
+        let (x1, y1) = ss_core::geo::lonlat_to_world(lon + deg_lon, lat - deg_lat, f64::from(z));
+        let (tx0, ty0) = ((x0 / 256.0) as i64, (y0 / 256.0).max(0.0) as u32);
+        let (tx1, ty1) = ((x1 / 256.0) as i64, ((y1 / 256.0) as u32).min(n - 1));
+        let mut wanted = Vec::new();
+        for ty in ty0..=ty1 {
+            for tx in tx0..=tx1 {
+                wanted.push((tx.rem_euclid(i64::from(n)) as u32, ty));
+            }
+        }
+        let urls: Vec<((u32, u32), String)> = wanted
+            .into_iter()
+            .map(|(x, y)| ((x, y), url(x, y)))
+            .collect();
+        futures::stream::iter(urls)
+            .map(|(k, u)| async move { (k, self.get_bytes(&u, None).await) })
+            .buffer_unordered(16)
+            .filter_map(|(k, r)| async move {
+                let img = image::load_from_memory(&r.ok()?).ok()?.to_rgb8();
+                Some((k, img))
+            })
+            .collect()
+            .await
+    }
+
+    /// Satellite imagery for the scene (Esri World Imagery).
+    pub async fn imagery(&self, lat: f64, lon: f64) -> Result<Imagery> {
+        let z = zoom_for(lat, 2.0 * f64::from(HALF_KM) / IMAGERY_SIZE as f64);
+        let tiles = self
+            .scene_tiles(lat, lon, z, |x, y| format!("{IMAGERY_URL}/{z}/{y}/{x}"))
+            .await;
+        if tiles.is_empty() {
+            return Err(NetError::Missing("satellite imagery"));
+        }
+        let n = 1u32 << z;
+        Ok(tokio::task::spawn_blocking(move || {
+            imagery_from_tiles(
+                lat,
+                lon,
+                HALF_KM,
+                IMAGERY_SIZE,
+                z,
+                IMAGERY_CREDIT,
+                |wx, wy| {
+                    let tx = ((wx / 256.0).floor() as i64).rem_euclid(i64::from(n)) as u32;
+                    let ty = (wy / 256.0).floor() as u32;
+                    let img = tiles.get(&(tx, ty))?;
+                    let px = (wx.rem_euclid(256.0) as u32).min(img.width() - 1);
+                    let py = (wy.rem_euclid(256.0) as u32).min(img.height() - 1);
+                    Some(img.get_pixel(px, py).0)
+                },
+            )
+        })
+        .await
+        .map_err(|e| NetError::Parse(e.to_string()))?)
+    }
+
     /// The whole scene. `stations` are the WSR-88D sites (may be empty);
     /// `mosaic` the radar host and observed frames for the fallback.
     pub async fn scene3d(
@@ -102,7 +181,9 @@ impl Net {
         mosaic_host: &str,
         frames: &[RadarFrame],
     ) -> Result<Scene> {
-        let terrain = self.terrain(lat, lon).await.ok();
+        let (terrain, imagery) =
+            futures::future::join(self.terrain(lat, lon), self.imagery(lat, lon)).await;
+        let (terrain, imagery) = (terrain.ok(), imagery.ok());
         let site = nearest_site(lat, lon, stations, |s| (s.lat, s.lon), NEXRAD_RANGE_KM)
             .map(|(s, _)| s.id.clone());
         let mut scene = Scene {
@@ -110,6 +191,7 @@ impl Net {
             lon,
             half_km: HALF_KM,
             terrain,
+            imagery,
             voxels: Vec::new(),
             voxel_km: NEXRAD_KM,
             voxel_dz_km: 0.5,

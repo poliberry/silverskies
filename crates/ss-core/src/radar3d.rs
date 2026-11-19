@@ -109,6 +109,52 @@ impl Terrain {
     }
 }
 
+/// Satellite imagery draped over the terrain: a square RGB image covering
+/// the scene (north up), `size` pixels a side.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Imagery {
+    pub size: usize,
+    pub rgb: Vec<u8>,
+    /// Credit to show with it.
+    pub attribution: String,
+}
+
+/// Resample web-mercator imagery onto the scene square. `pixel(wx, wy)`
+/// returns the RGB at a world pixel of zoom `zoom` (`None` where missing:
+/// left dark grey).
+pub fn imagery_from_tiles(
+    lat0: f64,
+    lon0: f64,
+    half_km: f32,
+    size: usize,
+    zoom: u8,
+    attribution: &str,
+    pixel: impl Fn(f64, f64) -> Option<[u8; 3]>,
+) -> Imagery {
+    let mut rgb = vec![40u8; size * size * 3];
+    let deg_lat = 1.0 / EARTH_KM.to_radians();
+    let deg_lon = deg_lat / lat0.to_radians().cos().max(0.05);
+    let step = 2.0 * f64::from(half_km) / size as f64;
+    for r in 0..size {
+        let y = f64::from(half_km) - (r as f64 + 0.5) * step;
+        let lat = lat0 + y * deg_lat;
+        for c in 0..size {
+            let x = -f64::from(half_km) + (c as f64 + 0.5) * step;
+            let lon = lon0 + x * deg_lon;
+            let (wx, wy) = lonlat_to_world(lon, lat, f64::from(zoom));
+            if let Some(px) = pixel(wx, wy) {
+                let i = (r * size + c) * 3;
+                rgb[i..i + 3].copy_from_slice(&px);
+            }
+        }
+    }
+    Imagery {
+        size,
+        rgb,
+        attribution: attribution.to_string(),
+    }
+}
+
 /// Everything the 3D view draws.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Scene {
@@ -117,6 +163,9 @@ pub struct Scene {
     /// Half the width of the scene, km.
     pub half_km: f32,
     pub terrain: Option<Terrain>,
+    /// Satellite imagery for the terrain (when it loaded).
+    #[serde(default)]
+    pub imagery: Option<Imagery>,
     pub voxels: Vec<Voxel>,
     /// Voxel size: horizontal and vertical, km.
     pub voxel_km: f32,
@@ -381,6 +430,19 @@ mod tests {
         assert!((p.x - 100.0).abs() < 2.0 && p.y.abs() < 2.0, "{p:?}");
         assert!((p.z - 1.86).abs() < 0.5, "{p:?}"); // 0.4 km site + ~1.46 km
         assert_eq!(p.dbz, 50.0);
+    }
+
+    #[test]
+    fn imagery_is_resampled_north_up() {
+        // Red in the northern half of the world tile, blue in the south.
+        let (_, cy) = lonlat_to_world(10.0, 45.0, 9.0);
+        let img = imagery_from_tiles(45.0, 10.0, 20.0, 8, 9, "test", |_, wy| {
+            Some(if wy < cy { [255, 0, 0] } else { [0, 0, 255] })
+        });
+        assert_eq!(img.rgb.len(), 8 * 8 * 3);
+        assert_eq!(&img.rgb[0..3], &[255, 0, 0], "top row is north");
+        let last = (8 * 8 - 1) * 3;
+        assert_eq!(&img.rgb[last..last + 3], &[0, 0, 255]);
     }
 
     #[test]
