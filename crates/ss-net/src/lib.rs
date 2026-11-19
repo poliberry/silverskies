@@ -13,6 +13,7 @@ pub mod accuweather;
 pub mod eccc;
 pub mod gdacs;
 pub mod iem;
+pub mod level2;
 pub mod librewxr;
 pub mod mosaic;
 pub mod ncep;
@@ -20,6 +21,7 @@ pub mod nwr;
 pub mod nws;
 pub mod openmeteo;
 pub mod owm;
+pub mod scene3d;
 pub mod spc;
 pub mod willyweather;
 

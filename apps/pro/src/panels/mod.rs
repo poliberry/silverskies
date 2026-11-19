@@ -19,6 +19,7 @@ pub mod forecast;
 pub mod hourly;
 pub mod locations;
 pub mod radar;
+pub mod radar3d;
 pub mod radio;
 pub mod sounding;
 pub mod storms;
@@ -92,6 +93,7 @@ impl PanelFactory {
             PanelKind::Radio => Box::new(radio::RadioPanel),
             PanelKind::Storms => Box::new(storms::StormsPanel),
             PanelKind::Sounding => Box::new(sounding::SoundingPanel::default()),
+            PanelKind::Radar3d => Box::new(radar3d::Radar3dPanel::default()),
         }
     }
 }

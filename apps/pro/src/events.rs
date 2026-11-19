@@ -20,6 +20,11 @@ pub enum AppEvent {
     /// Local storm reports (IEM).
     StormReports(Result<Vec<ss_core::storms::StormReport>, String>),
     /// Forecast soundings for a location (Open-Meteo pressure levels).
+    /// The 3D view's scene for a location.
+    Scene3d {
+        location_id: String,
+        result: Result<Box<ss_core::radar3d::Scene>, String>,
+    },
     Soundings {
         location_id: String,
         result: Result<Vec<ss_core::sounding::Sounding>, String>,

@@ -205,6 +205,7 @@ pub fn card_height(kind: PanelKind) -> f32 {
         PanelKind::Radio => 200.0,
         PanelKind::Storms => 300.0,
         PanelKind::Sounding => 460.0,
+        PanelKind::Radar3d => 480.0,
         PanelKind::Radar => 0.0,
     }
 }
@@ -356,7 +357,7 @@ fn run_panel(
 }
 
 /// Tool strip buttons: (icon, panel it toggles).
-const STRIP: [(&str, PanelKind); 9] = {
+const STRIP: [(&str, PanelKind); 10] = {
     use ss_assets::symbols as i;
     [
         (i::LOCATION_ON, PanelKind::Locations),
@@ -368,6 +369,7 @@ const STRIP: [(&str, PanelKind); 9] = {
         (i::RADIO, PanelKind::Radio),
         (i::THUNDERSTORM, PanelKind::Storms),
         (i::STACKED_LINE_CHART, PanelKind::Sounding),
+        (i::VIEW_IN_AR, PanelKind::Radar3d),
     ]
 };
 

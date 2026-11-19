@@ -198,6 +198,34 @@ impl Tasks {
         });
     }
 
+    /// The 3D scene for a location: terrain, plus the nearest NEXRAD
+    /// volume or (elsewhere) the extruded radar mosaic.
+    pub fn scene3d(
+        &self,
+        loc: &SavedLocation,
+        stations: Vec<ss_core::RadarStation>,
+        host: String,
+        frames: Vec<ss_core::RadarFrame>,
+    ) {
+        let (net, tx, ctx) = (self.net.clone(), self.tx.clone(), self.ctx.clone());
+        let (id, lat, lon) = (loc.id.clone(), loc.lat, loc.lon);
+        self.rt.spawn(async move {
+            let result = net
+                .scene3d(lat, lon, &stations, &host, &frames)
+                .await
+                .map(Box::new)
+                .map_err(|e| e.to_string());
+            Self::post(
+                &tx,
+                &ctx,
+                AppEvent::Scene3d {
+                    location_id: id,
+                    result,
+                },
+            );
+        });
+    }
+
     /// Hourly forecast soundings for a location.
     pub fn soundings(&self, loc: &SavedLocation) {
         let (net, tx, ctx) = (self.net.clone(), self.tx.clone(), self.ctx.clone());

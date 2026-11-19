@@ -42,6 +42,8 @@ pub const RADIO: &str = "\u{e03e}";
 pub const RADIO_BUTTON_CHECKED: &str = "\u{e837}";
 pub const RECEIPT_LONG: &str = "\u{ef6e}";
 pub const REFRESH: &str = "\u{e5d5}";
+pub const RESTART_ALT: &str = "\u{f053}";
+pub const ROTATION_3D: &str = "\u{e84d}";
 pub const SATELLITE_ALT: &str = "\u{eb3a}";
 pub const SCHEDULE: &str = "\u{e192}";
 pub const SEND: &str = "\u{e163}";
@@ -56,6 +58,7 @@ pub const THERMOSTAT: &str = "\u{f076}";
 pub const THUNDERSTORM: &str = "\u{ebdb}";
 pub const TORNADO: &str = "\u{e199}";
 pub const TUNE: &str = "\u{e429}";
+pub const VIEW_IN_AR: &str = "\u{e9fe}";
 pub const VIEW_QUILT: &str = "\u{e8f1}";
 pub const VISIBILITY: &str = "\u{e417}";
 pub const WARNING: &str = "\u{e002}";
@@ -100,6 +103,8 @@ pub const ALL: &[&str] = &[
     RADIO_BUTTON_CHECKED,
     RECEIPT_LONG,
     REFRESH,
+    RESTART_ALT,
+    ROTATION_3D,
     SATELLITE_ALT,
     SCHEDULE,
     SEND,
@@ -114,6 +119,7 @@ pub const ALL: &[&str] = &[
     THUNDERSTORM,
     TORNADO,
     TUNE,
+    VIEW_IN_AR,
     VIEW_QUILT,
     VISIBILITY,
     WARNING,

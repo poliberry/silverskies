@@ -427,6 +427,35 @@ impl App {
                 }
                 Err(e) => sh.log(LogLevel::Warn, format!("storm reports: {e}")),
             },
+            AppEvent::Scene3d {
+                location_id,
+                result,
+            } => {
+                sh.scene3d_pending.remove(&location_id);
+                match result {
+                    Ok(s) => {
+                        sh.scene3d_errors.remove(&location_id);
+                        let what = match &s.source {
+                            Some(ss_core::radar3d::RadarSource::Nexrad { site, .. }) => {
+                                format!("{site} volume scan")
+                            }
+                            Some(ss_core::radar3d::RadarSource::Mosaic { .. }) => {
+                                "radar mosaic (estimated heights)".to_string()
+                            }
+                            None => "terrain only".to_string(),
+                        };
+                        sh.log(
+                            LogLevel::Info,
+                            format!("3D scene: {what}, {} echoes", s.voxels.len()),
+                        );
+                        sh.scenes3d.insert(location_id, *s);
+                    }
+                    Err(e) => {
+                        sh.log(LogLevel::Warn, format!("3D scene: {e}"));
+                        sh.scene3d_errors.insert(location_id, e);
+                    }
+                }
+            }
             AppEvent::Soundings {
                 location_id,
                 result,

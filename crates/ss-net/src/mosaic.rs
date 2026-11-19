@@ -68,6 +68,18 @@ impl Net {
         Ok(grid)
     }
 
+    /// The raw-dBZ grid of one mosaic frame around (`lat`, `lon`).
+    pub async fn mosaic_grid(
+        &self,
+        host: &str,
+        frame: &RadarFrame,
+        lat: f64,
+        lon: f64,
+    ) -> Result<DbzGrid> {
+        let (ox, oy) = block_origin(lon, lat);
+        self.dbz_grid(host, frame, ox, oy).await
+    }
+
     /// Storm cells within roughly 700–1,000 km of (`lat`, `lon`) from the two
     /// newest observed mosaic frames.
     pub async fn mosaic_storm_cells(

@@ -354,6 +354,9 @@ fn parse_panel(s: &str) -> Option<PanelKind> {
         "skewt" | "skew-t" | "skew" | "snd" | "raob" | "hodo" | "hodograph" => {
             Some(PanelKind::Sounding)
         }
+        "3d" | "radar3d" | "3dradar" | "volume" | "terrain" | "topo" | "topography" => {
+            Some(PanelKind::Radar3d)
+        }
         _ => None,
     }
 }
@@ -1257,8 +1260,11 @@ mod tests {
 
     #[test]
     fn complete_args() {
-        assert_eq!(complete("move ra"), ["move radar", "move radio"]);
-        assert_eq!(complete("move rada"), ["move radar"]);
+        assert_eq!(
+            complete("move ra"),
+            ["move radar", "move radar-3d", "move radio"]
+        );
+        assert_eq!(complete("move rada"), ["move radar", "move radar-3d"]);
         assert_eq!(
             complete(":move radar "),
             [

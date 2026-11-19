@@ -184,6 +184,10 @@ pub struct Shared {
     /// Forecast soundings by location id, and locations with a fetch in flight.
     pub soundings: HashMap<String, Vec<ss_core::sounding::Sounding>>,
     pub soundings_pending: std::collections::HashSet<String>,
+    /// 3D scenes (terrain + radar volume) by location id.
+    pub scenes3d: HashMap<String, ss_core::radar3d::Scene>,
+    pub scene3d_pending: std::collections::HashSet<String>,
+    pub scene3d_errors: HashMap<String, String>,
     pub sounding_errors: HashMap<String, String>,
     pub alerts: HashMap<String, Vec<Alert>>,
     /// Alerts for the radar bbox selection / audit log (slice 5 fills more).
@@ -265,6 +269,9 @@ impl Shared {
             mosaic_for: None,
             soundings: HashMap::new(),
             soundings_pending: Default::default(),
+            scenes3d: HashMap::new(),
+            scene3d_pending: Default::default(),
+            scene3d_errors: HashMap::new(),
             sounding_errors: HashMap::new(),
             alerts: HashMap::new(),
             area_alerts: Vec::new(),

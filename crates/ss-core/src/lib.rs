@@ -9,6 +9,7 @@ pub mod alerts;
 pub mod cells;
 pub mod command;
 pub mod geo;
+pub mod radar3d;
 pub mod same;
 pub mod sounding;
 pub mod storms;
