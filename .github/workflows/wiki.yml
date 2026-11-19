@@ -1,0 +1,54 @@
+# Publishes docs/wiki/ to the repository's GitHub Wiki.
+#
+# One-time setup: switch the wiki on (Settings → General → Features → Wikis)
+# and create any first page in the browser, so the wiki's git repository
+# exists. After that, every push to main that changes docs/wiki/ replaces the
+# wiki's pages with these files (edit them here, not in the wiki).
+name: Wiki
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/wiki/**"
+      - ".github/workflows/wiki.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wiki
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Publish docs/wiki to the wiki
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          url="https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.wiki.git"
+          if ! git clone --depth 1 "$url" wiki-repo 2>/dev/null; then
+            echo "::warning title=Wiki not set up::Turn the wiki on (Settings → General → Features → Wikis) and create any first page in the browser; then re-run this workflow."
+            exit 0
+          fi
+          # Replace every page with docs/wiki (the README there is for the repo).
+          find wiki-repo -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp -R docs/wiki/. wiki-repo/
+          rm -f wiki-repo/README.md
+          cd wiki-repo
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "The wiki is already up to date."
+            exit 0
+          fi
+          git commit -m "Update from ${GITHUB_REPOSITORY}@${GITHUB_SHA::7}"
+          git push
+          echo "Published $(ls *.md | wc -l) pages to the wiki."
