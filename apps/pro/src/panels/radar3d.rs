@@ -193,10 +193,112 @@ fn terrain_color(h: f32, shade: f32, dark: bool) -> Color32 {
     Color32::from_rgb(c(base[0]), c(base[1]), c(base[2]))
 }
 
-/// Something to draw, sorted by depth (far first).
-enum Prim {
-    Quad([Pos2; 4], Color32),
-    Square(Pos2, f32, Color32),
+/// A soft round sprite: white, alpha falling smoothly to 0 at the edge, so
+/// overlapping echoes blend into continuous volumes instead of squares.
+pub fn soft_sprite(size: usize) -> egui::ColorImage {
+    let c = (size as f32 - 1.0) / 2.0;
+    let pixels = (0..size * size)
+        .map(|i| {
+            let (x, y) = ((i % size) as f32, (i / size) as f32);
+            let r = (((x - c).powi(2) + (y - c).powi(2)).sqrt() / c).min(1.0);
+            let a = (1.0 - r * r).powf(1.6);
+            Color32::from_white_alpha((a * 255.0) as u8)
+        })
+        .collect();
+    egui::ColorImage::new([size, size], pixels)
+}
+
+/// The terrain as one mesh: every height sample a vertex (projected, with
+/// its own lit colour, so shading is smooth), quads sorted far to near.
+fn terrain_mesh(t: &ss_core::radar3d::Terrain, view: &View, ex: f32, dark: bool) -> Mesh {
+    let n = t.n;
+    let half = (n as f32 - 1.0) * t.cell_km / 2.0;
+    let h = |c: usize, r: usize| t.heights_m[r.min(n - 1) * n + c.min(n - 1)] / 1000.0;
+    let light = V3::new(-0.5, 0.6, 0.62).norm();
+    let mut mesh = Mesh::default();
+    let mut depth = vec![f32::NAN; n * n];
+    for r in 0..n {
+        for c in 0..n {
+            let p = V3::new(
+                -half + c as f32 * t.cell_km,
+                half - r as f32 * t.cell_km,
+                h(c, r) * ex,
+            );
+            // Normal from central differences (slopes a little softened).
+            let dx = (h(c + 1, r) - h(c.saturating_sub(1), r)) * ex * 0.6;
+            let dy = (h(c, r.saturating_sub(1)) - h(c, r + 1)) * ex * 0.6;
+            let nrm = V3::new(-dx, -dy, 2.0 * t.cell_km).norm();
+            let shade = nrm.dot(light).max(0.0);
+            let col = terrain_color(t.heights_m[r * n + c], shade, dark);
+            let (pos, d) = match view.project(p) {
+                Some((pos, d)) => (pos, d),
+                None => (Pos2::ZERO, f32::NAN),
+            };
+            depth[r * n + c] = d;
+            mesh.vertices.push(Vertex {
+                pos,
+                uv: WHITE_UV,
+                color: col,
+            });
+        }
+    }
+    let mut quads: Vec<(f32, u32)> = Vec::with_capacity((n - 1) * (n - 1));
+    for r in 0..n - 1 {
+        for c in 0..n - 1 {
+            let i = r * n + c;
+            let ds = [depth[i], depth[i + 1], depth[i + n], depth[i + n + 1]];
+            if ds.iter().any(|d| d.is_nan()) {
+                continue;
+            }
+            quads.push((ds.iter().sum::<f32>(), i as u32));
+        }
+    }
+    quads.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let n32 = n as u32;
+    mesh.indices.reserve(quads.len() * 6);
+    for (_, i) in quads {
+        mesh.indices
+            .extend_from_slice(&[i, i + 1, i + n32 + 1, i, i + n32 + 1, i + n32]);
+    }
+    mesh
+}
+
+/// The echoes as soft sprites, far to near, sized to overlap their
+/// neighbours so the volume reads as continuous cloud.
+fn voxel_mesh(scene: &Scene, view: &View, ex: f32, min_dbz: f32, texture: egui::TextureId) -> Mesh {
+    let mut pts: Vec<(f32, Pos2, f32, Color32)> = scene
+        .voxels
+        .iter()
+        .filter(|v| v.dbz >= min_dbz)
+        .filter_map(|v| {
+            let (at, depth) = view.project(V3::new(v.x, v.y, v.z * ex))?;
+            let size = (scene.voxel_km * view.scale_at(depth) * 2.3).clamp(2.0, 70.0);
+            Some((depth, at, size, dbz_color(v.dbz).gamma_multiply(0.6)))
+        })
+        .collect();
+    pts.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let mut mesh = Mesh::with_texture(texture);
+    mesh.vertices.reserve(pts.len() * 4);
+    mesh.indices.reserve(pts.len() * 6);
+    for (_, c, s, col) in pts {
+        let h = s / 2.0;
+        let i = mesh.vertices.len() as u32;
+        for (d, uv) in [
+            (vec2(-h, -h), pos2(0.0, 0.0)),
+            (vec2(h, -h), pos2(1.0, 0.0)),
+            (vec2(h, h), pos2(1.0, 1.0)),
+            (vec2(-h, h), pos2(0.0, 1.0)),
+        ] {
+            mesh.vertices.push(Vertex {
+                pos: c + d,
+                uv,
+                color: col,
+            });
+        }
+        mesh.indices
+            .extend_from_slice(&[i, i + 1, i + 2, i, i + 2, i + 3]);
+    }
+    mesh
 }
 
 /// A marker to draw on top (storm cells, reports), with hover text.
@@ -215,6 +317,8 @@ pub struct Radar3dPanel {
     show_storms: bool,
     spin: bool,
     requested: std::collections::HashMap<String, Instant>,
+    /// Soft round sprite the echoes are drawn with.
+    sprite: Option<egui::TextureHandle>,
 }
 
 impl Default for Radar3dPanel {
@@ -228,6 +332,7 @@ impl Default for Radar3dPanel {
             show_storms: true,
             spin: false,
             requested: Default::default(),
+            sprite: None,
         }
     }
 }
@@ -397,6 +502,13 @@ impl Panel for Radar3dPanel {
                 Color32::from_rgb(200, 214, 230)
             },
         );
+        if self.sprite.is_none() {
+            self.sprite = Some(ui.ctx().load_texture(
+                "radar3d-sprite",
+                soft_sprite(64),
+                egui::TextureOptions::LINEAR,
+            ));
+        }
         let view = View::new(&self.cam, rect);
         let marks = self.draw_scene(&painter, &view, &scene, cx, dark);
         self.overlay(&painter, rect, &view, &p);
@@ -460,112 +572,24 @@ impl Radar3dPanel {
         dark: bool,
     ) -> Vec<Mark> {
         let ex = self.exag;
-        let mut prims: Vec<(f32, Prim)> = Vec::new();
         let ground = |x: f32, y: f32| -> f32 {
             scene
                 .terrain
                 .as_ref()
                 .map_or(0.0, |t| t.height_at(x, y) / 1000.0)
         };
-        // Terrain: quads every other sample, lit from the north-west.
         if let (true, Some(t)) = (self.show_terrain, &scene.terrain) {
-            let step = 2;
-            let n = t.n;
-            let half = (n as f32 - 1.0) * t.cell_km / 2.0;
-            let pt = |c: usize, r: usize| {
-                let h = t.heights_m[r * n + c] / 1000.0;
-                V3::new(
-                    -half + c as f32 * t.cell_km,
-                    half - r as f32 * t.cell_km,
-                    h * ex,
-                )
-            };
-            let light = V3::new(-0.5, 0.6, 0.62).norm();
-            let mut r = 0;
-            while r + step < n {
-                let mut c = 0;
-                while c + step < n {
-                    let corners = [
-                        pt(c, r),
-                        pt(c + step, r),
-                        pt(c + step, r + step),
-                        pt(c, r + step),
-                    ];
-                    let proj: Vec<_> = corners.iter().filter_map(|v| view.project(*v)).collect();
-                    if proj.len() == 4 {
-                        // Shade from the quad's normal (heights exaggerated a
-                        // little less, so slopes don't go black).
-                        let a = corners[1].sub(corners[0]);
-                        let b = corners[3].sub(corners[0]);
-                        let nrm = V3::new(a.x, a.y, a.z * 0.6)
-                            .cross(V3::new(b.x, b.y, b.z * 0.6))
-                            .norm();
-                        let nrm = if nrm.z < 0.0 {
-                            V3::new(-nrm.x, -nrm.y, -nrm.z)
-                        } else {
-                            nrm
-                        };
-                        let shade = nrm.dot(light).max(0.0);
-                        let h = t.heights_m[(r + step / 2) * n + c + step / 2];
-                        let depth = proj.iter().map(|q| q.1).sum::<f32>() / 4.0;
-                        prims.push((
-                            depth,
-                            Prim::Quad(
-                                [proj[0].0, proj[1].0, proj[2].0, proj[3].0],
-                                terrain_color(h, shade, dark),
-                            ),
-                        ));
-                    }
-                    c += step;
-                }
-                r += step;
-            }
+            painter.add(Shape::mesh(terrain_mesh(t, view, ex, dark)));
         }
-        // Radar voxels.
-        if self.show_radar {
-            for v in &scene.voxels {
-                if v.dbz < self.min_dbz {
-                    continue;
-                }
-                let Some((at, depth)) = view.project(V3::new(v.x, v.y, v.z * ex)) else {
-                    continue;
-                };
-                let size = (scene.voxel_km * view.scale_at(depth)).clamp(1.5, 40.0);
-                prims.push((depth, Prim::Square(at, size, dbz_color(v.dbz))));
-            }
+        if let (true, Some(sprite)) = (self.show_radar, &self.sprite) {
+            painter.add(Shape::mesh(voxel_mesh(
+                scene,
+                view,
+                ex,
+                self.min_dbz,
+                sprite.id(),
+            )));
         }
-        prims.sort_by(|a, b| b.0.total_cmp(&a.0));
-        let mut mesh = Mesh::default();
-        for (_, prim) in &prims {
-            match prim {
-                Prim::Quad(q, col) => {
-                    let i = mesh.vertices.len() as u32;
-                    for p in q {
-                        mesh.vertices.push(Vertex {
-                            pos: *p,
-                            uv: WHITE_UV,
-                            color: *col,
-                        });
-                    }
-                    mesh.indices
-                        .extend_from_slice(&[i, i + 1, i + 2, i, i + 2, i + 3]);
-                }
-                Prim::Square(c, s, col) => {
-                    let h = s / 2.0;
-                    let i = mesh.vertices.len() as u32;
-                    for d in [vec2(-h, -h), vec2(h, -h), vec2(h, h), vec2(-h, h)] {
-                        mesh.vertices.push(Vertex {
-                            pos: *c + d,
-                            uv: WHITE_UV,
-                            color: *col,
-                        });
-                    }
-                    mesh.indices
-                        .extend_from_slice(&[i, i + 1, i + 2, i, i + 2, i + 3]);
-                }
-            }
-        }
-        painter.add(Shape::mesh(mesh));
 
         let mut marks = Vec::new();
         let font = FontId::monospace(11.0);
@@ -837,6 +861,13 @@ mod tests {
         let (n, dn) = v.project(V3::new(0.0, 100.0, 0.0)).unwrap();
         let (_, d0) = v.project(V3::new(0.0, 0.0, 0.0)).unwrap();
         assert!(dn > d0 && n.y < rect.center().y);
+    }
+
+    #[test]
+    fn sprite_is_opaque_in_the_middle_and_clear_at_the_edge() {
+        let img = soft_sprite(32);
+        assert!(img.pixels[16 * 32 + 16].a() > 240);
+        assert_eq!(img.pixels[0].a(), 0);
     }
 
     #[test]

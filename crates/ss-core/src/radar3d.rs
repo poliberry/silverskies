@@ -250,7 +250,7 @@ pub fn mosaic_voxels(
         max,
     } = spec;
     let mut g = Grid::new(km, dz);
-    let stride = 2;
+    let stride = 1;
     for py in (0..grid.h).step_by(stride) {
         for px in (0..grid.w).step_by(stride) {
             let Some(d) = grid.dbz[py * grid.w + px] else {

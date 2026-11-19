@@ -20,8 +20,12 @@ pub const HALF_KM: f32 = 200.0;
 pub const TERRAIN_N: usize = 161;
 /// A NEXRAD site is used when the place is within this distance.
 pub const NEXRAD_RANGE_KM: f64 = 230.0;
+/// Voxel size for measured volumes (gates are 0.25 km, radials 0.5°).
+pub const NEXRAD_KM: f32 = 1.25;
+/// Voxel size for the extruded mosaic (its pixels are ~1.5–2.5 km).
+pub const MOSAIC_KM: f32 = 2.0;
 /// Cap on voxels, to keep the view interactive.
-pub const MAX_VOXELS: usize = 90_000;
+pub const MAX_VOXELS: usize = 140_000;
 
 /// The zoom whose tiles give about one terrain sample per pixel.
 fn terrain_zoom(lat: f64) -> u8 {
@@ -107,7 +111,7 @@ impl Net {
             half_km: HALF_KM,
             terrain,
             voxels: Vec::new(),
-            voxel_km: 2.0,
+            voxel_km: NEXRAD_KM,
             voxel_dz_km: 0.5,
             source: None,
             radar_xy: None,
@@ -122,7 +126,7 @@ impl Net {
                         let spec = VoxelSpec {
                             half_km: HALF_KM,
                             min_dbz: 10.0,
-                            km: 2.0,
+                            km: NEXRAD_KM,
                             dz: 0.5,
                             max: MAX_VOXELS,
                         };
@@ -146,8 +150,8 @@ impl Net {
                 let spec = VoxelSpec {
                     half_km: HALF_KM,
                     min_dbz: 10.0,
-                    km: 4.0,
-                    dz: 1.0,
+                    km: MOSAIC_KM,
+                    dz: 0.5,
                     max: MAX_VOXELS,
                 };
                 mosaic_voxels(&grid, lat, lon, spec, terrain.as_ref())
@@ -155,8 +159,8 @@ impl Net {
             .await
             .map_err(|e| NetError::Parse(e.to_string()))?;
             scene.voxels = voxels;
-            scene.voxel_km = 4.0;
-            scene.voxel_dz_km = 1.0;
+            scene.voxel_km = MOSAIC_KM;
+            scene.voxel_dz_km = 0.5;
             scene.source = Some(RadarSource::Mosaic {
                 time: chrono::DateTime::from_timestamp(frame.time, 0)
                     .map(|d| d.to_rfc3339())
