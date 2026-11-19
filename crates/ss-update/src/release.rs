@@ -264,10 +264,16 @@ mod tests {
             Some("SilverSkiesPro-Setup-2.0.2.2.exe")
         );
         // "SilverSkies-" must not match the Pro files and vice versa.
-        assert_eq!(
-            name(App::Simple, &Install::AppImage("/a".into())).as_deref(),
-            Some("SilverSkies-2.0.2.2-x86_64.AppImage")
-        );
+        // AppImages are only published for x86-64; other CPUs get the page.
+        let appimage = name(App::Simple, &Install::AppImage("/a".into()));
+        if arch() == "x86_64" {
+            assert_eq!(
+                appimage.as_deref(),
+                Some("SilverSkies-2.0.2.2-x86_64.AppImage")
+            );
+        } else {
+            assert_eq!(appimage, None);
+        }
         assert_eq!(
             name(App::Pro, &Install::Deb).as_deref(),
             Some("silverskies-pro_2.0.2-2_amd64.deb")
