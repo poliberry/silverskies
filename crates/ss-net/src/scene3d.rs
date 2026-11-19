@@ -149,7 +149,7 @@ impl Net {
             return Err(NetError::Missing("satellite imagery"));
         }
         let n = 1u32 << z;
-        Ok(tokio::task::spawn_blocking(move || {
+        tokio::task::spawn_blocking(move || {
             imagery_from_tiles(
                 lat,
                 lon,
@@ -168,7 +168,7 @@ impl Net {
             )
         })
         .await
-        .map_err(|e| NetError::Parse(e.to_string()))?)
+        .map_err(|e| NetError::Parse(e.to_string()))
     }
 
     /// The whole scene. `stations` are the WSR-88D sites (may be empty);
