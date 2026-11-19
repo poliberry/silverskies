@@ -121,13 +121,19 @@ impl Net {
     }
 
     async fn send(&self, url: &str, accept: Option<&str>) -> Result<reqwest::Response> {
-        tracing::debug!(url, "GET");
+        let started = std::time::Instant::now();
         let mut req = self.client.get(url);
         if let Some(a) = accept {
             req = req.header(reqwest::header::ACCEPT, a);
         }
         let resp = req.send().await?;
         let status = resp.status();
+        tracing::debug!(
+            url,
+            status = status.as_u16(),
+            ms = started.elapsed().as_millis() as u64,
+            "GET"
+        );
         if !status.is_success() {
             return Err(NetError::Status {
                 url: url.to_string(),

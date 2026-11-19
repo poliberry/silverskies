@@ -56,10 +56,61 @@ fn polyline(painter: &Painter, pts: Vec<Pos2>, stroke: Stroke) {
     }
 }
 
+/// Width of the wind-barb column to the right of the Skew-T.
+const BARB_COL: f32 = 52.0;
+/// Barb staff length; with flags it stays inside half the column.
+const BARB_LEN: f32 = 17.0;
+/// Minimum vertical gap between barbs (thins dense low levels).
+const BARB_GAP: f32 = 15.0;
+
+/// Text with a dark halo so it stays legible over lines.
+fn halo_text(
+    painter: &Painter,
+    pos: Pos2,
+    align: Align2,
+    text: &str,
+    font: FontId,
+    col: Color32,
+    halo: Color32,
+) {
+    for d in [
+        vec2(-1.0, 0.0),
+        vec2(1.0, 0.0),
+        vec2(0.0, -1.0),
+        vec2(0.0, 1.0),
+    ] {
+        painter.text(pos + d, align, text, font.clone(), halo);
+    }
+    painter.text(pos, align, text, font, col);
+}
+
+/// Indices of the levels to draw barbs for: from the surface up, skipping
+/// any closer than `gap` pixels to the last one drawn.
+fn thinned(ys: &[f32], gap: f32) -> Vec<usize> {
+    let mut out = Vec::new();
+    let mut last: Option<f32> = None;
+    for (i, &y) in ys.iter().enumerate() {
+        if last.is_none_or(|l| (l - y).abs() >= gap) {
+            out.push(i);
+            last = Some(y);
+        }
+    }
+    out
+}
+
+/// The skew-T plot area inside `rect`: room for pressure labels on the
+/// left, temperature labels below and the barb column on the right.
+fn plot_rect(rect: Rect) -> Rect {
+    Rect::from_min_max(
+        rect.min + vec2(34.0, 6.0),
+        rect.max - vec2(BARB_COL + 2.0, 18.0),
+    )
+}
+
 fn skew_t(ui: &mut Ui, rect: Rect, s: &Sounding, ix: &Indices, p: &Palette) {
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 0.0, c32(p.bg));
-    let plot = Rect::from_min_max(rect.min + vec2(34.0, 6.0), rect.max - vec2(34.0, 18.0));
+    let plot = plot_rect(rect);
     let sk = Skew {
         r: plot,
         p_bot: s
@@ -150,29 +201,41 @@ fn skew_t(ui: &mut Ui, rect: Rect, s: &Sounding, ix: &Indices, p: &Palette) {
     polyline(&clip, t_line, Stroke::new(2.5, c32(PRO_DOWN)));
     polyline(&clip, td_line, Stroke::new(2.5, c32(PRO_UP)));
     // LCL tick.
-    if ix.lcl_pressure_hpa > P_TOP {
+    if ix.lcl_pressure_hpa > P_TOP && ix.lcl_pressure_hpa <= sk.p_bot {
         let y = sk.y(ix.lcl_pressure_hpa);
         painter.line_segment(
             [pos2(plot.right() - 30.0, y), pos2(plot.right() - 6.0, y)],
             Stroke::new(1.5, c32(p.text)),
         );
-        painter.text(
-            pos2(plot.right() - 32.0, y),
+        halo_text(
+            &painter,
+            pos2(plot.right() - 33.0, y),
             Align2::RIGHT_CENTER,
             "LCL",
             font.clone(),
             c32(p.text),
+            c32(p.bg),
         );
     }
-    // Wind barbs down the right edge.
-    let bx = rect.right() - 16.0;
-    for l in &s.levels {
-        if l.pressure_hpa < P_TOP {
-            continue;
-        }
+    // Wind barbs in their own column right of the plot, thinned so the
+    // closely spaced low levels don't pile up.
+    let col = Rect::from_min_max(
+        pos2(plot.right() + 2.0, plot.top()),
+        pos2(rect.right(), plot.bottom()),
+    );
+    let barbs = painter.with_clip_rect(col.expand2(vec2(0.0, 6.0)));
+    painter.vline(col.left(), plot.y_range(), Stroke::new(1.0, grid));
+    let levels: Vec<_> = s
+        .levels
+        .iter()
+        .filter(|l| l.pressure_hpa >= P_TOP && l.pressure_hpa <= sk.p_bot)
+        .collect();
+    let ys: Vec<f32> = levels.iter().map(|l| sk.y(l.pressure_hpa)).collect();
+    for i in thinned(&ys, BARB_GAP) {
+        let l = levels[i];
         barb(
-            &painter,
-            pos2(bx, sk.y(l.pressure_hpa)),
+            &barbs,
+            pos2(col.center().x, ys[i]),
             l.wind_kt,
             l.wind_dir_deg,
             c32a(p.text2),
@@ -196,8 +259,7 @@ fn barb(painter: &Painter, at: Pos2, kt: f64, from_deg: f64, col: Color32) {
     let a = (from_deg as f32).to_radians();
     let dir = vec2(a.sin(), -a.cos()); // toward the source
     let perp = vec2(-dir.y, dir.x);
-    let len = 22.0;
-    let tip = at + dir * len;
+    let tip = at + dir * BARB_LEN;
     painter.line_segment([at, tip], stroke);
     let (pennants, full, half) = ss_map::barb_components(kt as f32);
     let mut pos = 0.0;
@@ -205,7 +267,7 @@ fn barb(painter: &Painter, at: Pos2, kt: f64, from_deg: f64, col: Color32) {
         let b = tip - dir * pos;
         let c = tip - dir * (pos + 5.0);
         painter.add(Shape::convex_polygon(
-            vec![b, b + perp * 9.0, c],
+            vec![b, b + perp * 8.0, c],
             col,
             Stroke::NONE,
         ));
@@ -213,31 +275,50 @@ fn barb(painter: &Painter, at: Pos2, kt: f64, from_deg: f64, col: Color32) {
     }
     for _ in 0..full {
         let b = tip - dir * pos;
-        painter.line_segment([b, b + perp * 9.0 + dir * 3.0], stroke);
+        painter.line_segment([b, b + perp * 8.0 + dir * 2.5], stroke);
         pos += 4.0;
     }
     for _ in 0..half {
         let b = tip - dir * pos.max(3.0);
-        painter.line_segment([b, b + perp * 5.0 + dir * 1.5], stroke);
+        painter.line_segment([b, b + perp * 4.5 + dir * 1.2], stroke);
     }
 }
 
 fn hodograph(ui: &mut Ui, rect: Rect, s: &Sounding, ix: &Indices, p: &Palette) {
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 0.0, c32(p.bg));
-    let c = rect.center();
-    let max_kt = 80.0_f32;
-    let scale = rect.width().min(rect.height()) * 0.46 / max_kt;
+    let c = rect.center() + vec2(0.0, 6.0);
+    // Scale to the strongest wind shown (0–9 km and the storm motion), in
+    // 20 kt rings, so light-wind hodographs aren't a knot at the centre.
+    let mut peak = ix.bunkers_rm.1 as f32;
+    let mut h = 0.0;
+    while h <= 9000.0 {
+        if let Some((u, v)) = s.wind_at(h) {
+            peak = peak.max((u.hypot(v) / 0.514_444) as f32);
+        }
+        h += 250.0;
+    }
+    let max_kt = ((peak / 20.0).ceil() * 20.0).clamp(20.0, 120.0);
+    let scale = (rect.width().min(rect.height() - 14.0)) * 0.45 / max_kt;
     let font = FontId::monospace(9.5);
-    for ring in [20.0, 40.0, 60.0, 80.0] {
+    let halo = c32(p.bg);
+    // Label every ring when they are far enough apart, else every other.
+    let label_every = if 20.0 * scale >= 16.0 { 20.0 } else { 40.0 };
+    let mut ring = 20.0_f32;
+    while ring <= max_kt {
         painter.circle_stroke(c, ring * scale, Stroke::new(1.0, c32a(p.border)));
-        painter.text(
-            c + vec2(ring * scale + 2.0, -2.0),
-            Align2::LEFT_BOTTOM,
-            format!("{ring:.0}"),
-            font.clone(),
-            c32a(p.text3),
-        );
+        if ring % label_every == 0.0 {
+            halo_text(
+                &painter,
+                c + vec2(2.0, ring * scale - 1.0),
+                Align2::LEFT_BOTTOM,
+                &format!("{ring:.0}"),
+                font.clone(),
+                c32a(p.text3),
+                halo,
+            );
+        }
+        ring += 20.0;
     }
     painter.line_segment(
         [pos2(rect.left(), c.y), pos2(rect.right(), c.y)],
@@ -262,6 +343,7 @@ fn hodograph(ui: &mut Ui, rect: Rect, s: &Sounding, ix: &Indices, p: &Palette) {
         (12000.0, Color32::from_rgb(0x14, 0xc8, 0xc8)),
     ];
     let mut prev: Option<(Pos2, f64)> = None;
+    let mut marks: Vec<(Pos2, String)> = Vec::new();
     let mut h = 0.0;
     while h <= 12000.0 {
         if let Some((u, v)) = s.wind_at(h) {
@@ -276,14 +358,7 @@ fn hodograph(ui: &mut Ui, rect: Rect, s: &Sounding, ix: &Indices, p: &Palette) {
             }
             for km in [1.0, 3.0, 6.0] {
                 if (h - km * 1000.0).abs() < 1.0 {
-                    painter.circle_filled(pt, 2.5, c32(p.text));
-                    painter.text(
-                        pt + vec2(4.0, -3.0),
-                        Align2::LEFT_BOTTOM,
-                        format!("{km:.0}"),
-                        font.clone(),
-                        c32(p.text),
-                    );
+                    marks.push((pt, format!("{km:.0}")));
                 }
             }
             prev = Some((pt, h));
@@ -297,12 +372,37 @@ fn hodograph(ui: &mut Ui, rect: Rect, s: &Sounding, ix: &Indices, p: &Palette) {
         let (u, v) = (-spd * 0.514_444 * a.sin(), -spd * 0.514_444 * a.cos());
         let rm = to_screen(u, v);
         painter.circle_stroke(rm, 4.0, Stroke::new(1.5, c32(p.text)));
-        painter.text(
-            rm + vec2(6.0, 0.0),
-            Align2::LEFT_CENTER,
-            "RM",
+        marks.push((rm, "RM".to_string()));
+    }
+    // Height and storm-motion labels last, with halos, each placed in the
+    // first free spot around its point so they don't land on each other.
+    let mut taken: Vec<Rect> = Vec::new();
+    for (pt, label) in &marks {
+        if label != "RM" {
+            painter.circle_filled(*pt, 2.5, c32(p.text));
+        }
+        let galley = painter.layout_no_wrap(label.clone(), font.clone(), c32(p.text));
+        let sz = galley.size();
+        let spots = [
+            (vec2(5.0, -sz.y - 1.0), Align2::LEFT_TOP),
+            (vec2(5.0, 1.0), Align2::LEFT_TOP),
+            (vec2(-5.0 - sz.x, -sz.y - 1.0), Align2::LEFT_TOP),
+            (vec2(-5.0 - sz.x, 1.0), Align2::LEFT_TOP),
+        ];
+        let spot = spots
+            .iter()
+            .map(|(d, _)| Rect::from_min_size(*pt + *d, sz))
+            .find(|r| !taken.iter().any(|t| t.intersects(*r)))
+            .unwrap_or_else(|| Rect::from_min_size(*pt + spots[0].0, sz));
+        taken.push(spot);
+        halo_text(
+            &painter,
+            spot.min,
+            Align2::LEFT_TOP,
+            label,
             font.clone(),
             c32(p.text),
+            halo,
         );
     }
     painter.text(
@@ -441,7 +541,8 @@ impl Panel for SoundingPanel {
                     .monospace()
                     .color(c32(p.a0)),
             );
-            ui.spacing_mut().slider_width = (ui.available_width() - 70.0).max(60.0);
+            // Leave room for the "now" button however narrow the pane.
+            ui.spacing_mut().slider_width = (ui.available_width() - 56.0).max(24.0);
             if ui
                 .add(egui::Slider::new(&mut i, 0..=list.len() - 1).show_value(false))
                 .changed()
@@ -478,8 +579,10 @@ impl Panel for SoundingPanel {
             ui.allocate_rect(avail, Sense::hover());
             skew_t(ui, avail, s, &ix, &p);
             let inset = (avail.width().min(avail.height()) * 0.42).clamp(90.0, 220.0);
+            // Inside the plot, clear of the barb column.
+            let plot = plot_rect(avail);
             let hodo_r = Rect::from_min_size(
-                pos2(avail.right() - 40.0 - inset, avail.top() + 8.0),
+                pos2(plot.right() - 4.0 - inset, plot.top() + 4.0),
                 vec2(inset, inset),
             );
             hodograph(ui, hodo_r, s, &ix, &p);
@@ -516,5 +619,26 @@ impl Panel for SoundingPanel {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn barbs_are_thinned_to_a_minimum_gap() {
+        // Levels 8 px apart near the surface, wider aloft.
+        let ys = [300.0, 292.0, 284.0, 276.0, 250.0, 200.0];
+        assert_eq!(thinned(&ys, 15.0), vec![0, 2, 4, 5]);
+    }
+
+    #[test]
+    fn plot_leaves_room_for_the_barb_column() {
+        let r = Rect::from_min_size(pos2(0.0, 0.0), vec2(500.0, 300.0));
+        let p = plot_rect(r);
+        assert!(r.right() - p.right() >= BARB_COL);
+        // A barb with its flags fits in half the column, whichever way it points.
+        assert!(BARB_LEN + 8.0 <= BARB_COL / 2.0);
     }
 }

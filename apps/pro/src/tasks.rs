@@ -138,17 +138,14 @@ impl Tasks {
     /// Radar stations + weather-map index. Call at startup and every 30 minutes.
     pub fn load_static(&self) {
         let (net, tx, ctx) = (self.net.clone(), self.tx.clone(), self.ctx.clone());
+        // Separately, so the radar loop never waits for the site list.
+        self.weather_maps();
         self.rt.spawn(async move {
-            let (stations, maps) = tokio::join!(net.radar_stations(), net.weather_maps());
+            let stations = net.radar_stations().await;
             Self::post(
                 &tx,
                 &ctx,
                 AppEvent::RadarStations(stations.map_err(|e| e.to_string())),
-            );
-            Self::post(
-                &tx,
-                &ctx,
-                AppEvent::WeatherMaps(maps.map_err(|e| e.to_string())),
             );
         });
     }

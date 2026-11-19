@@ -11,7 +11,7 @@ use std::sync::Arc;
 use egui::{pos2, Color32, Painter, Rect};
 
 use crate::layers::{DrawCtx, Layer};
-use crate::tiles::TileKey;
+use crate::tiles::{Priority, TileKey};
 use crate::viewport::TileId;
 
 /// Builds the tile URL for one frame.
@@ -79,16 +79,20 @@ impl RadarLoopLayer {
         self.ready.get(i).copied().unwrap_or(0.0)
     }
 
+    /// Frames to fetch, in order: the one under the playhead first, then
+    /// the frames after it (wrapping), so what is on screen loads first.
     fn frames_to_fetch(&self, tiles: usize) -> Vec<usize> {
         let n = self.frames.len();
         if n == 0 {
             return Vec::new();
         }
-        if n * tiles <= PREFETCH_ALL_BUDGET {
-            return (0..n).collect();
-        }
         let i0 = self.pos.floor().max(0.0) as usize % n;
-        (0..=LOOKAHEAD).map(|k| (i0 + k) % n).collect()
+        let count = if n * tiles <= PREFETCH_ALL_BUDGET {
+            n
+        } else {
+            (LOOKAHEAD + 1).min(n)
+        };
+        (0..count).map(|k| (i0 + k) % n).collect()
     }
 }
 
@@ -125,13 +129,23 @@ impl Layer for RadarLoopLayer {
         }
 
         // Prefetch, counting how much of each frame is ready.
+        // The shown frame and the next are needed now; the rest can wait.
         let fetch = self.frames_to_fetch(tiles.len());
-        for &fi in &fetch {
+        for (rank, &fi) in fetch.iter().enumerate() {
             let f = &self.frames[fi];
+            let priority = if rank < 2 {
+                Priority::Visible
+            } else {
+                Priority::Background
+            };
             let mut ready = 0usize;
             for (tile, _) in &tiles {
                 let key = TileKey::new(f.key.clone(), tile.z, tile.x, tile.y);
-                if ctx.cache.request(&key, (f.url)(*tile)).is_some() {
+                if ctx
+                    .cache
+                    .request_with(&key, (f.url)(*tile), priority)
+                    .is_some()
+                {
                     ready += 1;
                 }
             }
@@ -295,6 +309,29 @@ impl LoopClock {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn layer(n: usize, pos: f32) -> RadarLoopLayer {
+        let mut l = RadarLoopLayer::new("r", 7, 1.0);
+        l.set_frames(
+            (0..n)
+                .map(|i| LoopFrameSource {
+                    key: format!("f{i}"),
+                    url: Arc::new(|_| String::new()),
+                })
+                .collect(),
+        );
+        l.pos = pos;
+        l
+    }
+
+    #[test]
+    fn fetches_start_at_the_playhead() {
+        // Showing the newest frame: it comes first, then the loop wraps.
+        assert_eq!(layer(5, 4.0).frames_to_fetch(10), vec![4, 0, 1, 2, 3]);
+        // Too many tiles to prefetch everything: a window from the playhead.
+        let l = layer(12, 10.0);
+        assert_eq!(l.frames_to_fetch(100), vec![10, 11, 0, 1, 2]);
+    }
 
     #[test]
     fn clock_holds_then_crossfades_then_steps() {
