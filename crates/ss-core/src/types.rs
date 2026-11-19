@@ -507,6 +507,10 @@ pub struct Config {
     pub menu_bar_always: bool,
     /// AI provider for summaries and the assistant chat (off by default).
     pub ai: crate::ai::AiSettings,
+    /// Look for a newer release on GitHub at startup and once a day.
+    pub check_for_updates: bool,
+    /// A release tag the person chose to skip (no reminder until a newer one).
+    pub skipped_update: Option<String>,
 }
 
 impl Default for Config {
@@ -541,6 +545,8 @@ impl Default for Config {
             radar: RadarSettings::default(),
             menu_bar_always: false,
             ai: crate::ai::AiSettings::default(),
+            check_for_updates: true,
+            skipped_update: None,
         }
     }
 }

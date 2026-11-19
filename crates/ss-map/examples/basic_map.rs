@@ -7,7 +7,7 @@ use ss_map::{
     RangeRingLayer, TileCache,
 };
 
-const UA: &str = "SilverSkies/2.0 (desktop app; https://github.com/poliberry/silverskies-desktop)";
+const UA: &str = "SilverSkies/2.0 (desktop app; https://github.com/poliberry/silverskies)";
 
 struct App {
     map: MapWidget,

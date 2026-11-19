@@ -229,6 +229,22 @@ pub struct Shared {
     pub dirty_config: bool,
     pub dirty_locations: bool,
     pub dirty_session: bool,
+    // --- updates ---
+    pub updater: ss_update::Updater,
+    /// What the settings window asked the updater to do (the app runs it).
+    pub update_request: Option<UpdateRequest>,
+    /// Show the About tab next time Settings draws (from the header chip).
+    pub settings_show_about: bool,
+}
+
+/// An updater action asked for from the UI.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UpdateRequest {
+    Check,
+    Install,
+    OpenPage,
+    /// Don't remind about this release tag.
+    Skip(String),
 }
 
 impl Shared {
@@ -277,6 +293,9 @@ impl Shared {
             alerts_rev: 0,
             palette_dirty: false,
             dirty_config: false,
+            updater: ss_update::Updater::new(ss_update::App::Pro),
+            update_request: None,
+            settings_show_about: false,
             dirty_locations: false,
             dirty_session: false,
         }
@@ -344,6 +363,19 @@ impl Shared {
             .chain(self.viewport_alerts.iter())
             .chain(self.demo_alerts.iter())
             .find(|a| a.id == id)
+    }
+
+    /// The release on offer, unless the person skipped it.
+    pub fn update_available(&self) -> Option<&ss_update::Release> {
+        match self.updater.state() {
+            ss_update::State::Available(r)
+                if self.config.skipped_update.as_deref() != Some(r.tag.as_str())
+                    || self.updater.manual() =>
+            {
+                Some(r)
+            }
+            _ => None,
+        }
     }
 
     pub fn log(&mut self, level: LogLevel, text: impl Into<String>) {

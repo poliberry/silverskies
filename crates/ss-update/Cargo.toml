@@ -1,0 +1,19 @@
+[package]
+name = "ss-update"
+description = "Updates Silver Skies and Silver Skies Pro from GitHub Releases"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ss-core.workspace = true
+reqwest.workspace = true
+tokio.workspace = true
+serde_json.workspace = true
+futures.workspace = true
+tracing.workspace = true
+crossbeam-channel.workspace = true
+sha2 = "0.10"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }

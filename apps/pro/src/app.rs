@@ -22,8 +22,8 @@ use crate::events::AppEvent;
 use crate::layout::{self, LayoutState};
 use crate::panels::{self, Panel, PanelFactory};
 use crate::state::{
-    asteroid_phase, AsteroidPhase, LogLevel, PanelRequests, RadioStatus, Shared, WindowTarget,
-    FLASH_DURATION,
+    asteroid_phase, AsteroidPhase, LogLevel, PanelRequests, RadioStatus, Shared, UpdateRequest,
+    WindowTarget, FLASH_DURATION,
 };
 use crate::tasks::Tasks;
 use crate::theme;
@@ -642,7 +642,82 @@ impl App {
         }
     }
 
+    /// Updates: run what the UI asked for, the daily check, and act on results.
+    fn updates(&mut self) {
+        let repaint: ss_update::Repaint = {
+            let ctx = self.ctx.clone();
+            std::sync::Arc::new(move || ctx.request_repaint())
+        };
+        let mut sh = self.shared.write();
+        match sh.update_request.take() {
+            Some(UpdateRequest::Check) => sh.updater.check(&self.rt, repaint.clone(), true),
+            Some(UpdateRequest::Install) => {
+                if sh.updater.can_install() {
+                    sh.log(LogLevel::Info, "downloading the update…");
+                    sh.updater.start_install(&self.rt, repaint.clone());
+                } else if let Err(e) = sh.updater.open_page() {
+                    sh.log(LogLevel::Error, format!("update: {e}"));
+                }
+            }
+            Some(UpdateRequest::OpenPage) => {
+                if let Err(e) = sh.updater.open_page() {
+                    sh.log(LogLevel::Error, format!("update: {e}"));
+                }
+            }
+            Some(UpdateRequest::Skip(tag)) => {
+                sh.config.skipped_update = Some(tag);
+                sh.dirty_config = true;
+            }
+            None => {}
+        }
+        if sh.config.check_for_updates && sh.updater.auto_check_due() {
+            sh.updater.check(&self.rt, repaint, false);
+        }
+        if sh.updater.busy() {
+            // Pick up the result even when nothing else is repainting.
+            self.ctx
+                .request_repaint_after(std::time::Duration::from_millis(500));
+        }
+        if !sh.updater.poll() {
+            return;
+        }
+        match sh.updater.state().clone() {
+            ss_update::State::Available(r) => {
+                if sh.update_available().is_some() {
+                    sh.log(
+                        LogLevel::Info,
+                        format!(
+                            "update available: Silver Skies Pro {} (Settings › About, or the UPDATE chip)",
+                            r.label()
+                        ),
+                    );
+                }
+            }
+            ss_update::State::UpToDate if sh.updater.manual() => {
+                sh.log(LogLevel::Info, "Silver Skies Pro is up to date");
+            }
+            ss_update::State::Restarting => {
+                sh.log(LogLevel::Info, "update installed; restarting");
+                sh.dirty_config = true;
+                drop(sh);
+                self.persist(true);
+                self.ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            ss_update::State::HandedOff(m) => sh.log(LogLevel::Info, m),
+            ss_update::State::Error(e) => {
+                let level = if sh.updater.manual() {
+                    LogLevel::Error
+                } else {
+                    LogLevel::Warn
+                };
+                sh.log(level, format!("update: {e}"));
+            }
+            _ => {}
+        }
+    }
+
     fn periodic(&mut self) {
+        self.updates();
         self.tick_asteroid();
         self.audio.tick(&self.ctx);
         self.sync_radio();
@@ -1038,10 +1113,15 @@ impl eframe::App for App {
                     bottom: 6,
                 }))
                 .show(ui, |ui| {
-                    if crate::header::show(ui, &sh, pulse, now).logo_clicked
+                    let action = crate::header::show(ui, &sh, pulse, now);
+                    if action.logo_clicked
                         && crate::header::count_click(&mut self.logo_clicks, Instant::now())
                     {
                         main_cmds.push(Command::Asteroid);
+                    }
+                    if action.update_clicked {
+                        sh.settings_show_about = true;
+                        main_cmds.push(Command::Open(ss_core::WindowRole::Settings));
                     }
                 })
                 .response

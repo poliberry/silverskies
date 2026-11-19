@@ -77,6 +77,8 @@ pub fn window(ctx: &Context, app: &mut App) {
                     ui.separator();
                     ai(ui, app, &mut ch);
                     ui.separator();
+                    updates(ui, app, &mut ch);
+                    ui.separator();
                     developer(ui, app);
                     ui.label(
                         RichText::new(format!(
@@ -309,6 +311,88 @@ fn ai(ui: &mut Ui, app: &mut App, ch: &mut Changes) {
             ),
         )
         .changed();
+}
+
+fn updates(ui: &mut Ui, app: &mut App, ch: &mut Changes) {
+    use ss_update::State;
+    section(ui, app, "Updates");
+    let p = app.palette;
+    let s = scheme(&p);
+    ch.config |= ui
+        .checkbox(
+            &mut app.config.check_for_updates,
+            "Check for updates automatically (at startup and once a day)",
+        )
+        .changed();
+    let state = app.updater.state().clone();
+    let status = match &state {
+        State::Idle => format!(
+            "You have Silver Skies {}.",
+            ss_core::version::version_label()
+        ),
+        State::Checking => "Checking for updates…".to_string(),
+        State::UpToDate => format!(
+            "Silver Skies {} is up to date.",
+            ss_core::version::version_label()
+        ),
+        State::Available(r) => format!(
+            "Silver Skies {} is available (you have {}).",
+            r.label(),
+            ss_core::version::version_label()
+        ),
+        State::Downloading { release, .. } => format!("Downloading {}…", release.label()),
+        State::Restarting => "Restarting into the new version…".to_string(),
+        State::HandedOff(m) => m.clone(),
+        State::Error(e) => format!("Couldn't update: {e}"),
+    };
+    let color = if matches!(state, State::Error(_)) {
+        s.error
+    } else {
+        s.on_surface_variant
+    };
+    ui.label(RichText::new(status).color(color));
+    if let Some((done, total)) = app.updater.progress() {
+        let f = if total > 0 {
+            done as f32 / total as f32
+        } else {
+            0.0
+        };
+        ui.add(
+            egui::ProgressBar::new(f.clamp(0.0, 1.0))
+                .desired_height(6.0)
+                .fill(s.primary),
+        );
+    }
+    ui.horizontal(|ui| match &state {
+        State::Available(r) => {
+            let tag = r.tag.clone();
+            let label = if app.updater.can_install() {
+                "Update and restart"
+            } else {
+                "Download"
+            };
+            if ui
+                .add(egui::Button::new(RichText::new(label).color(s.on_primary)).fill(s.primary))
+                .clicked()
+            {
+                app.install_update();
+            }
+            if ui.button("Release notes").clicked() {
+                let _ = app.updater.open_page();
+            }
+            if ui.button("Skip this version").clicked() {
+                app.skip_update(&tag);
+            }
+        }
+        State::Checking | State::Downloading { .. } | State::Restarting => {
+            ui.add(egui::Spinner::new().color(s.primary));
+        }
+        _ => {
+            if ui.button("Check for updates").clicked() {
+                app.check_for_updates(true);
+            }
+        }
+    });
 }
 
 fn developer(ui: &mut Ui, app: &mut App) {

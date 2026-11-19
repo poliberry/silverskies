@@ -118,6 +118,10 @@ pub struct App {
     pub notice: Option<(String, Instant)>,
     /// Locally generated alerts from Settings → Developer (never persisted).
     pub demo_alerts: Vec<Alert>,
+    /// Updates from GitHub Releases.
+    pub updater: ss_update::Updater,
+    /// The "update available" card was dismissed for this session.
+    pub update_card_dismissed: bool,
     /// A refresh to run once settings editing pauses (e.g. an AccuWeather
     /// key being typed or pasted), so partial keys aren't sent.
     refresh_due: Option<Instant>,
@@ -196,6 +200,8 @@ impl App {
             locating: false,
             notice: None,
             demo_alerts: Vec::new(),
+            updater: ss_update::Updater::new(ss_update::App::Simple),
+            update_card_dismissed: false,
             refresh_due: None,
             menu: Default::default(),
             about_open: false,
@@ -268,6 +274,190 @@ impl App {
     pub fn save_config(&self) {
         if let Err(e) = self.store.save_config(&self.config) {
             tracing::warn!("saving config: {e}");
+        }
+    }
+
+    fn repaint_fn(&self) -> ss_update::Repaint {
+        let ctx = self.ctx.clone();
+        std::sync::Arc::new(move || ctx.request_repaint())
+    }
+
+    /// Look for a newer release now (`manual`: the person asked).
+    pub fn check_for_updates(&mut self, manual: bool) {
+        let repaint = self.repaint_fn();
+        self.updater.check(&self.rt, repaint, manual);
+    }
+
+    /// Download and install the available release (or open its page when
+    /// this copy can't update itself).
+    pub fn install_update(&mut self) {
+        if self.updater.can_install() {
+            let repaint = self.repaint_fn();
+            self.updater.start_install(&self.rt, repaint);
+        } else if let Err(e) = self.updater.open_page() {
+            self.notice = Some((
+                format!("Couldn't open the download page: {e}"),
+                Instant::now(),
+            ));
+        }
+    }
+
+    pub fn skip_update(&mut self, tag: &str) {
+        self.config.skipped_update = Some(tag.to_string());
+        self.save_config();
+        self.update_card_dismissed = true;
+    }
+
+    /// The release on offer, unless skipped (a manual check still shows it).
+    pub fn update_available(&self) -> Option<&ss_update::Release> {
+        match self.updater.state() {
+            ss_update::State::Available(r)
+                if self.config.skipped_update.as_deref() != Some(r.tag.as_str())
+                    || self.updater.manual() =>
+            {
+                Some(r)
+            }
+            _ => None,
+        }
+    }
+
+    /// The daily check, and acting on finished update work.
+    fn tick_updates(&mut self) {
+        if self.config.check_for_updates && self.updater.auto_check_due() {
+            self.check_for_updates(false);
+        }
+        if self.updater.busy() {
+            self.ctx.request_repaint_after(Duration::from_millis(500));
+        } else if self.config.check_for_updates {
+            self.ctx.request_repaint_after(ss_update::FIRST_CHECK_AFTER);
+        }
+        if !self.updater.poll() {
+            return;
+        }
+        match self.updater.state().clone() {
+            ss_update::State::UpToDate if self.updater.manual() => {
+                self.notice = Some(("Silver Skies is up to date".into(), Instant::now()));
+            }
+            ss_update::State::Restarting => {
+                self.save_config();
+                self.save_prefs();
+                self.ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            ss_update::State::HandedOff(m) => self.notice = Some((m, Instant::now())),
+            ss_update::State::Error(e) if self.updater.manual() => {
+                self.notice = Some((format!("Couldn't update: {e}"), Instant::now()));
+            }
+            ss_update::State::Error(e) => tracing::warn!("update check: {e}"),
+            _ => {}
+        }
+    }
+
+    /// Bottom-right card offering an update (until dismissed), with
+    /// download progress once it's under way.
+    fn update_card(&mut self, ctx: &egui::Context) {
+        let downloading = self.updater.progress();
+        let offer = self.update_available().map(|r| (r.label(), r.tag.clone()));
+        let show = downloading.is_some() || (offer.is_some() && !self.update_card_dismissed);
+        if !show {
+            return;
+        }
+        let p = self.palette;
+        let s = theme::scheme(&p);
+        let can_install = self.updater.can_install();
+        let mut action = None;
+        egui::Area::new(egui::Id::unique("update_card"))
+            .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-20.0, -20.0))
+            .show(ctx, |ui| {
+                egui::Frame::new()
+                    .fill(s.surface_container_high)
+                    .stroke(egui::Stroke::new(1.0, s.outline_variant))
+                    .corner_radius(crate::m3::corner::LARGE)
+                    .inner_margin(Margin::symmetric(20, 16))
+                    .show(ui, |ui| {
+                        ui.set_width(320.0);
+                        ui.spacing_mut().item_spacing.y = 6.0;
+                        ui.label(
+                            RichText::new("Update available")
+                                .font(theme::medium_font(16.0))
+                                .color(s.on_surface),
+                        );
+                        if let Some((done, total)) = downloading {
+                            ui.label(
+                                RichText::new(format!(
+                                    "Downloading… {} of {}",
+                                    ss_update::fmt_bytes(done),
+                                    ss_update::fmt_bytes(total)
+                                ))
+                                .color(s.on_surface_variant),
+                            );
+                            let f = if total > 0 {
+                                done as f32 / total as f32
+                            } else {
+                                0.0
+                            };
+                            ui.add(
+                                egui::ProgressBar::new(f.clamp(0.0, 1.0))
+                                    .desired_height(6.0)
+                                    .fill(s.primary),
+                            );
+                            return;
+                        }
+                        let Some((label, tag)) = &offer else { return };
+                        ui.label(
+                            RichText::new(format!(
+                                "Silver Skies {label} is ready. You have {}.",
+                                ss_core::version::version_label()
+                            ))
+                            .color(s.on_surface_variant),
+                        );
+                        ui.add_space(6.0);
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let primary = egui::Button::new(
+                                RichText::new(if can_install {
+                                    "Update and restart"
+                                } else {
+                                    "Download"
+                                })
+                                .font(theme::medium_font(14.0))
+                                .color(s.on_primary),
+                            )
+                            .fill(s.primary)
+                            .corner_radius(crate::m3::corner::FULL)
+                            .min_size(egui::vec2(0.0, 36.0));
+                            if ui.add(primary).clicked() {
+                                action = Some(0);
+                            }
+                            let later = egui::Button::new(
+                                RichText::new("Later")
+                                    .font(theme::medium_font(14.0))
+                                    .color(s.primary),
+                            )
+                            .frame(false)
+                            .min_size(egui::vec2(0.0, 36.0));
+                            if ui.add(later).clicked() {
+                                action = Some(1);
+                            }
+                            let skip = egui::Button::new(
+                                RichText::new("Skip this version")
+                                    .font(theme::medium_font(14.0))
+                                    .color(s.on_surface_variant),
+                            )
+                            .frame(false)
+                            .min_size(egui::vec2(0.0, 36.0));
+                            if ui.add(skip).clicked() {
+                                action = Some(2);
+                            }
+                        });
+                        if action == Some(2) {
+                            action = None;
+                            self.skip_update(tag);
+                        }
+                    });
+            });
+        match action {
+            Some(0) => self.install_update(),
+            Some(1) => self.update_card_dismissed = true,
+            _ => {}
         }
     }
 
@@ -983,6 +1173,7 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         self.drain_events();
         self.tick_timers();
+        self.tick_updates();
         self.update_palette();
         crate::motion::set_reduced(self.prefs.reduce_motion);
         let p = self.palette;
@@ -1135,6 +1326,7 @@ impl eframe::App for App {
             }
         }
 
+        self.update_card(ui.ctx());
         if self.settings_open {
             crate::settings::window(ui.ctx(), self);
         }

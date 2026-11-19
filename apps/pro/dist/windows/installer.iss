@@ -20,6 +20,8 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=lowest
 WizardStyle=modern
+; Close a running copy (in-app updates) so its files can be replaced.
+CloseApplications=force
 
 [Files]
 Source: "..\..\..\..\stage\silverskies-pro.exe"; DestDir: "{app}"; Flags: ignoreversion
@@ -34,3 +36,5 @@ Name: desktopicon; Description: "Create a &desktop shortcut"; Flags: unchecked
 
 [Run]
 Filename: "{app}\silverskies-pro.exe"; Description: "Launch Silver Skies Pro"; Flags: nowait postinstall skipifsilent
+; In-app updates install silently (/SILENT); start the new version afterwards.
+Filename: "{app}\silverskies-pro.exe"; Flags: nowait; Check: WizardSilent

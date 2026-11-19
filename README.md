@@ -35,8 +35,10 @@ crates/
   ss-audio/     tone synthesis, native TTS, live stream player
   ss-map/       slippy-map engine for egui: tile cache, Mercator viewport, raster/WMS/polygon/
                 marker/wind-barb layers
-  ss-assets/    shared UI assets: bundled fonts (Google Sans family, DejaVu), Google's V1
-                weather icons, SVG rasterizing, the Alt-revealed menu bar
+  ss-assets/    shared UI assets: bundled fonts (Google Sans family, Saira, DejaVu, a
+                Material Symbols subset), Google's V1 weather icons, SVG rasterizing, the
+                Alt-revealed menu bar
+  ss-update/    in-app updates from GitHub Releases
 tools/
   render-icons/ regenerates each app's PNG icons from its brand SVGs (`cargo run -p render-icons`)
 ```
@@ -53,6 +55,24 @@ commits since the previous release as its notes. Builds count from 1 for each ve
 build number is shown in each app's About screen ("2.0.2 (build 1)"). Bump `version` in the
 workspace `Cargo.toml` to start a new version at build 1. Running the Release workflow by hand
 builds the same installers as downloadable workflow artifacts without publishing.
+
+### Updates
+
+Both apps check GitHub's latest release at startup and once a day (Settings → Updates in Silver
+Skies, Settings → About in Pro; it can be turned off), compare its tag with their own version and
+build, and offer the update. The download is checked against the SHA-256 GitHub publishes for each
+file, then installed the way the app was installed:
+
+| Installed from | Update |
+|---|---|
+| Windows installer | runs the new installer silently; it restarts the app |
+| macOS `.zip` / `.dmg` (in a `.app`) | replaces the `.app` bundle in place and restarts it |
+| Linux AppImage | replaces the AppImage file and restarts it |
+| Linux `.deb` | downloads the new `.deb` and opens it in the software installer |
+| anything else (portable zip, a build directory) | opens the release page |
+
+Local development builds are only offered a newer *version*, not newer builds of their own.
+`SS_UPDATE_URL` points the check at a local mock of the GitHub API, for testing.
 
 ## Credits
 

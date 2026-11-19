@@ -28,7 +28,7 @@ use serde_json::Value;
 use std::time::Duration;
 
 pub const USER_AGENT: &str =
-    "SilverSkies/2.0 (desktop app; https://github.com/poliberry/silverskies-desktop)";
+    "SilverSkies/2.0 (desktop app; https://github.com/poliberry/silverskies)";
 
 /// Errors name the host, not the full request URL (which can be hundreds of
 /// characters of query string and ends up in panes and logs).

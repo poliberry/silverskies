@@ -17,11 +17,11 @@ use ss_core::{
 };
 
 use crate::kit::{self, divider, Rows};
-use crate::state::Shared;
+use crate::state::{Shared, UpdateRequest};
 use crate::theme::{c32, c32a, saira};
 use crate::windows::config_text;
 
-const REPO_URL: &str = "https://github.com/poliberry/silverskies-desktop";
+const REPO_URL: &str = "https://github.com/poliberry/silverskies";
 /// Fixed accent for theme previews.
 const PREVIEW_ACCENT: [u8; 3] = [0x7f, 0xb4, 0xff];
 const REFRESH_CHOICES: [u32; 7] = [0, 5, 10, 15, 30, 60, 120];
@@ -90,7 +90,7 @@ impl Tab {
             ),
             Tab::Themes => ("Themes", "Colour themes, including your own."),
             Tab::Developer => ("Developer", "Tools for testing Silver Skies Pro."),
-            Tab::About => ("About", "Version, files and key commands."),
+            Tab::About => ("About", "Version, updates, files and key commands."),
         }
     }
 }
@@ -377,6 +377,9 @@ pub fn settings_ui(
     emit: &mut Vec<Command>,
 ) {
     let before = sh.config.clone();
+    if std::mem::take(&mut sh.settings_show_about) {
+        st.tab = Tab::About;
+    }
     let area = ui.max_rect();
     let side_w = 196.0;
     let side = egui::Rect::from_min_max(area.min, egui::pos2(area.left() + side_w, area.bottom()));
@@ -1475,7 +1478,119 @@ fn developer_tab(
     });
 }
 
-fn about_tab(ui: &mut Ui, sh: &Shared, p: &Palette) {
+/// How this copy installs updates, in words.
+fn install_note(i: &ss_update::Install) -> &'static str {
+    match i {
+        ss_update::Install::WindowsInstaller => "Updates run the Windows installer, then restart Pro",
+        ss_update::Install::MacBundle(_) => "Updates replace the app in place, then restart it",
+        ss_update::Install::AppImage(_) => "Updates replace the AppImage, then restart it",
+        ss_update::Install::Deb => "Updates download the .deb and open it in your software installer",
+        ss_update::Install::Manual => {
+            "This copy can't update itself (portable or built from source): updates open the download page"
+        }
+    }
+}
+
+fn updates_card(ui: &mut Ui, sh: &mut Shared, p: &Palette) {
+    use ss_update::State;
+    let state = sh.updater.state().clone();
+    let can_install = sh.updater.can_install();
+    let progress = sh.updater.progress();
+    let note = install_note(&sh.updater.install);
+    let mut req = None;
+    kit::card(ui, p, "Updates", |ui| {
+        let mut rows = Rows::new();
+        toggle_row(
+            ui,
+            p,
+            &mut rows,
+            "Check automatically",
+            Some("Look for a new release on GitHub at startup and once a day"),
+            &mut sh.config.check_for_updates,
+        );
+        rows.next(ui, p);
+        let (title, help): (String, String) = match &state {
+            State::Idle => ("Updates".into(), note.into()),
+            State::Checking => ("Checking for updates…".into(), note.into()),
+            State::UpToDate => (
+                "Silver Skies Pro is up to date".into(),
+                format!("You have {}", ss_core::version::version_label()),
+            ),
+            State::Available(r) => (
+                format!("Version {} is available", r.label()),
+                format!("You have {}. {note}", ss_core::version::version_label()),
+            ),
+            State::Downloading { release, total } => {
+                let done = progress.map(|p| p.0).unwrap_or(0);
+                (
+                    format!("Downloading {}…", release.label()),
+                    format!(
+                        "{} of {}",
+                        ss_update::fmt_bytes(done),
+                        ss_update::fmt_bytes(*total)
+                    ),
+                )
+            }
+            State::Restarting => ("Restarting into the new version…".into(), String::new()),
+            State::HandedOff(m) => ("Update downloaded".into(), m.clone()),
+            State::Error(e) => ("Couldn't update".into(), e.clone()),
+        };
+        let help = (!help.is_empty()).then_some(help);
+        kit::row(ui, p, &title, help.as_deref(), 330.0, |ui| match &state {
+            State::Checking | State::Restarting => {
+                ui.add(egui::Spinner::new().size(18.0).color(c32(p.a0)));
+            }
+            State::Available(r) => {
+                if kit::button(ui, p, "Skip")
+                    .on_hover_text("Don't remind me about this version")
+                    .clicked()
+                {
+                    req = Some(UpdateRequest::Skip(r.tag.clone()));
+                }
+                if kit::button(ui, p, "Release notes").clicked() {
+                    req = Some(UpdateRequest::OpenPage);
+                }
+                let label = if can_install {
+                    "Install and restart"
+                } else {
+                    "Download"
+                };
+                if kit::primary_button(ui, p, label).clicked() {
+                    req = Some(UpdateRequest::Install);
+                }
+            }
+            State::Downloading { total, .. } => {
+                let done = progress.map(|p| p.0).unwrap_or(0);
+                let f = if *total > 0 {
+                    done as f32 / *total as f32
+                } else {
+                    0.0
+                };
+                ui.add(
+                    egui::ProgressBar::new(f.clamp(0.0, 1.0))
+                        .desired_width(220.0)
+                        .fill(c32(p.a0)),
+                );
+            }
+            State::Error(_) => {
+                if kit::button(ui, p, "Try again").clicked() {
+                    req = Some(UpdateRequest::Check);
+                }
+            }
+            _ => {
+                if kit::button(ui, p, "Check now").clicked() {
+                    req = Some(UpdateRequest::Check);
+                }
+            }
+        });
+    });
+    if let Some(r) = req {
+        sh.update_request = Some(r);
+    }
+}
+
+fn about_tab(ui: &mut Ui, sh: &mut Shared, p: &Palette) {
+    updates_card(ui, sh, p);
     kit::card(ui, p, "", |ui| {
         let mut rows = Rows::new();
         rows.next(ui, p);

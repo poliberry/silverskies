@@ -17,6 +17,7 @@ ss-store.workspace = true
 ss-map.workspace = true
 ss-assets.workspace = true
 ss-ai.workspace = true
+ss-update.workspace = true
 egui.workspace = true
 eframe.workspace = true
 tokio.workspace = true

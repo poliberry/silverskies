@@ -3775,6 +3775,7 @@ dependencies = [
  "ss-map",
  "ss-net",
  "ss-store",
+ "ss-update",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -3806,6 +3807,7 @@ dependencies = [
  "ss-map",
  "ss-net",
  "ss-store",
+ "ss-update",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -4084,6 +4086,20 @@ dependencies = [
  "ss-core",
  "tempfile",
  "thiserror 2.0.21",
+ "tracing",
+]
+
+[[package]]
+name = "ss-update"
+version = "2.0.2"
+dependencies = [
+ "crossbeam-channel",
+ "futures",
+ "reqwest",
+ "serde_json",
+ "sha2",
+ "ss-core",
+ "tokio",
  "tracing",
 ]
 

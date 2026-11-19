@@ -14,6 +14,8 @@ use crate::theme::{c32, c32a, is_dark, PRO_BAR, PRO_UP, PRO_YELLOW};
 #[derive(Default)]
 pub struct HeaderAction {
     pub logo_clicked: bool,
+    /// The UPDATE chip was clicked.
+    pub update_clicked: bool,
 }
 
 const CLICKS_NEEDED: u8 = 10;
@@ -150,6 +152,25 @@ pub fn show(
                     .font(mono.clone())
                     .color(c32a(p.text3)),
             );
+            if let Some(r) = sh.update_available() {
+                let chip = egui::Button::new(
+                    RichText::new(format!("UPDATE {}", r.tag.trim_start_matches('v')))
+                        .font(mono.clone())
+                        .color(crate::theme::on(p.a0)),
+                )
+                .fill(amber)
+                .corner_radius(0.0);
+                if ui
+                    .add(chip)
+                    .on_hover_text(format!(
+                        "Silver Skies Pro {} is available. Click to update.",
+                        r.label()
+                    ))
+                    .clicked()
+                {
+                    action.update_clicked = true;
+                }
+            }
         });
     });
 
