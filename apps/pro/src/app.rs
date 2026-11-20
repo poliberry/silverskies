@@ -552,6 +552,13 @@ impl App {
             AppEvent::Level2 { site, result } => match result {
                 Ok(s) => {
                     sh.level2_errors.remove(&site);
+                    // Archive: stay on the scan that came (steps from it).
+                    if let Some((t, dir)) = sh.archive.as_mut() {
+                        if let Ok(st) = chrono::DateTime::parse_from_rfc3339(&s.time) {
+                            *t = st.timestamp();
+                        }
+                        *dir = 0;
+                    }
                     sh.log(
                         LogLevel::Info,
                         format!("Level II {site}: {} tilts", s.polar.sweeps.len()),

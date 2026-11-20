@@ -211,15 +211,16 @@ impl Tasks {
     }
 
     /// A radar site's newest Level II scan.
-    pub fn level2(&self, site: &str) {
+    /// (`at`: an archived scan instead, see `Shared::archive`.)
+    pub fn level2(&self, site: &str, at: Option<(i64, i8)>) {
         let (net, tx, ctx) = (self.net.clone(), self.tx.clone(), self.ctx.clone());
         let site = site.to_ascii_uppercase();
         self.rt.spawn(async move {
-            let result = net
-                .site_scan(&site)
-                .await
-                .map(std::sync::Arc::new)
-                .map_err(|e| e.to_string());
+            let scan = match at {
+                Some((t, dir)) => net.site_scan_at(&site, t, dir).await,
+                None => net.site_scan(&site).await,
+            };
+            let result = scan.map(std::sync::Arc::new).map_err(|e| e.to_string());
             Self::post(&tx, &ctx, AppEvent::Level2 { site, result });
         });
     }

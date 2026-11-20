@@ -204,6 +204,9 @@ pub struct Shared {
     /// Level II scans by site (2D radar), with when they were requested.
     pub level2: HashMap<String, std::sync::Arc<ss_core::radar3d::SiteScan>>,
     pub level2_requested: HashMap<String, std::time::Instant>,
+    /// Archive replay: the scan time asked for (unix s) and whether the
+    /// next/previous scan is wanted (1/-1) or the nearest (0); None = live.
+    pub archive: Option<(i64, i8)>,
     pub level2_errors: HashMap<String, String>,
     /// Lightning flashes of the last [`LIGHTNING_KEEP_S`], and the GLM
     /// files read (with their times).
@@ -321,6 +324,7 @@ impl Shared {
             scenes3d: HashMap::new(),
             level2: HashMap::new(),
             level2_requested: HashMap::new(),
+            archive: None,
             level2_errors: HashMap::new(),
             lightning: Vec::new(),
             lightning_files: HashMap::new(),
@@ -371,6 +375,20 @@ impl Shared {
             dirty_locations: false,
             dirty_session: false,
         }
+    }
+
+    /// Whether a radar's Level II scan should be (re)fetched: never asked
+    /// for, or (live only) more than 4 minutes ago.
+    pub fn level2_due(&self, site: &str) -> bool {
+        self.level2_requested.get(site).is_none_or(|t| {
+            self.archive.is_none() && t.elapsed() > std::time::Duration::from_secs(240)
+        })
+    }
+
+    /// Forget a radar's scan so it's fetched again (archive moves).
+    pub fn level2_refetch(&mut self, site: &str) {
+        self.level2_requested.remove(site);
+        self.level2_errors.remove(site);
     }
 
     pub fn location_by_id(&self, id: &str) -> Option<&SavedLocation> {

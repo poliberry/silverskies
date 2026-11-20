@@ -106,6 +106,10 @@ Two layers from NOAA's Multi-Radar Multi-Sensor system (MRMS), which merges ever
 
 Choose how far back they reach in Settings → Radar → *Track period* or with `:period` (30 min, 1, 2, 4, 6 or 24 h; default 2 h). They refresh every few minutes. Hover the map for the value under the pointer, e.g. *hail up to 1.75 in (44 mm) · last 2 h*. Single isolated pixels (usually clutter) are left out. The values are radar estimates: compare with storm reports.
 
+## Pro: archive replay (US radars)
+
+NOAA keeps every NEXRAD volume scan since the early 1990s. `:archive 2013-05-20 20:00 KTLX` (UTC; the radar is optional if one is already selected) loads the scan nearest that time and shows it in every Level II view: the radar pane's products and tilts, cross sections, the 4-panel. The radar bar then reads **ARCHIVE 2013-05-20 19:59Z** with ◀ ▶ to step scan by scan (`:scan next`, `:scan prev`), and **LIVE** (`:archive off`) to return; nothing refreshes while you're in the archive. Scans from 2008 on can be read (older ones use a format Pro doesn't decode). European radars keep only 24 hours, so archive replay is for US radars. The composite loop, lightning and other layers stay live.
+
 ## Pro: saving the loop as a GIF
 
 The film icon in the radar bar (or `:export loop`, `:gif`) saves the composite loop as an animated GIF in your Pictures folder (your home folder if there's none), named `silverskies-radar-<date>-<time>.gif`. Pro steps through every frame shown in the loop, waits for each to finish loading, and captures the map as you see it (layers, alerts, satellite, placefiles included) with the frame's time and your place stamped at the bottom; frames are half a second each and the last one holds for nearly two. Wider maps are scaled to 960 px. The audit log says where the file went. It takes about as long as the loop has frames, a few seconds each; single-site radar views aren't exported.

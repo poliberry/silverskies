@@ -38,6 +38,8 @@ Press `:` to open the command line. Commands are case-insensitive; Tab completes
 | `:product <name>` | Select the radar product | `:p` |
 | `:level2 <ref\|vel\|srv\|cc\|zdr\|off>` | Show a Level II product (every tilt) on the single-site radar | `:l2` |
 | `:tilt <n\|up\|down>` | Choose the Level II tilt (1 = lowest) | |
+| `:archive <YYYY-MM-DD> <HH:MM> [SITE]` / `:archive off` | Replay an archived US radar scan (UTC, 2008 on) | `:replay` |
+| `:scan <next\|prev>` | Step to the next or previous archived scan | |
 | `:export [loop]` | Save the radar loop as an animated GIF (in Pictures) | `:gif` |
 | `:placefile <add URL\|list\|toggle N\|remove N>` | GRLevelX placefiles over the radar | `:pf` |
 | `:sat <live\|ir\|color\|airmass>` | Satellite imagery: live infrared, or looped geostationary infrared, true colour or air mass | |

@@ -168,13 +168,9 @@ impl Panel for QuadPanel {
         // Fetch the scan (shared with the radar pane's Level II view).
         {
             let sh = &mut *cx.shared;
-            let due = sh
-                .level2_requested
-                .get(&site)
-                .is_none_or(|t| t.elapsed() > Duration::from_secs(240));
-            if due {
+            if sh.level2_due(&site) {
                 sh.level2_requested.insert(site.clone(), Instant::now());
-                cx.tasks.level2(&site);
+                cx.tasks.level2(&site, sh.archive);
             }
         }
         let scan = cx.shared.level2.get(&site).cloned();
@@ -214,10 +210,18 @@ impl Panel for QuadPanel {
                 cx.shared.dirty_config = true;
             }
             if let Some(s) = &scan {
+                let archive = cx.shared.archive.is_some();
                 let time = chrono::DateTime::parse_from_rfc3339(&s.time)
-                    .map(|t| t.with_timezone(&chrono::Local).format("%H:%M").to_string())
+                    .map(|t| {
+                        if archive {
+                            t.format("ARCHIVE %Y-%m-%d %H:%MZ").to_string()
+                        } else {
+                            t.with_timezone(&chrono::Local).format("%H:%M").to_string()
+                        }
+                    })
                     .unwrap_or_default();
-                ui.label(RichText::new(time).monospace().color(c32a(p.text3)));
+                let col = if archive { c32(p.a0) } else { c32a(p.text3) };
+                ui.label(RichText::new(time).monospace().color(col));
             } else {
                 let text = match cx.shared.level2_errors.get(&site) {
                     Some(e) => format!("scan: {e}"),

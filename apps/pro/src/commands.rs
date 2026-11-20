@@ -524,6 +524,61 @@ pub fn run_product(sh: &mut Shared, p: ss_core::RadarProduct) {
 }
 
 /// `:site [id]`.
+fn run_archive(sh: &mut Shared, c: ss_core::command::ArchiveCmd) {
+    use ss_core::command::ArchiveCmd as A;
+    if let A::At { site: Some(s), .. } = &c {
+        run_site(sh, Some(s.clone()));
+    }
+    let Some(site) = sh
+        .config
+        .radar
+        .nexrad_site
+        .clone()
+        .map(|s| s.to_ascii_uppercase())
+    else {
+        sh.log(
+            LogLevel::Error,
+            "choose a US radar first (:site KTLX), or add it: :archive DATE TIME KTLX",
+        );
+        return;
+    };
+    if sh.config.radar.level2.is_none() {
+        sh.config.radar.level2 = Some(ss_core::radar3d::L2Product::Reflectivity);
+        sh.dirty_config = true;
+    }
+    match c {
+        A::At { time, .. } => {
+            sh.archive = Some((time, 0));
+            let when = chrono::DateTime::from_timestamp(time, 0)
+                .map(|d| d.format("%Y-%m-%d %H:%M UTC").to_string())
+                .unwrap_or_default();
+            sh.log(
+                LogLevel::Info,
+                format!("archive: {site} scan nearest {when}…"),
+            );
+        }
+        A::Step(d) => {
+            // From live: step from the scan on screen.
+            let from = sh.archive.map(|(t, _)| t).or_else(|| {
+                sh.level2
+                    .get(&site)
+                    .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s.time).ok())
+                    .map(|t| t.timestamp())
+            });
+            let Some(t) = from else {
+                sh.log(LogLevel::Warn, "no scan to step from yet");
+                return;
+            };
+            sh.archive = Some((t, d));
+        }
+        A::Off => {
+            sh.archive = None;
+            sh.log(LogLevel::Info, "archive off: back to live scans");
+        }
+    }
+    sh.level2_refetch(&site);
+}
+
 fn run_placefile(sh: &mut Shared, c: ss_core::command::PlacefileCmd) {
     use ss_core::command::PlacefileCmd as P;
     let list = &mut sh.config.radar.placefiles;
@@ -1021,6 +1076,7 @@ fn run(app: &mut App, sh: &mut Shared, target: &WindowTarget, cmd: Command, fx: 
             sh.log(LogLevel::Info, format!("Level II tilt {}", next + 1));
         }
         Command::Placefile(c) => run_placefile(sh, c),
+        Command::Archive(c) => run_archive(sh, c),
         Command::Sat(prod) => {
             sh.config.radar.sat_product = prod;
             sh.config.radar.satellite = true;

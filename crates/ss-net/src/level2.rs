@@ -59,6 +59,18 @@ fn be_f32(b: &[u8], i: usize) -> Option<f32> {
 
 /// Concatenate the bzip2 records after the 24-byte volume header.
 pub fn decompress(file: &[u8]) -> Result<Vec<u8>> {
+    // Archived volumes (before ~2016) are gzipped, and their messages
+    // aren't bzip2-compressed inside.
+    if file.starts_with(&[0x1f, 0x8b]) {
+        let mut raw = Vec::new();
+        flate2::read::GzDecoder::new(file)
+            .read_to_end(&mut raw)
+            .map_err(|e| NetError::Parse(format!("Level II archive: {e}")))?;
+        return decompress(&raw);
+    }
+    if file.len() >= 32 && file.starts_with(b"AR2V") && file.get(28..31) != Some(b"BZh") {
+        return Ok(file[24..].to_vec());
+    }
     if file.len() < 28 || !file.starts_with(b"AR2V") {
         return Err(NetError::Parse("not a NEXRAD Level II file".into()));
     }
@@ -252,7 +264,78 @@ pub fn parse_volume(buf: &[u8], site: &str) -> Result<Volume> {
     })
 }
 
+/// Scan time (unix s) from a key (`…/KTLX20130520_200356_V06.gz`).
+pub fn key_time(key: &str) -> Option<i64> {
+    let name = key.rsplit('/').next()?;
+    let s = name.get(4..19)?;
+    let t = chrono::NaiveDateTime::parse_from_str(s, "%Y%m%d_%H%M%S").ok()?;
+    Some(t.and_utc().timestamp())
+}
+
+/// Pick a key: nearest to `t` (`dir` 0), the first after it (1) or the
+/// last before it (-1).
+pub fn pick_key(keys: &[String], t: i64, dir: i8) -> Option<&String> {
+    let timed = keys.iter().filter_map(|k| Some((key_time(k)?, k)));
+    match dir {
+        0 => timed.min_by_key(|(kt, _)| (kt - t).abs()).map(|(_, k)| k),
+        d if d > 0 => timed
+            .filter(|(kt, _)| *kt > t)
+            .min_by_key(|(kt, _)| *kt)
+            .map(|(_, k)| k),
+        _ => timed
+            .filter(|(kt, _)| *kt < t)
+            .max_by_key(|(kt, _)| *kt)
+            .map(|(_, k)| k),
+    }
+}
+
 impl Net {
+    /// An archived NEXRAD scan: nearest to `t` (unix s), or the next /
+    /// previous one (`dir`), from NOAA's archive (2008 on: older volumes
+    /// use a format this reader doesn't).
+    pub async fn site_scan_at(
+        &self,
+        site: &str,
+        t: i64,
+        dir: i8,
+    ) -> Result<ss_core::radar3d::SiteScan> {
+        if ss_core::opera::is_opera(site) {
+            return Err(NetError::Service(
+                "European radar scans are only kept for 24 hours: archive replay is for US radars"
+                    .into(),
+            ));
+        }
+        let day = chrono::DateTime::from_timestamp(t, 0)
+            .ok_or_else(|| NetError::Service("bad time".into()))?
+            .date_naive();
+        let mut keys = Vec::new();
+        for d in [day.pred_opt(), Some(day), day.succ_opt()]
+            .into_iter()
+            .flatten()
+        {
+            if let Ok(xml) = self.get_text(&list_url(site, d), None).await {
+                keys.extend(parse_listing(&xml));
+            }
+        }
+        let key = pick_key(&keys, t, dir).cloned().ok_or_else(|| {
+            NetError::Service(format!("no archived scans from {site} around then"))
+        })?;
+        let bytes = self.get_bytes(&format!("{BUCKET}/{key}"), None).await?;
+        let site = site.to_string();
+        tokio::task::spawn_blocking(move || {
+            let vol = parse_volume(&decompress(&bytes)?, &site)?;
+            Ok(ss_core::radar3d::SiteScan {
+                polar: ss_core::radar3d::polar_volume(&vol, vol.lat, vol.lon),
+                site: vol.site,
+                time: vol.time,
+                lat: vol.lat,
+                lon: vol.lon,
+            })
+        })
+        .await
+        .map_err(|e| NetError::Parse(e.to_string()))?
+    }
+
     /// The newest volume scan for `site` (today's, else yesterday's, UTC).
     /// The site's newest scan, laid out around the radar.
     pub async fn site_scan(&self, site: &str) -> Result<ss_core::radar3d::SiteScan> {
@@ -318,6 +401,43 @@ mod tests {
     }
 
     #[test]
+    fn picks_archive_keys() {
+        let keys: Vec<String> = [
+            "2013/05/20/KTLX/KTLX20130520_200356_V06.gz",
+            "2013/05/20/KTLX/KTLX20130520_200811_V06.gz",
+            "2013/05/20/KTLX/KTLX20130520_201229_V06.gz",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let t = key_time(&keys[1]).unwrap();
+        assert_eq!(
+            chrono::DateTime::from_timestamp(t, 0)
+                .unwrap()
+                .format("%H:%M:%S")
+                .to_string(),
+            "20:08:11"
+        );
+        assert_eq!(pick_key(&keys, t + 60, 0), Some(&keys[1]));
+        assert_eq!(pick_key(&keys, t, 1), Some(&keys[2]));
+        assert_eq!(pick_key(&keys, t, -1), Some(&keys[0]));
+        assert_eq!(pick_key(&keys, t + 9999, 1), None);
+    }
+
+    #[test]
+    fn unwraps_gzipped_uncompressed_archives() {
+        use std::io::Write;
+        let mut raw = b"AR2V0006.936".to_vec();
+        raw.extend([0u8; 12]);
+        raw.extend([0u8; 4]);
+        raw.extend(b"MSGS");
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        gz.write_all(&raw).unwrap();
+        let out = decompress(&gz.finish().unwrap()).unwrap();
+        assert_eq!(out, b"\0\0\0\0MSGS");
+    }
+
+    #[test]
     fn rejects_other_files() {
         assert!(decompress(b"not radar data at all, sorry").is_err());
     }
@@ -329,7 +449,8 @@ mod tests {
             return;
         };
         let file = std::fs::read(&path).unwrap();
-        let site = std::str::from_utf8(&file[20..24]).unwrap().to_string();
+        let site = std::env::var("SS_LEVEL2_SITE")
+            .unwrap_or_else(|_| String::from_utf8_lossy(&file[20..24]).to_string());
         let buf = decompress(&file).unwrap();
         let v = parse_volume(&buf, &site).unwrap();
         eprintln!(

@@ -53,6 +53,47 @@ pub enum RadioCmd {
 }
 
 /// `:tilt` argument.
+/// `:archive …` / `:scan next|prev`
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ArchiveCmd {
+    /// A UTC time (unix s), and optionally the radar.
+    At {
+        time: i64,
+        site: Option<String>,
+    },
+    /// The next (1) or previous (-1) scan.
+    Step(i8),
+    Off,
+}
+
+/// `2013-05-20 20:00`, `2013-05-20T20:00Z`, `20130520 2000` (UTC).
+pub fn parse_utc(date: &str, time: Option<&str>) -> Option<i64> {
+    let joined = match time {
+        Some(t) => format!("{date} {t}"),
+        None => date.replace('T', " "),
+    };
+    let s = joined
+        .trim()
+        .trim_end_matches(['Z', 'z'])
+        .trim()
+        .to_string();
+    for f in [
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y%m%d %H%M",
+        "%Y-%m-%d %H%M",
+        "%Y/%m/%d %H:%M",
+    ] {
+        if let Ok(t) = chrono::NaiveDateTime::parse_from_str(&s, f) {
+            return Some(t.and_utc().timestamp());
+        }
+    }
+    chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d")
+        .ok()
+        .and_then(|d| d.and_hms_opt(0, 0, 0))
+        .map(|t| t.and_utc().timestamp())
+}
+
 /// `:placefile …`
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlacefileCmd {
@@ -141,6 +182,7 @@ pub enum Command {
     Placefile(PlacefileCmd),
     /// Save the radar loop as an animated GIF.
     ExportLoop,
+    Archive(ArchiveCmd),
     Site(Option<String>),
     Play,
     Pause,
@@ -324,6 +366,18 @@ static COMMANDS: &[CmdInfo] = &[
         &[],
         "tilt <n|up|down>",
         "Choose the Level II tilt (1 = lowest)",
+    ),
+    ci(
+        "archive",
+        &["replay"],
+        "archive <YYYY-MM-DD> <HH:MM> [SITE] | off",
+        "Replay an archived US radar scan (UTC, 2008 on)",
+    ),
+    ci(
+        "scan",
+        &[],
+        "scan <next|prev>",
+        "Step to the next or previous archived scan",
     ),
     ci(
         "export",
@@ -659,6 +713,34 @@ pub fn parse(line: &str) -> Result<Command, ParseError> {
                     .ok_or_else(|| bad(name, "tilt", a)),
             }
         }
+        "archive" | "replay" => {
+            let a = args.first().ok_or_else(|| missing(name, "date"))?;
+            match a.to_ascii_lowercase().as_str() {
+                "off" | "live" | "stop" => return Ok(Command::Archive(ArchiveCmd::Off)),
+                "next" => return Ok(Command::Archive(ArchiveCmd::Step(1))),
+                "prev" | "previous" | "back" => return Ok(Command::Archive(ArchiveCmd::Step(-1))),
+                _ => {}
+            }
+            // date [time] [site]
+            let looks_time = |s: &str| {
+                s.contains(':') || (s.len() == 4 && s.chars().all(|c| c.is_ascii_digit()))
+            };
+            let (time, rest) = match args.get(1) {
+                Some(t) if looks_time(t) => (parse_utc(a, Some(t)), &args[2..]),
+                _ => (parse_utc(a, None), &args[1..]),
+            };
+            let time = time.ok_or_else(|| bad(name, "date/time", a))?;
+            Ok(Command::Archive(ArchiveCmd::At {
+                time,
+                site: rest.first().map(|s| s.to_ascii_uppercase()),
+            }))
+        }
+        "scan" => match args.first().map(|s| s.to_ascii_lowercase()).as_deref() {
+            Some("next" | "+" | "forward") => Ok(Command::Archive(ArchiveCmd::Step(1))),
+            Some("prev" | "previous" | "-" | "back") => Ok(Command::Archive(ArchiveCmd::Step(-1))),
+            Some(o) => Err(bad(name, "direction", o)),
+            None => Err(missing(name, "direction")),
+        },
         "export" | "gif" | "saveloop" => match args.first().map(|s| s.to_ascii_lowercase()) {
             None => Ok(Command::ExportLoop),
             Some(a) if a == "loop" || a == "gif" || a == "radar" => Ok(Command::ExportLoop),
@@ -1387,6 +1469,29 @@ mod tests {
         );
         assert_eq!(p("placefile"), Command::Placefile(PlacefileCmd::List));
         assert_eq!(p("export loop"), Command::ExportLoop);
+        let moore = chrono::NaiveDate::from_ymd_opt(2013, 5, 20)
+            .unwrap()
+            .and_hms_opt(20, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp();
+        assert_eq!(
+            p("archive 2013-05-20 20:00 ktlx"),
+            Command::Archive(ArchiveCmd::At {
+                time: moore,
+                site: Some("KTLX".into())
+            })
+        );
+        assert_eq!(
+            p("archive 2013-05-20T20:00Z"),
+            Command::Archive(ArchiveCmd::At {
+                time: moore,
+                site: None
+            })
+        );
+        assert_eq!(p("scan next"), Command::Archive(ArchiveCmd::Step(1)));
+        assert_eq!(p("archive off"), Command::Archive(ArchiveCmd::Off));
+        assert!(parse("archive yesterday").is_err());
         assert_eq!(p("gif"), Command::ExportLoop);
         assert!(parse("placefile add ftp://x").is_err());
         assert_eq!(

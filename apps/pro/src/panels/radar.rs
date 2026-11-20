@@ -1323,13 +1323,9 @@ impl RadarPanel {
             return;
         };
         let sh = &mut *cx.shared;
-        let due = sh
-            .level2_requested
-            .get(&site)
-            .is_none_or(|t| t.elapsed() > Duration::from_secs(240));
-        if due {
+        if sh.level2_due(&site) {
             sh.level2_requested.insert(site.clone(), Instant::now());
-            cx.tasks.level2(&site);
+            cx.tasks.level2(&site, sh.archive);
         }
         let Some(scan) = sh.level2.get(&site).cloned() else {
             return;
@@ -1577,10 +1573,44 @@ impl RadarPanel {
             cx.shared.config.radar.level2_tilt = tilt + 1;
             cx.shared.dirty_config = true;
         }
-        let time = chrono::DateTime::parse_from_rfc3339(&scan.time)
-            .map(|t| t.with_timezone(&chrono::Local).format("%H:%M").to_string())
-            .unwrap_or_default();
-        ui.label(RichText::new(time).monospace().color(c32a(p.text3)));
+        if cx.shared.archive.is_some() {
+            // Archive replay: the scan's date and time (UTC), and stepping.
+            let when = chrono::DateTime::parse_from_rfc3339(&scan.time)
+                .map(|t| t.format("%Y-%m-%d %H:%MZ").to_string())
+                .unwrap_or_default();
+            use ss_core::command::ArchiveCmd as A;
+            if icon_button(
+                ui,
+                &p,
+                ss_assets::symbols::CHEVRON_LEFT,
+                None,
+                "Previous scan",
+            )
+            .clicked()
+            {
+                cx.emit.push(Command::Archive(A::Step(-1)));
+            }
+            ui.label(
+                RichText::new(format!("ARCHIVE {when}"))
+                    .monospace()
+                    .color(c32(p.a0)),
+            );
+            if icon_button(ui, &p, ss_assets::symbols::CHEVRON_RIGHT, None, "Next scan").clicked() {
+                cx.emit.push(Command::Archive(A::Step(1)));
+            }
+            if ui
+                .add(egui::Button::new(RichText::new("LIVE").monospace().size(11.0)).frame(false))
+                .on_hover_text("Back to live scans")
+                .clicked()
+            {
+                cx.emit.push(Command::Archive(A::Off));
+            }
+        } else {
+            let time = chrono::DateTime::parse_from_rfc3339(&scan.time)
+                .map(|t| t.with_timezone(&chrono::Local).format("%H:%M").to_string())
+                .unwrap_or_default();
+            ui.label(RichText::new(time).monospace().color(c32a(p.text3)));
+        }
 
         // The product's colours (reflectivity has the usual legend).
         if product != L2Product::Reflectivity {
