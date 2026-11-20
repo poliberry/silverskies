@@ -15,6 +15,12 @@ How the loop stays smooth:
 
 The **legend** shows reflectivity in dBZ: roughly 20 light rain, 40 heavy rain, 50+ intense storms and hail cores.
 
+## Satellite map and deep zoom (both apps)
+
+Under the radar you can choose a plain **map** or a **satellite** photo map (Esri World Imagery, worldwide), with place names and, on satellite, roads drawn over it. In Silver Skies use the **Map | Satellite** switch at the top-left of the radar; in Pro use the **IMG** layer button, Settings → Radar → *Satellite imagery map*, or `:layer imagery` (`:layer labels` toggles the names).
+
+You can zoom in like a real map, from the whole globe down to street level (zoom 21). Imagery is sharp to about zoom 19; past that, and wherever a closer tile doesn't exist or is still loading, the nearest coarser tile is enlarged so the map never goes blank.
+
 ## Pro: layers
 
 The floating control box in Pro has playback (back, play/pause, forward, **LIVE**), a frame slider, the colour scheme and icon toggles for the most-used layers. Everything else is in Settings → Radar or `:layer`.
@@ -24,7 +30,9 @@ The floating control box in Pro has playback (back, play/pause, forward, **LIVE*
 | Composite radar | LibreWXR | Worldwide where radars exist |
 | Nowcast frames | LibreWXR | Worldwide |
 | IR satellite | LibreWXR | Worldwide |
-| Terrain (shaded relief) | Esri World Hillshade | Worldwide |
+| Satellite imagery map | Esri World Imagery | Worldwide |
+| Place names, roads | Esri reference layers | Worldwide |
+| Terrain (shaded relief) | Esri World Hillshade (map mode) | Worldwide |
 | Alert polygons | The alert sources ([Alerts](Alerts-and-Weather-Radio)) | Where alerts have areas |
 | Alerts in view | LibreWXR bbox alerts | Worldwide (WMO CAP) |
 | SPC Day 1 outlook, mesoscale discussions | NOAA Storm Prediction Center | US |

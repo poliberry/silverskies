@@ -5,6 +5,7 @@ The **3D RADAR** pane shows the atmosphere around a place as a 3D volume above t
 ## What you see
 
 - **Terrain:** a 400 × 400 km elevation model of the area, draped with **satellite imagery** and lit by the sun, under a sky. The satellite button switches to colouring by height instead.
+- **Zoom like a map:** scroll from the 400 km overview right down to streets and buildings. Close to the camera the app streams finer elevation (AWS Terrain Tiles, to level 15) and satellite imagery (to level 19) tile by tile, spending detail where you're looking; farther away it stays coarse. Height exaggeration eases to true scale as you get close, so hills look real at street level.
 - **Radar echoes:** reflectivity in 3D, coloured like the 2D radar (green → yellow → red → magenta/white for the most intense cores). Weak echoes are see-through; cores are solid.
 - **Storm cells:** a line from the ground to the echo top, coloured by threat (yellow strong, orange severe, magenta rotating, red tornadic).
 - **Tornado vortex signatures:** a red funnel from cloud base to the ground.
