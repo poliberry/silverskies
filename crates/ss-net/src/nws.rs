@@ -381,8 +381,28 @@ impl Net {
         )
     }
 
+    /// The US WSR-88D sites (api.weather.gov) plus the European OPERA
+    /// radars; Europe's are listed even when the NWS can't be reached.
     pub async fn radar_stations(&self) -> Result<Vec<RadarStation>> {
-        parse_radar_stations(&self.get_text(RADAR_STATIONS_URL, Some(GEO_JSON)).await?)
+        let us = self
+            .get_text(RADAR_STATIONS_URL, Some(GEO_JSON))
+            .await
+            .and_then(|t| parse_radar_stations(&t));
+        let mut all = match us {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!("NWS radar sites: {e}");
+                Vec::new()
+            }
+        };
+        all.extend(ss_core::opera::RADARS.iter().map(|r| RadarStation {
+            id: r.code.to_ascii_uppercase(),
+            name: format!("{} ({})", r.name, r.country),
+            lat: r.lat,
+            lon: r.lon,
+            ..Default::default()
+        }));
+        Ok(all)
     }
 
     /// Follows `pagination.next` for up to 20 pages.

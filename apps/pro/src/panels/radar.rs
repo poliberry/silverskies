@@ -1210,7 +1210,12 @@ impl RadarPanel {
         let Some(scan) = sh.level2.get(&site).cloned() else {
             return;
         };
-        let motion = super::radar3d::motion_for_site(&sh.storm_cells, &site);
+        let cells = if ss_core::opera::is_opera(&site) {
+            &sh.mosaic_cells
+        } else {
+            &sh.storm_cells
+        };
+        let motion = super::radar3d::motion_for_site(cells, &site);
         if let Some(line) = self.map.line {
             if let Some(x) = self.xs.update(&scan, product, line, motion) {
                 self.xs_tex = x.map(|x| {
@@ -1380,6 +1385,10 @@ impl RadarPanel {
                         pick_l2 = Some(prod);
                     }
                 }
+                // The NWS's ready-made images exist for US radars only.
+                if ss_core::opera::is_opera(site) {
+                    return;
+                }
                 ui.separator();
                 ui.label(
                     RichText::new("NWS images · lowest tilt")
@@ -1500,7 +1509,12 @@ impl RadarPanel {
                 .iter()
                 .find(|s| s.id.eq_ignore_ascii_case(site))
                 .map(|s| s.name.clone());
-            let mut text = format!("NEXRAD {site}");
+            let net = if ss_core::opera::is_opera(site) {
+                "OPERA"
+            } else {
+                "NEXRAD"
+            };
+            let mut text = format!("{net} {site}");
             if let Some(name) = &station {
                 text.push_str(&format!(" · {name}"));
             }
@@ -1878,7 +1892,10 @@ impl RadarPanel {
             }
             self.nexrad_cfg = wanted.clone();
         }
-        layers.set_visible("nexrad", wanted.is_some() && rs.level2.is_none());
+        let nws_images = wanted
+            .as_ref()
+            .is_some_and(|(s, _)| !ss_core::opera::is_opera(s));
+        layers.set_visible("nexrad", nws_images && rs.level2.is_none());
         let station = wanted.as_ref().and_then(|(site, _)| {
             sh.radar_stations
                 .iter()
@@ -2026,8 +2043,25 @@ impl RadarPanel {
         // --- lightning ---
         layers.set_visible("lightning-mtg", rs.lightning);
         let credit = " · Lightning: NOAA GOES GLM, EUMETSAT";
-        let base = self.map.attribution.trim_end_matches(credit).to_string();
-        self.map.attribution = if rs.lightning { base + credit } else { base };
+        let opera = " · Radar: EUMETNET OPERA (CC BY 4.0)";
+        let base = self
+            .map
+            .attribution
+            .trim_end_matches(credit)
+            .trim_end_matches(opera)
+            .to_string();
+        let mut attribution = base;
+        if rs
+            .nexrad_site
+            .as_deref()
+            .is_some_and(ss_core::opera::is_opera)
+        {
+            attribution.push_str(opera);
+        }
+        if rs.lightning {
+            attribution.push_str(credit);
+        }
+        self.map.attribution = attribution;
         let now_s = chrono::Utc::now().timestamp();
         if let Some(l) = layers.get_mut::<ss_map::LightningLayer>("lightning") {
             l.visible = rs.lightning;

@@ -4228,6 +4228,7 @@ dependencies = [
  "chrono",
  "flate2",
  "futures",
+ "hdf5-reader",
  "image",
  "netcdf-reader",
  "once_cell",

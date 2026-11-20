@@ -256,7 +256,7 @@ impl Net {
     /// The newest volume scan for `site` (today's, else yesterday's, UTC).
     /// The site's newest scan, laid out around the radar.
     pub async fn site_scan(&self, site: &str) -> Result<ss_core::radar3d::SiteScan> {
-        let vol = self.latest_level2(site).await?;
+        let vol = self.radar_volume(site).await?;
         tokio::task::spawn_blocking(move || ss_core::radar3d::SiteScan {
             polar: ss_core::radar3d::polar_volume(&vol, vol.lat, vol.lon),
             site: vol.site,
@@ -266,6 +266,16 @@ impl Net {
         })
         .await
         .map_err(|e| NetError::Parse(e.to_string()))
+    }
+
+    /// The newest volume of a radar: NEXRAD Level II (`KTLX`) or a European
+    /// OPERA radar (`deess`).
+    pub async fn radar_volume(&self, site: &str) -> Result<Volume> {
+        if ss_core::opera::is_opera(site) {
+            self.latest_odim(site).await
+        } else {
+            self.latest_level2(site).await
+        }
     }
 
     pub async fn latest_level2(&self, site: &str) -> Result<Volume> {

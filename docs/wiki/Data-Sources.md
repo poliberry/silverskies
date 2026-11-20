@@ -15,6 +15,7 @@ Everything the apps show comes from these services. None needs an account except
 | Basemap | Esri, HERE, Garmin, © OpenStreetMap contributors | No | Worldwide | Both |
 | Shaded relief | Esri World Hillshade | No | Worldwide | Pro |
 | NEXRAD single site | NOAA NCEP GeoServer (WMS) | No | US | Pro |
+| European single-site radar volumes (2D, 3D, cross sections) | [EUMETNET OPERA Open Radar Data](https://eumetnet.github.io/openradardata-documentation/) (ODIM HDF5, CC BY 4.0) | No | ~20 European countries | Pro |
 | NEXRAD Level II volumes (3D) | [NOAA on AWS](https://registry.opendata.aws/noaa-nexrad/) (`unidata-nexrad-level2`) | No | US | Pro |
 | Terrain elevation (3D) | [AWS Terrain Tiles](https://registry.opendata.aws/terrain-tiles/) | No | Worldwide | Pro |
 | Storm cells, storm reports | [Iowa Environmental Mesonet](https://mesonet.agron.iastate.edu) | No | US | Pro |

@@ -881,7 +881,7 @@ pub struct WeatherMaps {
     pub color_schemes: Vec<ColorScheme>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct RadarStation {
     pub id: String,
     pub name: String,

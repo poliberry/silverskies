@@ -544,6 +544,10 @@ pub fn run_site(sh: &mut Shared, id: Option<String>) {
         Some(name) => format!("radar site: {id} ({name})"),
         None => format!("radar site: {id}"),
     };
+    // European radars have no NWS images: show their volume.
+    if ss_core::opera::is_opera(&id) && sh.config.radar.level2.is_none() {
+        sh.config.radar.level2 = Some(ss_core::radar3d::L2Product::Reflectivity);
+    }
     sh.config.radar.nexrad_site = Some(id);
     sh.dirty_config = true;
     sh.log(LogLevel::Info, line);

@@ -205,6 +205,8 @@ impl App {
         let nexrad_near = sh
             .radar_stations
             .iter()
+            // Storm cells come from NEXRAD only: OPERA radars don't count.
+            .filter(|s| !ss_core::opera::is_opera(&s.id))
             .any(|s| ss_core::geo::haversine_km(loc.lat, loc.lon, s.lat, s.lon) <= NEXRAD_RANGE_KM);
         if nexrad_near {
             return;

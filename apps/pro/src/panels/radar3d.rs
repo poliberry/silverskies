@@ -686,7 +686,17 @@ impl Panel for Radar3dPanel {
                 dark,
                 min_dbz: self.min_dbz,
                 product: self.shown_product(&scene),
-                motion: storm_motion(&cx.shared.storm_cells, &scene),
+                motion: storm_motion(
+                    match &scene.source {
+                        Some(RadarSource::Nexrad { site, .. })
+                            if ss_core::opera::is_opera(site) =>
+                        {
+                            &cx.shared.mosaic_cells
+                        }
+                        _ => &cx.shared.storm_cells,
+                    },
+                    &scene,
+                ),
                 terrain: self.show_terrain,
                 radar: self.show_radar,
                 photo: self.show_imagery,
@@ -1109,10 +1119,17 @@ fn storm_motion(cells: &[ss_core::storms::StormCell], scene: &Scene) -> [f32; 2]
 }
 
 /// Mean motion (east, north, m/s) of the cells radar `site` tracks.
+/// For a European (OPERA) radar, `cells` should be the mosaic's: those
+/// within 250 km of it are used.
 pub fn motion_for_site(cells: &[ss_core::storms::StormCell], site: &str) -> [f32; 2] {
     let short = site.get(1..).unwrap_or(site);
+    let opera = ss_core::opera::find(site);
+    let mine = |c: &&ss_core::storms::StormCell| match opera {
+        Some(r) => ss_core::geo::haversine_km(r.lat, r.lon, c.lat, c.lon) <= 250.0,
+        None => c.radar == short || c.radar == site,
+    };
     let (mut u, mut v, mut n) = (0.0f64, 0.0f64, 0.0f64);
-    for c in cells.iter().filter(|c| c.radar == short || c.radar == site) {
+    for c in cells.iter().filter(mine) {
         if c.speed_kt <= 0.0 {
             continue;
         }

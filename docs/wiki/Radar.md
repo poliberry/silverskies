@@ -21,6 +21,12 @@ Under the radar you can choose a plain **map** or a **satellite** photo map (Esr
 
 You can zoom in like a real map, from the whole globe down to street level (zoom 21). Imagery is sharp to about zoom 19; past that, and wherever a closer tile doesn't exist or is still loading, the nearest coarser tile is enlarged so the map never goes blank.
 
+## Pro: single-site radars in Europe (OPERA)
+
+About 200 European weather radars in some 20 countries (France, Germany, Spain, the Nordics, Poland, the Netherlands, Belgium, Switzerland, Denmark, the Baltics, Czechia, Slovakia, Hungary, Romania, Croatia, Ireland, Iceland, Malta and more) are listed with the US radars: their triangles appear on the map from zoom 5, and `:site deess` (the radar's ODIM code: country + site) or a click selects one. Pro then reads the radar's newest scans from EUMETNET's [Open Radar Data](https://eumetnet.github.io/openradardata-documentation/) (CC BY 4.0, a new scan every 5 minutes, about 5 minutes behind) and shows them exactly like NEXRAD Level II: every tilt, reflectivity and, where the country sends them, **velocity**, **storm-relative velocity**, **ZDR** and **CC** (the Netherlands and Denmark send full dual-pol; most others reflectivity and velocity). Cross sections, the 3D view and distance measuring all work. Storm-relative velocity uses the motion of the storm cells found in the composite around the radar.
+
+What each radar sends differs: some countries send whole volumes, others one tilt per file (merged here into a volume), and a few radars are retired or offline (the bar then says no recent scan).
+
 ## Pro: single-site NEXRAD and Level II
 
 `:site KTLX` (or clicking a radar site) switches the radar from the composite to one US radar. The product menu in the control bar then offers:

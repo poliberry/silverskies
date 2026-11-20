@@ -22,6 +22,7 @@ How the echoes are placed depends on where you are, and the pane always says whi
 | Where | Radar data | Heights |
 |---|---|---|
 | Within 230 km of a US WSR-88D (NEXRAD) | The radar's newest **Level II volume scan** from NOAA's public archive on AWS | **Measured.** Every tilt the radar swept (0.5° up to 19.5°), each echo placed by beam geometry. |
+| Within 230 km of a European OPERA radar (~200 radars in ~20 countries) | The radar's newest **volume scan** from EUMETNET's Open Radar Data (ODIM HDF5) | **Measured**, the same way. If the nearest radar is offline, the next nearest (up to three) is tried. |
 | Anywhere else | The global radar **composite** (2D) | **Estimated** from intensity: stronger echoes are drawn taller (about 2 km for light rain up to ~15 km for intense cores). Shows where storms are and how strong, not their real structure. |
 
 Terrain and imagery are worldwide everywhere.
@@ -34,7 +35,7 @@ Terrain and imagery are worldwide everywhere.
 4. Keep the scan itself, tilt by tilt, laid out by azimuth (0.5° bins) and range, and hand it to the GPU.
 5. **Ray-march** it, in the spirit of [OpenStorm](https://github.com/JordanSchlick/OpenStorm): for every pixel a ray steps through the scene; at each step the point is turned back into the radar's own coordinates (range, azimuth and beam elevation, with the same refraction model), the two tilts around it are sampled and blended (tilts more than 3° apart each fill only their own ~1° beam, so the gaps between high tilts stay honest), and the result is coloured and accumulated front to back until the ray is opaque or hits the ground.
 
-### Products (NEXRAD only)
+### Products (single-site radars)
 
 The product menu in the toolbar colours the volume by any moment the scan carries; opacity always follows reflectivity (and the ≥ dBZ slider), so you see the product where the echoes are:
 
@@ -65,7 +66,7 @@ Outside NEXRAD coverage the estimated columns are gridded (2 km × 0.5 km) and r
 ## Data and credits
 
 - Terrain: [AWS Terrain Tiles](https://registry.opendata.aws/terrain-tiles/) (Terrarium encoding: `height = R·256 + G + B/256 − 32768` m).
-- Radar volumes: [NOAA NEXRAD Level II on AWS](https://registry.opendata.aws/noaa-nexrad/) (`unidata-nexrad-level2`).
+- Radar volumes: [NOAA NEXRAD Level II on AWS](https://registry.opendata.aws/noaa-nexrad/) (`unidata-nexrad-level2`); Europe: [EUMETNET OPERA Open Radar Data](https://eumetnet.github.io/openradardata-documentation/) (CC BY 4.0).
 - Composite: LibreWXR.
 
 Rendering is done on the CPU (a perspective camera, then terrain and echoes depth-sorted and drawn as meshes), so it works on any graphics driver; a release build stays interactive with the full voxel count.

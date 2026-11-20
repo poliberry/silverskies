@@ -21,6 +21,7 @@ pub mod mrms;
 pub mod ncep;
 pub mod nwr;
 pub mod nws;
+pub mod odim;
 pub mod openmeteo;
 pub mod owm;
 pub mod scene3d;

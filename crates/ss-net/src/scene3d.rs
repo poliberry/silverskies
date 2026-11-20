@@ -7,8 +7,8 @@ use std::collections::HashMap;
 
 use crate::{Net, NetError, Result};
 use ss_core::radar3d::{
-    local_km, mosaic_voxels, nearest_site, polar_volume, terrain_from_tiles, volume_voxels,
-    RadarSource, Scene, Terrain, VoxelSpec,
+    local_km, mosaic_voxels, polar_volume, terrain_from_tiles, volume_voxels, RadarSource, Scene,
+    Terrain, VoxelSpec,
 };
 use ss_core::{RadarFrame, RadarStation};
 
@@ -107,8 +107,19 @@ impl Net {
         frames: &[RadarFrame],
     ) -> Result<Scene> {
         let terrain = self.terrain(lat, lon).await.ok();
-        let site = nearest_site(lat, lon, stations, |s| (s.lat, s.lon), NEXRAD_RANGE_KM)
-            .map(|(s, _)| s.id.clone());
+        // The nearest radars in range, closest first (a retired or offline
+        // one is skipped for the next).
+        let mut near: Vec<(f64, String)> = stations
+            .iter()
+            .map(|s| {
+                (
+                    ss_core::geo::haversine_km(lat, lon, s.lat, s.lon),
+                    s.id.clone(),
+                )
+            })
+            .filter(|(d, _)| *d <= NEXRAD_RANGE_KM)
+            .collect();
+        near.sort_by(|a, b| a.0.total_cmp(&b.0));
         let mut scene = Scene {
             lat,
             lon,
@@ -122,8 +133,8 @@ impl Net {
             polar: None,
         };
         // Measured volume where a NEXRAD covers the place…
-        if let Some(id) = site {
-            match self.latest_level2(&id).await {
+        for (_, id) in near.into_iter().take(3) {
+            match self.radar_volume(&id).await {
                 Ok(vol) => {
                     let (vlat, vlon) = (vol.lat, vol.lon);
                     let time = vol.time.clone();
@@ -148,7 +159,7 @@ impl Net {
                     scene.source = Some(RadarSource::Nexrad { site: id, time });
                     return Ok(scene);
                 }
-                Err(e) => tracing::warn!("Level II for {id}: {e}; using the mosaic"),
+                Err(e) => tracing::warn!("radar volume for {id}: {e}"),
             }
         }
         // …otherwise the global mosaic, extruded.
