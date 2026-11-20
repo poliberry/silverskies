@@ -16,8 +16,8 @@ pub use layers::{
     ancestor, barb_components, basemap, bbox_intersects, carto_basemap, esri_basemap,
     esri_hillshade, esri_imagery, esri_labels, esri_roads, geometry_bbox, lonlat_from_3857,
     lonlat_to_3857, point_in_polygon, triangulate, Barb, Basemap, DrawCtx, GeoImageLayer, Layer,
-    LayerStack, Marker, MarkerKind, MarkerLayer, PolyItem, PolygonLayer, RangeRingLayer,
-    RasterTileLayer, SelectionLayer, TriData, WindBarbLayer, WmsImageLayer,
+    LayerStack, LightningLayer, Marker, MarkerKind, MarkerLayer, PolyItem, PolygonLayer,
+    RangeRingLayer, RasterTileLayer, SelectionLayer, TriData, WindBarbLayer, WmsImageLayer,
 };
 pub use legend::{draw_color_legend, draw_color_legend_inline, radar_dbz_stops};
 pub use map::{attribution_for, MapResponse, MapWidget, BACKGROUND};

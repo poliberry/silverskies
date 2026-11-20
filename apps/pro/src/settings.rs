@@ -918,6 +918,14 @@ fn radar_tab(ui: &mut Ui, sh: &mut Shared, p: &Palette, st: &mut SettingsState) 
             ui,
             p,
             &mut rows,
+            "Lightning",
+            Some("Satellite-detected flashes: GOES (the Americas, Pacific) and Meteosat (Europe, Africa)"),
+            &mut cfg.radar.lightning,
+        );
+        toggle_row(
+            ui,
+            p,
+            &mut rows,
             "Radar sites",
             None,
             &mut cfg.radar.show_stations,

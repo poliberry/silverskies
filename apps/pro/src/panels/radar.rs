@@ -41,6 +41,8 @@ const BAR_H: f32 = 26.0;
 const LAYERS_H: f32 = 26.0;
 const LEGEND_H: f32 = 36.0;
 const LAYERS_GAP: f32 = 4.0;
+const LIGHTNING_NEAR_KM: f64 = 100.0;
+const LIGHTNING_NEAR_S: i64 = 15 * 60;
 
 /// One frame of the composite radar loop.
 #[derive(Debug, Clone, PartialEq)]
@@ -379,6 +381,23 @@ impl RadarPanel {
         l.push(PolygonLayer::new("md"));
         l.push(PolygonLayer::new("alerts"));
         l.push(WindBarbLayer::new("barbs", Color32::GRAY));
+        // Meteosat's lightning (Europe, Africa) as an image; GOES flashes
+        // as sparks on top.
+        let mut mtg =
+            WmsImageLayer::new("lightning-mtg", "eumetsat:mtg_li_afa", 300.0, |b, w, h| {
+                format!(
+                "https://view.eumetsat.int/geoserver/wms?service=WMS&version=1.3.0&request=GetMap\
+                 &layers=mtg_fd:li_afa&styles=&crs=EPSG:3857&bbox={},{},{},{}&width={w}&height={h}\
+                 &format=image/png&transparent=true",
+                b.0, b.1, b.2, b.3
+            )
+            })
+            .with_opacity(0.9);
+        mtg.visible = false;
+        l.push(mtg);
+        let mut ltg = ss_map::LightningLayer::new("lightning");
+        ltg.visible = false;
+        l.push(ltg);
         l.push(PolygonLayer::new("tc-swaths"));
         l.push(StormLayer::new("storm-reports"));
         l.push(StormLayer::new("storm-cells"));
@@ -747,6 +766,14 @@ pub fn layer_toggles(rs: &RadarSettings) -> Vec<(&'static str, bool, Command)> {
                 on: Some(!rs.wind_barbs),
             },
         ),
+        (
+            "LTG",
+            rs.lightning,
+            Command::Layer {
+                name: "lightning".to_string(),
+                on: Some(!rs.lightning),
+            },
+        ),
     ]
 }
 
@@ -907,6 +934,40 @@ impl Panel for RadarPanel {
             };
             overlay_text(&painter, aqi_pos, aqi_align, &text, c32(p.a0));
         }
+        if rs.lightning {
+            if let Some(loc) = cx.location.as_ref() {
+                let now_s = chrono::Utc::now().timestamp();
+                let near = ss_net::glm::nearest(
+                    &cx.shared.lightning,
+                    loc.lat,
+                    loc.lon,
+                    LIGHTNING_NEAR_KM,
+                    now_s - LIGHTNING_NEAR_S,
+                );
+                if let Some((d, b, f)) = near {
+                    let text = format!(
+                        "LTG {:.0} km {} · {} min",
+                        d,
+                        ss_core::weather::units::compass_8(b),
+                        (now_s - f.time).max(0) / 60
+                    );
+                    let dy = if rs.aqi_badge { 18.0 } else { 0.0 };
+                    let (pos, align) = if overlay {
+                        (
+                            r.rect.center_top() + vec2(0.0, 24.0 + dy),
+                            Align2::CENTER_TOP,
+                        )
+                    } else {
+                        (r.rect.right_top() + vec2(-8.0, 6.0 + dy), Align2::RIGHT_TOP)
+                    };
+                    let c = if d < 16.0 { c32(p.danger) } else { c32(p.a0) };
+                    let g = painter.layout_no_wrap(text, FontId::monospace(11.0), c);
+                    let at = align.anchor_size(pos, g.size()).expand2(vec2(5.0, 2.0));
+                    painter.rect_filled(at, 3.0, Color32::from_black_alpha(170));
+                    painter.galley(at.min + vec2(5.0, 2.0), g, c);
+                }
+            }
+        }
         self.map.layers.set_visible(
             "radar-sites",
             rs.show_stations && self.map.viewport.zoom >= MIN_SITE_ZOOM,
@@ -1025,6 +1086,7 @@ pub fn layer_icon(label: &str) -> (&'static str, &'static str) {
         "CEL" => (i::RADIO_BUTTON_CHECKED, "Storm cell markers"),
         "STN" => (i::CELL_TOWER, "Radar sites"),
         "BRB" => (i::AIR, "Wind barbs"),
+        "LTG" => (i::BOLT, "Lightning"),
         _ => (i::LAYERS, "Layer"),
     }
 }
@@ -1844,6 +1906,23 @@ impl RadarPanel {
         }
         layers.set_visible("barbs", rs.wind_barbs);
 
+        // --- lightning ---
+        layers.set_visible("lightning-mtg", rs.lightning);
+        let credit = " · Lightning: NOAA GOES GLM, EUMETSAT";
+        let base = self.map.attribution.trim_end_matches(credit).to_string();
+        self.map.attribution = if rs.lightning { base + credit } else { base };
+        let now_s = chrono::Utc::now().timestamp();
+        if let Some(l) = layers.get_mut::<ss_map::LightningLayer>("lightning") {
+            l.visible = rs.lightning;
+            if rs.lightning {
+                l.flashes = sh
+                    .lightning
+                    .iter()
+                    .map(|f| (f.lon, f.lat, (now_s - f.time) as f32 / 60.0))
+                    .collect();
+            }
+        }
+
         // --- alert polygons ---
         let alerts = sh.all_alerts_for(cx.loc_id());
         let sig = hash_of(&(
@@ -2267,7 +2346,7 @@ mod tests {
     fn layer_toggles_reflect_state_and_flip() {
         let rs = RadarSettings::default();
         let toggles = layer_toggles(&rs);
-        assert_eq!(toggles.len(), 7);
+        assert_eq!(toggles.len(), 8);
         let sat = toggles.iter().find(|(l, _, _)| *l == "SAT").unwrap();
         assert!(!sat.1);
         assert_eq!(

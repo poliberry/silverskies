@@ -20,6 +20,8 @@ pub enum AppEvent {
     /// Local storm reports (IEM).
     StormReports(Result<Vec<ss_core::storms::StormReport>, String>),
     /// Forecast soundings for a location (Open-Meteo pressure levels).
+    /// New lightning flashes, and the GLM files they came from.
+    Lightning(Result<(Vec<ss_net::glm::Flash>, Vec<String>), String>),
     /// A radar site's newest Level II scan (for the 2D radar).
     Level2 {
         site: String,

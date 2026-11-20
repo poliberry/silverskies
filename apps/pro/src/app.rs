@@ -51,6 +51,7 @@ pub struct App {
     /// Storm cells / reports: fetched at start, then every couple of minutes.
     last_storms: Option<Instant>,
     last_tropical: Option<Instant>,
+    last_lightning: Option<Instant>,
     /// Last mosaic-cell run: when, for which location.
     last_mosaic: Option<(Instant, String)>,
     last_auto: Instant,
@@ -147,6 +148,7 @@ impl App {
             last_spc: Instant::now(),
             last_storms: None,
             last_tropical: None,
+            last_lightning: None,
             last_mosaic: None,
             last_auto: Instant::now(),
             last_session_save: Instant::now(),
@@ -427,6 +429,28 @@ impl App {
                 }
                 Err(e) => sh.log(LogLevel::Warn, format!("storm reports: {e}")),
             },
+            AppEvent::Lightning(r) => {
+                sh.lightning_pending = false;
+                match r {
+                    Ok((flashes, files)) => {
+                        tracing::info!(
+                            "lightning: {} flashes from {} files",
+                            flashes.len(),
+                            files.len()
+                        );
+                        for k in files {
+                            let t = ss_net::glm::file_time(&k).unwrap_or(0);
+                            sh.lightning_files.insert(k, t);
+                        }
+                        sh.lightning.extend(flashes);
+                        let cutoff =
+                            chrono::Utc::now().timestamp() - crate::state::LIGHTNING_KEEP_S;
+                        sh.lightning.retain(|f| f.time >= cutoff);
+                        sh.lightning_files.retain(|_, t| *t >= cutoff);
+                    }
+                    Err(e) => sh.log(LogLevel::Warn, format!("lightning: {e}")),
+                }
+            }
             AppEvent::Level2 { site, result } => match result {
                 Ok(s) => {
                     sh.level2_errors.remove(&site);
@@ -790,6 +814,7 @@ impl App {
             self.tasks.tropical();
         }
         self.maybe_mosaic_cells();
+        self.maybe_lightning();
         if self.last_spc.elapsed() >= Duration::from_secs(600) {
             self.last_spc = Instant::now();
             self.fetch_spc_if_enabled();
@@ -798,6 +823,25 @@ impl App {
         if mins > 0 && self.last_auto.elapsed() >= Duration::from_secs(u64::from(mins) * 60) {
             self.refresh_all();
         }
+    }
+
+    /// Fetch new lightning about once a minute while the layer is on.
+    fn maybe_lightning(&mut self) {
+        let mut sh = self.shared.write();
+        if !sh.config.radar.lightning || sh.lightning_pending {
+            return;
+        }
+        if self
+            .last_lightning
+            .is_some_and(|t| t.elapsed() < Duration::from_secs(60))
+        {
+            return;
+        }
+        self.last_lightning = Some(Instant::now());
+        sh.lightning_pending = true;
+        let since = chrono::Utc::now().timestamp() - crate::state::LIGHTNING_KEEP_S;
+        let known = sh.lightning_files.keys().cloned().collect();
+        self.tasks.lightning(since, known);
     }
 
     /// Start, stop or re-resolve the weather radio when its config changes.

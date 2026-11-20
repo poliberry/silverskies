@@ -439,6 +439,10 @@ pub struct RadarSettings {
     pub storm_reports: bool,
     /// Tropical cyclones worldwide (GDACS): centres, tracks, wind swaths.
     pub tropical: bool,
+    /// Lightning: GOES GLM flashes (the Americas, Pacific) and EUMETSAT's
+    /// MTG Lightning Imager (Europe, Africa).
+    #[serde(default = "yes")]
+    pub lightning: bool,
     /// Auto-load alerts whose polygons fall inside the visible map area.
     pub viewport_alerts: bool,
 }
@@ -462,6 +466,7 @@ impl Default for RadarSettings {
             level2_tilt: 0,
             md_polygons: true,
             wind_barbs: false,
+            lightning: true,
             show_stations: true,
             owm_wind: false,
             owm_temp: false,

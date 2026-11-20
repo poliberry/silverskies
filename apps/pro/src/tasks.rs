@@ -200,6 +200,18 @@ impl Tasks {
 
     /// The 3D scene for a location: terrain, plus the nearest NEXRAD
     /// volume or (elsewhere) the extruded radar mosaic.
+    /// Lightning flashes from GLM files since `since` not yet `known`.
+    pub fn lightning(&self, since: i64, known: std::collections::HashSet<String>) {
+        let (net, tx, ctx) = (self.net.clone(), self.tx.clone(), self.ctx.clone());
+        self.rt.spawn(async move {
+            let r = net
+                .glm_flashes(since, &known)
+                .await
+                .map_err(|e| e.to_string());
+            Self::post(&tx, &ctx, AppEvent::Lightning(r));
+        });
+    }
+
     /// A radar site's newest Level II scan.
     pub fn level2(&self, site: &str) {
         let (net, tx, ctx) = (self.net.clone(), self.tx.clone(), self.ctx.clone());

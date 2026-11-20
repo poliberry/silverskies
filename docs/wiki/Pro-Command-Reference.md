@@ -34,7 +34,7 @@ Press `:` to open the command line. Commands are case-insensitive; Tab completes
 | `:quit` | Quit Silver Skies | `:q`, `:exit` |
 | `:demo [group\|event]` | Fire demo alerts |  |
 | `:zoom <level>` | Set the map zoom level | `:z` |
-| `:layer <alerts\|satellite\|nowcast\|spc\|md\|barbs\|owm-wind\|owm-temp\|owm-precip\|aqi\|sites\|legend\|nexrad\|arrows\|cells> [on\|off]` | Toggle a map layer | `:l` |
+| `:layer <alerts\|satellite\|nowcast\|spc\|md\|barbs\|owm-wind\|owm-temp\|owm-precip\|aqi\|sites\|legend\|nexrad\|arrows\|cells\|lightning> [on\|off]` | Toggle a map layer | `:l` |
 | `:product <name>` | Select the radar product | `:p` |
 | `:level2 <ref\|vel\|srv\|cc\|zdr\|off>` | Show a Level II product (every tilt) on the single-site radar | `:l2` |
 | `:tilt <n\|up\|down>` | Choose the Level II tilt (1 = lowest) | |
@@ -51,7 +51,7 @@ Accepted wherever a `<panel>` is expected (`:show`, `:hide`, `:move`, `:swap`, `
 
 ## Map layers
 
-`:layer <name> [on|off]` (no on/off toggles): `alerts`, `satellite`, `nowcast`, `spc`, `md`, `barbs`, `owm-wind`, `owm-temp`, `owm-precip`, `aqi`, `sites`, `legend`, `nexrad`, `arrows`, `cells`, `terrain`, `storms`, `reports`, `tropical`.
+`:layer <name> [on|off]` (no on/off toggles): `alerts`, `satellite`, `nowcast`, `spc`, `md`, `barbs`, `owm-wind`, `owm-temp`, `owm-precip`, `aqi`, `sites`, `legend`, `nexrad`, `arrows`, `cells`, `terrain`, `storms`, `reports`, `tropical`, `lightning`.
 
 `tropical` also accepts `cyclones`, `hurricanes`, `typhoons`, `tc`.
 

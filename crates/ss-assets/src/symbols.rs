@@ -11,6 +11,7 @@ pub const AIR: &str = "\u{efd8}";
 pub const ARROW_OUTWARD: &str = "\u{f8ce}";
 pub const AUTO_AWESOME: &str = "\u{e65f}";
 pub const BOOKMARK_ADD: &str = "\u{e598}";
+pub const BOLT: &str = "\u{ea0b}";
 pub const CALENDAR_MONTH: &str = "\u{ebcc}";
 pub const CELL_TOWER: &str = "\u{ebba}";
 pub const CHECK: &str = "\u{e5ca}";
@@ -75,6 +76,7 @@ pub const ALL: &[&str] = &[
     ARROW_OUTWARD,
     AUTO_AWESOME,
     BOOKMARK_ADD,
+    BOLT,
     CALENDAR_MONTH,
     CELL_TOWER,
     CHECK,

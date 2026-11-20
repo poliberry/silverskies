@@ -492,6 +492,64 @@ impl Layer for WmsImageLayer {
     }
 }
 
+/// Lightning flashes: small sparks coloured by age (white = just now,
+/// then yellow, orange and dark red as they age).
+pub struct LightningLayer {
+    pub name: String,
+    pub visible: bool,
+    /// (lon, lat, age in minutes).
+    pub flashes: Vec<(f64, f64, f32)>,
+}
+
+impl LightningLayer {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            visible: true,
+            flashes: Vec::new(),
+        }
+    }
+
+    /// The spark colour for a flash `age` minutes old.
+    pub fn color(age: f32) -> Color32 {
+        let (rgb, a) = match age {
+            a if a < 1.0 => ([255, 255, 255], 255),
+            a if a < 3.0 => ([255, 236, 60], 240),
+            a if a < 6.0 => ([255, 150, 30], 220),
+            a if a < 10.0 => ([230, 70, 30], 200),
+            _ => ([150, 40, 30], 170),
+        };
+        Color32::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], a)
+    }
+}
+
+impl Layer for LightningLayer {
+    layer_boilerplate!();
+
+    fn draw(&mut self, ctx: &mut DrawCtx, painter: &Painter) {
+        let vp = ctx.viewport;
+        let r = ctx.rect.expand(6.0);
+        // Older first, so the newest sit on top.
+        let mut order: Vec<usize> = (0..self.flashes.len()).collect();
+        order.sort_by(|&a, &b| self.flashes[b].2.total_cmp(&self.flashes[a].2));
+        let size = (2.0 + (vp.zoom as f32 - 5.0).clamp(0.0, 6.0) * 0.5).min(5.0);
+        for i in order {
+            let (lon, lat, age) = self.flashes[i];
+            let p = vp.screen_from_lonlat(lon, lat, ctx.rect);
+            if !r.contains(p) {
+                continue;
+            }
+            let c = Self::color(age);
+            let s = Stroke::new(1.4, c);
+            painter.line_segment([p - vec2(size, 0.0), p + vec2(size, 0.0)], s);
+            painter.line_segment([p - vec2(0.0, size), p + vec2(0.0, size)], s);
+            if age < 1.0 {
+                painter.circle_stroke(p, size + 2.0, Stroke::new(1.0, c));
+            }
+        }
+    }
+}
+
 /// An image the app made itself, drawn over a lon/lat box (rows spaced
 /// evenly in Web Mercator, as the map is).
 pub struct GeoImageLayer {

@@ -51,11 +51,24 @@ The radar bar, under the function keys in Pro's main window, has playback (back,
 | Storm cells (mosaic) | Computed from the composite | Worldwide |
 | Storm reports | Iowa Environmental Mesonet (NWS LSRs) | US |
 | Tropical cyclones | GDACS | Worldwide |
+| Lightning (flashes) | NOAA GOES GLM | The Americas, Atlantic and Pacific |
+| Lightning (density) | EUMETSAT MTG Lightning Imager | Europe, Africa |
 | Wind barbs | METAR observations (api.weather.gov) | Where stations exist |
 | Radar sites | api.weather.gov | US WSR-88D |
 | Wind, temperature, precipitation overlays; air quality | OpenWeatherMap (needs a key) | Worldwide |
 
 Hover any symbol for details: storm cells (signatures, hail size, echo tops, motion), reports, cyclones (category, winds, track), alert polygons, discussions.
+
+## Pro: lightning
+
+The **LTG** toggle (bolt icon, `:layer lightning`, Settings → Radar) shows lightning from the last 15 minutes, refreshed every minute:
+
+- **The Americas, the Atlantic and the Pacific:** every flash seen by the GOES-East and GOES-West Geostationary Lightning Mappers, as crosses coloured by age: white (under a minute, circled), yellow (3 min), orange (6), red (10), dark red (older).
+- **Europe and Africa:** EUMETSAT's Meteosat Third Generation Lightning Imager, as a flash-density image (5-minute updates).
+
+When there has been a flash within 100 km of your place in the last 15 minutes, a badge at the top of the map reads, e.g., **LTG 12 km NW · 3 min**: the nearest flash's distance, direction and age (red within 16 km, about 10 miles: thunder range). The 3D radar draws recent flashes as bolts above the ground.
+
+Satellite lightning mappers see total lightning (in-cloud and cloud-to-ground) at about 8–10 km resolution, so a flash's position is approximate. There is no free real-time feed for East and South Asia or Australia yet.
 
 ## Pro: NEXRAD single site
 

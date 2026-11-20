@@ -700,7 +700,7 @@ impl Panel for Radar3dPanel {
         }
         let marks = self.draw_scene(&painter, &view, &scene, cx, dark, terrain_drawn, gpu);
         self.legend_product = self.shown_product(&scene);
-        self.overlay(&painter, rect, &view, &p);
+        self.overlay(&painter, rect, &view, &p, cx.shared.config.radar.lightning);
         // Hover: the nearest marker.
         if let Some(pos) = resp.hover_pos() {
             if let Some(m) = marks
@@ -930,6 +930,33 @@ impl Radar3dPanel {
                 ),
             });
         }
+        // Lightning in the last 10 minutes: a short zig-zag from the cloud
+        // towards the ground, coloured by age like the 2D map.
+        if sh.config.radar.lightning {
+            let now_s = chrono::Utc::now().timestamp();
+            for f in sh
+                .lightning
+                .iter()
+                .filter(|f| now_s - f.time < 600)
+                .take(3000)
+            {
+                let (x, y) = local_km(scene.lat, scene.lon, f.lat, f.lon);
+                if !inside(x, y) {
+                    continue;
+                }
+                let g = ground(x, y);
+                let pts: Vec<Pos2> = [(0.0, 7.0), (0.6, 5.2), (-0.4, 4.0), (0.3, 2.4)]
+                    .iter()
+                    .filter_map(|&(dx, h)| view.project(V3::new(x + dx, y, (g + h) * ex)))
+                    .map(|(p, _)| p)
+                    .collect();
+                if pts.len() == 4 {
+                    let age = (now_s - f.time) as f32 / 60.0;
+                    let c = ss_map::LightningLayer::color(age);
+                    painter.add(Shape::line(pts, Stroke::new(1.3, c)));
+                }
+            }
+        }
         // Tornado, funnel-cloud and hail reports (US): pins on the ground.
         // (Wind and flood reports are left to the 2D map: too many to read.)
         for r in sh.storm_reports.iter().filter(|r| {
@@ -978,7 +1005,14 @@ impl Radar3dPanel {
     }
 
     /// Compass, legend and hints.
-    fn overlay(&self, painter: &egui::Painter, rect: Rect, view: &View, p: &Palette) {
+    fn overlay(
+        &self,
+        painter: &egui::Painter,
+        rect: Rect,
+        view: &View,
+        p: &Palette,
+        lightning: bool,
+    ) {
         // North arrow: project a short northward step from the target.
         let t = self.cam.target;
         if let (Some((a, _)), Some((b, _))) =
@@ -1048,6 +1082,11 @@ impl Radar3dPanel {
             "Imagery: Esri, Maxar, Earthstar Geographics · Terrain: AWS Terrain Tiles · "
         } else {
             "Terrain: AWS Terrain Tiles · "
+        };
+        let credit = if lightning {
+            format!("{credit}Lightning: NOAA GOES GLM · ")
+        } else {
+            credit.to_string()
         };
 
         painter.text(

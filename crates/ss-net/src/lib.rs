@@ -12,6 +12,7 @@
 pub mod accuweather;
 pub mod eccc;
 pub mod gdacs;
+pub mod glm;
 pub mod iem;
 pub mod level2;
 pub mod librewxr;

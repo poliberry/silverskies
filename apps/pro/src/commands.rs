@@ -492,6 +492,7 @@ pub fn run_layer(sh: &mut Shared, name: &str, on: Option<bool>) -> bool {
             "tropical" => &mut cfg.radar.tropical,
             "imagery" => &mut cfg.radar.imagery,
             "labels" => &mut cfg.radar.labels,
+            "lightning" => &mut cfg.radar.lightning,
             _ => &mut cfg.radar.show_cells,
         };
         let want = on.unwrap_or(!*slot);

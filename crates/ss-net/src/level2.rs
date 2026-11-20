@@ -26,6 +26,15 @@ pub fn list_url(site: &str, date: chrono::NaiveDate) -> String {
 
 /// Object keys in an S3 `ListBucketResult`, volume files only (the `_MDM`
 /// metadata files are skipped).
+/// Every key in an S3 listing.
+pub fn parse_listing_any(xml: &str) -> Vec<String> {
+    xml.split("<Key>")
+        .skip(1)
+        .filter_map(|s| s.split("</Key>").next())
+        .map(str::to_string)
+        .collect()
+}
+
 pub fn parse_listing(xml: &str) -> Vec<String> {
     xml.split("<Key>")
         .skip(1)

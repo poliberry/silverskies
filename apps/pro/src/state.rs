@@ -135,6 +135,9 @@ pub enum RadioStatus {
     },
 }
 
+/// How long lightning flashes are kept and shown, seconds.
+pub const LIGHTNING_KEEP_S: i64 = 15 * 60;
+
 /// Everything the radio panel shows.
 #[derive(Debug, Clone)]
 pub struct RadioView {
@@ -190,6 +193,11 @@ pub struct Shared {
     pub level2: HashMap<String, std::sync::Arc<ss_core::radar3d::SiteScan>>,
     pub level2_requested: HashMap<String, std::time::Instant>,
     pub level2_errors: HashMap<String, String>,
+    /// Lightning flashes of the last [`LIGHTNING_KEEP_S`], and the GLM
+    /// files read (with their times).
+    pub lightning: Vec<ss_net::glm::Flash>,
+    pub lightning_files: HashMap<String, i64>,
+    pub lightning_pending: bool,
     pub scene3d_pending: std::collections::HashSet<String>,
     pub scene3d_errors: HashMap<String, String>,
     pub sounding_errors: HashMap<String, String>,
@@ -281,6 +289,9 @@ impl Shared {
             level2: HashMap::new(),
             level2_requested: HashMap::new(),
             level2_errors: HashMap::new(),
+            lightning: Vec::new(),
+            lightning_files: HashMap::new(),
+            lightning_pending: false,
             scene3d_pending: Default::default(),
             scene3d_errors: HashMap::new(),
             sounding_errors: HashMap::new(),

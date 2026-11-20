@@ -20,6 +20,7 @@ tracing.workspace = true
 percent-encoding = "2"
 image.workspace = true
 bzip2 = "0.6.1"
+netcdf-reader = "0.13"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
