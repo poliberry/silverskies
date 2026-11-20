@@ -63,12 +63,15 @@ jobs:
             package: silverskies
             bin: silverskies
             file: SilverSkies
+            extra_pkg: ""
             deb_desc: Calm weather forecast with search, summaries, radar and alerts
           - name: Silver Skies Pro
             dir: apps/pro
             package: silverskies-pro
             bin: silverskies-pro
             file: SilverSkiesPro
+            # The 3D globe ships alongside Pro.
+            extra_pkg: "-p silverskies-globe"
             deb_desc: Composite forecast, meteorology and radar workstation
         platform:
           - os: windows-latest
@@ -112,17 +115,18 @@ jobs:
         with:
           key: ${{ matrix.app.package }}
 
-      # eframe (glow/winit) and rodio/tts need these system libraries on Linux.
+      # eframe (glow/winit) and rodio/tts need these system libraries on Linux;
+      # Pro's 3D globe (wry) needs WebKitGTK to build.
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libxkbcommon-dev libwayland-dev libxcb-render0-dev \
             libxcb-shape0-dev libxcb-xfixes0-dev libgtk-3-dev libasound2-dev \
-            libspeechd-dev libssl-dev pkg-config
+            libspeechd-dev libssl-dev pkg-config libwebkit2gtk-4.1-dev libsoup-3.0-dev
 
       - name: Build
-        run: cargo build --release --locked --target ${{ matrix.platform.target }} -p ${{ matrix.app.package }}
+        run: cargo build --release --locked --target ${{ matrix.platform.target }} -p ${{ matrix.app.package }} ${{ matrix.app.extra_pkg }}
 
       # --- Windows: portable zip + Inno Setup installer ---------------------
       - name: Package portable zip (Windows)
@@ -131,6 +135,9 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force stage | Out-Null
           Copy-Item "target/$env:TARGET/release/$env:APP_BIN.exe" stage/
+          if ((Test-Path "target/$env:TARGET/release/silverskies-globe.exe") -and ($env:APP_BIN -eq "silverskies-pro")) {
+            Copy-Item "target/$env:TARGET/release/silverskies-globe.exe" stage/
+          }
           Copy-Item "$env:APP_DIR/README.md" stage/
           Compress-Archive -Path stage/* -DestinationPath "$env:APP_FILE-$env:FULL_VERSION-windows-x86_64.zip"
 
@@ -156,6 +163,10 @@ jobs:
           cp "target/$TARGET/release/$APP_BIN" "$APP/Contents/MacOS/$APP_BIN"
           cp "$APP_DIR/dist/macos/Info.plist" "$APP/Contents/Info.plist"
           chmod +x "$APP/Contents/MacOS/$APP_BIN"
+          if [ "$APP_BIN" = silverskies-pro ]; then
+            cp "target/$TARGET/release/silverskies-globe" "$APP/Contents/MacOS/silverskies-globe"
+            chmod +x "$APP/Contents/MacOS/silverskies-globe"
+          fi
           /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist"
           /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $SS_BUILD" "$APP/Contents/Info.plist"
           # Icon set from the 512px source (no 1024px @2x available).
@@ -189,9 +200,17 @@ jobs:
           ./linuxdeploy.AppImage --appimage-extract >/dev/null && mv squashfs-root ld-root
           ./linuxdeploy-plugin-appimage.AppImage --appimage-extract >/dev/null && mv squashfs-root ld-plugin-root
           export PATH="$PWD/ld-plugin-root/usr/bin:$PATH"
+          # Deploy the app and its libraries, then add the globe untouched: it
+          # runs on the system's WebKitGTK and GTK (WebKit's helper processes
+          # can't be bundled), so none of its libraries go in, and it sits
+          # outside usr/bin so nothing rewrites it. Then pack.
           VERSION="$FULL_VERSION" ./ld-root/AppRun --appdir AppDir \
-            -e "$BIN" -d "$DESKTOP" -i "stage/$APP_BIN.png" \
-            --output appimage
+            -e "$BIN" -d "$DESKTOP" -i "stage/$APP_BIN.png"
+          if [ "$APP_BIN" = silverskies-pro ]; then
+            mkdir -p AppDir/usr/lib/silverskies-pro
+            cp "target/$TARGET/release/silverskies-globe" AppDir/usr/lib/silverskies-pro/
+          fi
+          VERSION="$FULL_VERSION" ./ld-plugin-root/AppRun --appdir AppDir
           BUILT="$(ls ./*.AppImage | grep -vi linuxdeploy | head -n 1)"
           mv "$BUILT" "$APP_FILE-${FULL_VERSION}-x86_64.AppImage"
           # Hand-rolled .deb (no extra tooling needed on the runner).
@@ -199,6 +218,11 @@ jobs:
           mkdir -p "$PKG/DEBIAN" "$PKG/usr/bin" "$PKG/usr/share/applications" \
             "$PKG/usr/share/icons/hicolor/512x512/apps"
           cp "$BIN" "$PKG/usr/bin/$APP_BIN"
+          RECOMMENDS="espeak-ng"
+          if [ "$APP_BIN" = silverskies-pro ]; then
+            cp "target/$TARGET/release/silverskies-globe" "$PKG/usr/bin/silverskies-globe"
+            RECOMMENDS="espeak-ng, libwebkit2gtk-4.1-0"
+          fi
           cp "$DESKTOP" "$PKG/usr/share/applications/"
           cp "$APP_DIR/assets/icon-dark.png" "$PKG/usr/share/icons/hicolor/512x512/apps/$APP_BIN.png"
           cat > "$PKG/DEBIAN/control" <<EOF
@@ -206,7 +230,7 @@ jobs:
           Version: ${VERSION}-${SS_BUILD}
           Architecture: amd64
           Depends: libspeechd2
-          Recommends: espeak-ng
+          Recommends: $RECOMMENDS
           Maintainer: Silver Skies <e993372@staff.poliberry.com>
           Description: $DEB_DESC
            $APP_NAME, part of the Silver Skies suite of weather apps.

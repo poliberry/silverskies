@@ -383,9 +383,64 @@ pub struct Radar3dPanel {
     imagery_tex: Option<(String, egui::TextureHandle)>,
     /// Level-of-detail terrain and imagery, for zooming in close.
     lod: Option<super::terrain_lod::Lod>,
+    /// The CesiumJS globe window, when open.
+    globe: Option<crate::globe::Globe>,
+    /// Open the globe on the next frame (from the button).
+    open_globe: bool,
 }
 
 impl Radar3dPanel {
+    /// Start, feed and reap the globe window.
+    fn sync_globe(
+        &mut self,
+        cx: &mut PanelCx,
+        loc: &ss_core::SavedLocation,
+        scene: Option<&Scene>,
+    ) {
+        use crate::state::LogLevel;
+        if std::mem::take(&mut self.open_globe) {
+            match crate::globe::Globe::start() {
+                Ok(g) => {
+                    self.globe = Some(g);
+                    cx.shared.log(LogLevel::Info, "3D globe opened");
+                }
+                Err(e) => cx.shared.log(LogLevel::Error, e),
+            }
+        }
+        let Some(g) = self.globe.as_mut() else {
+            return;
+        };
+        for line in g.drain() {
+            if let Some(e) = line.strip_prefix("error ") {
+                cx.shared.log(LogLevel::Error, format!("globe: {e}"));
+                continue;
+            }
+            let text = line.strip_prefix("log ").unwrap_or(&line);
+            if text != "ready" {
+                let level = if text.starts_with("error") {
+                    LogLevel::Warn
+                } else {
+                    LogLevel::Info
+                };
+                cx.shared.log(level, format!("globe: {text}"));
+            }
+        }
+        if !g.alive() {
+            let started = g.started;
+            self.globe = None;
+            if started {
+                cx.shared.log(LogLevel::Info, "3D globe closed");
+            } else {
+                cx.shared
+                    .log(LogLevel::Error, crate::globe::Globe::failure_hint());
+            }
+            return;
+        }
+        if let Some(s) = scene {
+            g.show(&loc.id, &loc.label, s);
+        }
+    }
+
     /// The vertical exaggeration in use: the slider's value at the overview,
     /// easing to true scale as you zoom in to the ground (like a map).
     fn effective_exag(&self) -> f32 {
@@ -422,6 +477,8 @@ impl Default for Radar3dPanel {
             show_imagery: true,
             imagery_tex: None,
             lod: None,
+            globe: None,
+            open_globe: false,
         }
     }
 }
@@ -494,6 +551,26 @@ impl Radar3dPanel {
             {
                 if let Some(l) = &cx.location {
                     self.requested.remove(&l.id);
+                }
+            }
+            let open = self.globe.is_some();
+            if ui
+                .add(
+                    egui::Button::new(RichText::new(i::PUBLIC).font(icon(16.0)))
+                        .selected(open)
+                        .min_size(vec2(26.0, 22.0)),
+                )
+                .on_hover_text(if open {
+                    "Close the 3D globe"
+                } else {
+                    "Open the 3D globe: satellite imagery on real terrain, buildings with sun and shadows, and this radar volume (CesiumJS, in its own window)"
+                })
+                .clicked()
+            {
+                if open {
+                    self.globe = None;
+                } else {
+                    self.open_globe = true;
                 }
             }
             ui.add_space(6.0);
@@ -578,6 +655,7 @@ impl Panel for Radar3dPanel {
         }
         let scene = cx.shared.scenes3d.get(&loc.id).cloned();
         self.controls(ui, &p, scene.as_ref(), cx);
+        self.sync_globe(cx, &loc, scene.as_ref());
         let Some(scene) = scene else {
             if let Some(e) = cx.shared.scene3d_errors.get(&loc.id) {
                 error_text(ui, &p, &format!("3D view failed: {e}"));

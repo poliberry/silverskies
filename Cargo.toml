@@ -11,6 +11,7 @@ members = [
     "crates/ss-update",
     "apps/silverskies",
     "apps/pro",
+    "apps/globe",
     "tools/render-icons",
 ]
 

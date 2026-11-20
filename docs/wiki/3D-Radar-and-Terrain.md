@@ -2,6 +2,21 @@
 
 The **3D RADAR** pane shows the atmosphere around a place as a 3D volume above the real landscape, with storms and tornado signatures marked. Open it from the tool strip (cube icon), with `:show 3d`, or in its own window with `:popout 3d` (recommended: it likes space).
 
+## The 3D globe (CesiumJS)
+
+The globe button in the 3D RADAR pane's toolbar opens a separate **3D Globe** window: [CesiumJS](https://cesium.com/platform/cesiumjs/) (open source) running in the system web view, fed only free, keyless data:
+
+- **Imagery:** Esri World Imagery, with Esri place names on top.
+- **Terrain:** AWS Terrain Tiles (Terrarium), decoded in the page, worldwide.
+- **Buildings:** OpenStreetMap footprints and heights from OpenFreeMap's vector tiles, extruded and lit by the real sun for the current time, casting shadows on the ground and each other.
+- **Radar:** the same volume as the 3D RADAR pane, sent over by Pro and updated with each new scan; it follows the place you're viewing.
+
+Drag to move, Ctrl-drag or middle-drag to tilt and turn, scroll or right-drag to zoom. Closing Pro closes the globe.
+
+It is a separate program, `silverskies-globe`, installed next to Pro. It needs an internet connection (CesiumJS itself loads from the jsDelivr CDN) and a web view: WebView2 on Windows (built into Windows 10 and 11), WebKit on macOS, and **WebKitGTK 4.1** on Linux (`sudo apt install libwebkit2gtk-4.1-0`, `sudo dnf install webkit2gtk4.1`, `sudo pacman -S webkit2gtk-4.1`). If it can't start, the audit log says why.
+
+Photographed 3D cities (real building shapes and facades) aren't part of it: those come only from Google's Photorealistic 3D Tiles, which need a Google Maps API key with billing.
+
 ## What you see
 
 - **Terrain:** a 400 × 400 km elevation model of the area, draped with **satellite imagery** and lit by the sun, under a sky. The satellite button switches to colouring by height instead.
