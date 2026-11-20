@@ -285,6 +285,10 @@ pub struct RadarPanel {
     xs_tex: Option<(egui::TextureHandle, f32)>,
     /// Which hail/rotation track each layer's texture was made from.
     track_keys: std::collections::HashMap<ss_net::mrms::TrackKind, Option<usize>>,
+    /// Time of the (oldest) geostationary image shown, for the credit line.
+    sat_time: Option<i64>,
+    /// The basemap's own credit line.
+    base_attribution: String,
     last_wind_req: Option<(BBox, f64)>,
     last_alert_req: Option<(BBox, f64)>,
     view_sig: (u64, u64, u64),
@@ -309,6 +313,16 @@ fn hash_of<T: Hash>(v: &T) -> u64 {
     v.hash(&mut h);
     h.finish()
 }
+
+/// Map layers for the satellites of [`ss_net::satellite::sources`], in
+/// its order.
+const SAT_LAYERS: [&str; 5] = [
+    "sat-goes-west",
+    "sat-goes-east",
+    "sat-meteosat",
+    "sat-meteosat-iodc",
+    "sat-himawari",
+];
 
 fn placeholder_raster(name: &str, max_zoom: u8, opacity: f32) -> RasterTileLayer {
     let mut l = RasterTileLayer::new(name, "", max_zoom, |_| String::new()).with_opacity(opacity);
@@ -361,6 +375,10 @@ impl RadarPanel {
         l.push(esri_basemap(true));
         l.push(esri_hillshade(0.32));
         l.push(placeholder_raster("satellite", TILE_MAX_ZOOM, 0.75));
+        // Geostationary imagery, one layer per satellite sector.
+        for name in SAT_LAYERS {
+            l.push(placeholder_raster(name, 7, 0.85));
+        }
         l.push(RadarLoopLayer::new("radar", TILE_MAX_ZOOM, 0.7));
         // Roads (imagery only) and place labels sit above the radar.
         let mut roads = ss_map::esri_roads();
@@ -430,6 +448,8 @@ impl RadarPanel {
             xs: Default::default(),
             xs_tex: None,
             track_keys: Default::default(),
+            sat_time: None,
+            base_attribution: ss_map::attribution_for(ss_map::Basemap::Map).to_string(),
             last_wind_req: None,
             last_alert_req: None,
             view_sig: (0, 0, 0),
@@ -461,7 +481,7 @@ impl RadarPanel {
         self.map
             .layers
             .replace("labels", Box::new(ss_map::esri_labels(style, self.dark)));
-        self.map.attribution = ss_map::attribution_for(style).to_string();
+        self.base_attribution = ss_map::attribution_for(style).to_string();
     }
 }
 
@@ -1767,14 +1787,52 @@ impl RadarPanel {
             .map(|f| f.path.clone());
         let sat_key = sat.as_ref().map(|path| format!("sat:{path}"));
         let (h, sp) = (host.clone(), sat.clone().unwrap_or_default());
+        let live_ir = rs.sat_product == ss_core::types::SatProduct::LiveInfrared;
         sync_raster(
             layers,
             "satellite",
-            rs.satellite && sat.is_some(),
+            rs.satellite && live_ir && sat.is_some(),
             0.75,
             sat_key,
             move |t| satellite_tile_url(&h, &sp, u32::from(t.z), t.x, t.y),
         );
+        // Geostationary loop: each satellite at the radar frame's time (to
+        // the 10 minutes), or its newest image if the radar is newer.
+        let frame_time = frames
+            .get(self.playback.idx.min(frames.len().saturating_sub(1)))
+            .map(|f| f.time);
+        let srcs = ss_net::satellite::sources(rs.sat_product);
+        let mut sat_shown: Option<i64> = None;
+        for (i, name) in SAT_LAYERS.iter().enumerate() {
+            let src = srcs.get(i).copied();
+            let latest = src.and_then(|s| {
+                (sh.sat_for == Some(rs.sat_product))
+                    .then(|| sh.sat_latest.get(s.name).copied())
+                    .flatten()
+            });
+            let on = rs.satellite && !live_ir && latest.is_some();
+            let time = latest.map(|l| match frame_time {
+                Some(t) => (t / 600 * 600).min(l),
+                None => l,
+            });
+            if let (true, Some(t)) = (on, time) {
+                sat_shown = Some(sat_shown.map_or(t, |s: i64| s.min(t)));
+            }
+            let key = src
+                .zip(time)
+                .map(|(s, t)| format!("sat:{}:{t}", s.server_key()));
+            if let Some(l) = layers.get_mut::<RasterTileLayer>(name) {
+                if let Some(s) = src {
+                    l.max_zoom = s.max_zoom();
+                    l.lon_clip = Some((f64::from(s.west), f64::from(s.east)));
+                }
+            }
+            sync_raster(layers, name, on, 0.85, key, move |t| match (src, time) {
+                (Some(s), Some(tt)) => s.tile_url(tt, t.z, t.x, t.y),
+                _ => String::new(),
+            });
+        }
+        self.sat_time = sat_shown;
 
         // --- composite radar: the whole loop in one fluid layer ---
         let dark = self.dark;
@@ -2043,24 +2101,24 @@ impl RadarPanel {
 
         // --- lightning ---
         layers.set_visible("lightning-mtg", rs.lightning);
-        let credit = " · Lightning: NOAA GOES GLM, EUMETSAT";
-        let opera = " · Radar: EUMETNET OPERA (CC BY 4.0)";
-        let base = self
-            .map
-            .attribution
-            .trim_end_matches(credit)
-            .trim_end_matches(opera)
-            .to_string();
-        let mut attribution = base;
+        let mut attribution = self.base_attribution.clone();
+        if let Some(t) = self.sat_time {
+            let when = chrono::DateTime::from_timestamp(t, 0)
+                .map(|d| d.with_timezone(&Local).format("%H:%M").to_string())
+                .unwrap_or_default();
+            attribution.push_str(&format!(
+                " · Satellite {when}: NASA GIBS (NOAA, JMA), EUMETSAT"
+            ));
+        }
         if rs
             .nexrad_site
             .as_deref()
             .is_some_and(ss_core::opera::is_opera)
         {
-            attribution.push_str(opera);
+            attribution.push_str(" · Radar: EUMETNET OPERA (CC BY 4.0)");
         }
         if rs.lightning {
-            attribution.push_str(credit);
+            attribution.push_str(" · Lightning: NOAA GOES GLM, EUMETSAT");
         }
         self.map.attribution = attribution;
         let now_s = chrono::Utc::now().timestamp();

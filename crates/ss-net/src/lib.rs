@@ -24,6 +24,7 @@ pub mod nws;
 pub mod odim;
 pub mod openmeteo;
 pub mod owm;
+pub mod satellite;
 pub mod scene3d;
 pub mod spc;
 pub mod willyweather;

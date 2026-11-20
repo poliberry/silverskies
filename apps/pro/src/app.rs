@@ -55,6 +55,7 @@ pub struct App {
     last_tropical: Option<Instant>,
     last_lightning: Option<Instant>,
     last_arrivals: Option<Instant>,
+    last_sat: Option<(Instant, ss_core::types::SatProduct)>,
     /// When the storm swath was last requested, for which place and period.
     last_swath: Option<(Instant, String, u32)>,
     /// (place id, cell key) → when a storm-arrival warning was given.
@@ -157,6 +158,7 @@ impl App {
             last_tropical: None,
             last_lightning: None,
             last_arrivals: None,
+            last_sat: None,
             last_swath: None,
             arrival_warned: HashMap::new(),
             last_mosaic: None,
@@ -441,6 +443,20 @@ impl App {
                 }
                 Err(e) => sh.log(LogLevel::Warn, format!("storm reports: {e}")),
             },
+            AppEvent::SatLatest { product, times } => {
+                if sh.sat_for != Some(product) {
+                    sh.sat_latest.clear();
+                    sh.sat_for = Some(product);
+                }
+                for (name, r) in times {
+                    match r {
+                        Ok(t) => {
+                            sh.sat_latest.insert(name, t);
+                        }
+                        Err(e) => tracing::warn!("satellite {name}: {e}"),
+                    }
+                }
+            }
             AppEvent::Track {
                 kind,
                 minutes,
@@ -850,6 +866,7 @@ impl App {
         self.maybe_lightning();
         self.maybe_tracks();
         self.update_arrivals();
+        self.maybe_satellite();
         if self.last_spc.elapsed() >= Duration::from_secs(600) {
             self.last_spc = Instant::now();
             self.fetch_spc_if_enabled();
@@ -933,6 +950,26 @@ impl App {
         sh.tracks_pending.insert(TrackKind::Swath);
         self.tasks
             .swath(host, frames, loc.lat, loc.lon, (span as u32).min(minutes));
+    }
+
+    /// Keep the newest satellite image times current (every 5 minutes, or
+    /// at once when the product changes).
+    fn maybe_satellite(&mut self) {
+        let sh = self.shared.read();
+        let rs = &sh.config.radar;
+        let product = rs.sat_product;
+        if !rs.satellite || product == ss_core::types::SatProduct::LiveInfrared {
+            return;
+        }
+        let due = match &self.last_sat {
+            Some((t, p)) => *p != product || t.elapsed() >= Duration::from_secs(300),
+            None => true,
+        };
+        drop(sh);
+        if due {
+            self.last_sat = Some((Instant::now(), product));
+            self.tasks.sat_latest(product);
+        }
     }
 
     /// Which storms are heading for the saved places; warn (log and desktop

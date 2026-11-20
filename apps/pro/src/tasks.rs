@@ -252,6 +252,22 @@ impl Tasks {
         });
     }
 
+    /// When each satellite of `product` has its newest image.
+    pub fn sat_latest(&self, product: ss_core::types::SatProduct) {
+        let (net, tx, ctx) = (self.net.clone(), self.tx.clone(), self.ctx.clone());
+        self.rt.spawn(async move {
+            let srcs = ss_net::satellite::sources(product);
+            let futs: Vec<_> = srcs.iter().map(|s| net.sat_latest(s)).collect();
+            let got = futures::future::join_all(futs).await;
+            let times = srcs
+                .iter()
+                .zip(got)
+                .map(|(s, r)| (s.name, r.map_err(|e| e.to_string())))
+                .collect();
+            Self::post(&tx, &ctx, AppEvent::SatLatest { product, times });
+        });
+    }
+
     /// A storm swath (strongest composite echo over `frames`) around a
     /// place, drawn like the hail tracks.
     pub fn swath(

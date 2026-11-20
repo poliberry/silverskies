@@ -69,6 +69,19 @@ The radar bar, under the function keys in Pro's main window, has playback (back,
 
 Hover any symbol for details: storm cells (signatures, hail size, echo tops, motion), reports, cyclones (category, winds, track), alert polygons, discussions.
 
+## Pro: satellite imagery (worldwide)
+
+The **SAT** toggle (Settings → Radar → *Satellite*) shows one of:
+
+| Imagery (`:sat …`) | What | Delay |
+|---|---|---|
+| Infrared, live (`:sat live`, default) | The composite's worldwide infrared, newest image only | Live |
+| Infrared (`:sat ir`) | Clean infrared (10.3–10.8 µm), colour-enhanced: cold, high cloud tops (storms) stand out | ~30–60 min |
+| True colour / GeoColor (`:sat color`) | What the eye would see by day; infrared with city lights by night | ~30–60 min |
+| Air mass (`:sat airmass`) | Red/brown = dry, descending air (jet streams, dry slots), green = warm moist air, blue/purple = cold air | ~30–60 min |
+
+The looped kinds come from every weather satellite in geostationary orbit, each drawn over its own longitudes so the whole globe is covered by the best-placed one: **GOES-West** (central Pacific to the Rockies), **GOES-East** (the Americas and Atlantic), **Meteosat** (Europe and Africa), **Meteosat IODC** (the Middle East and India) and **Himawari** (East Asia and Australia). Images are 10 minutes apart and follow the radar loop: each frame shows the satellite image from the same time, or the newest one where the satellite hasn't caught up yet. The credit line gives the image time. GOES and Himawari come from NASA GIBS, Meteosat from EUMETSAT's EUMETView. Himawari has no true colour there: its sector shows infrared in that mode.
+
 ## Pro: lightning
 
 The **LTG** toggle (bolt icon, `:layer lightning`, Settings → Radar) shows lightning from the last 15 minutes, refreshed every minute:

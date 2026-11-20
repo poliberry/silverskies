@@ -886,10 +886,25 @@ fn radar_tab(ui: &mut Ui, sh: &mut Shared, p: &Palette, st: &mut SettingsState) 
             ui,
             p,
             &mut rows,
-            "IR satellite",
+            "Satellite",
             None,
             &mut cfg.radar.satellite,
         );
+        {
+            use ss_core::types::SatProduct;
+            let opts: Vec<(SatProduct, &str)> =
+                SatProduct::ALL.iter().map(|p| (*p, p.label())).collect();
+            combo_row(
+                ui,
+                p,
+                &mut rows,
+                "Satellite imagery",
+                Some("Live infrared from the composite, or 10-minute geostationary images (GOES, Meteosat, Himawari) looped with the radar, about 30–60 minutes behind"),
+                "sat-product",
+                &mut cfg.radar.sat_product,
+                &opts,
+            );
+        }
         toggle_row(
             ui,
             p,

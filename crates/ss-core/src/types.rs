@@ -403,8 +403,11 @@ pub struct RadarSettings {
     pub show_polygons: bool,
     /// Include nowcast frames in the loop.
     pub nowcast: bool,
-    /// IR satellite layer.
+    /// Satellite layer.
     pub satellite: bool,
+    /// What the satellite layer shows.
+    #[serde(default)]
+    pub sat_product: SatProduct,
     pub legend: bool,
     /// Uppercase ICAO id of the single-site NEXRAD WMS (e.g. `KFSX`); `None` = composite radar.
     pub nexrad_site: Option<String>,
@@ -469,6 +472,7 @@ impl Default for RadarSettings {
             show_polygons: true,
             nowcast: true,
             satellite: false,
+            sat_product: SatProduct::default(),
             legend: true,
             nexrad_site: None,
             nexrad_product: RadarProduct::SrBref,
@@ -893,6 +897,39 @@ pub struct RadarStation {
     pub alarm_summary: Option<String>,
     /// RFC 3339.
     pub last_received_time: Option<String>,
+}
+
+/// Satellite imagery for the radar's satellite layer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+pub enum SatProduct {
+    /// LibreWXR's worldwide infrared, live (no loop of its own).
+    #[default]
+    LiveInfrared,
+    /// Clean infrared from every geostationary satellite, looped with the
+    /// radar.
+    Infrared,
+    /// GeoColor: true colour by day, infrared and city lights by night.
+    TrueColor,
+    /// Air mass RGB: jet streams, dry intrusions, cold and warm air.
+    AirMass,
+}
+
+impl SatProduct {
+    pub const ALL: [SatProduct; 4] = [
+        SatProduct::LiveInfrared,
+        SatProduct::Infrared,
+        SatProduct::TrueColor,
+        SatProduct::AirMass,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            SatProduct::LiveInfrared => "Infrared, live (composite)",
+            SatProduct::Infrared => "Infrared (geostationary, looped)",
+            SatProduct::TrueColor => "True colour / GeoColor (looped)",
+            SatProduct::AirMass => "Air mass RGB (looped)",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

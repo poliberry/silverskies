@@ -26,6 +26,11 @@ pub enum AppEvent {
         site: String,
         result: Result<std::sync::Arc<ss_core::radar3d::SiteScan>, String>,
     },
+    /// Newest image time of each satellite of a product.
+    SatLatest {
+        product: ss_core::types::SatProduct,
+        times: Vec<(&'static str, Result<i64, String>)>,
+    },
     /// An MRMS hail or rotation track (None: nothing to show).
     Track {
         kind: ss_net::mrms::TrackKind,

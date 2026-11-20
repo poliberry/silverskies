@@ -8,6 +8,7 @@ Everything the apps show comes from these services. None needs an account except
 | Forecast (alternative) | [AccuWeather](https://developer.accuweather.com) Core API | **Yes** | Worldwide | Both (optional) |
 | Place search | Open-Meteo geocoding, with [Nominatim / OpenStreetMap](https://nominatim.org) as fallback | No | Worldwide | Both |
 | "Use my location" | [ipapi.co](https://ipapi.co) IP geolocation (approximate) | No | Worldwide | Both |
+| Geostationary satellite loops (infrared, true colour, air mass) | [NASA GIBS](https://nasa-gibs.github.io/gibs-api-docs/) (GOES-East/West: NOAA; Himawari: JMA) and [EUMETSAT EUMETView](https://view.eumetsat.int) (Meteosat 0° and IODC) | No | Worldwide (to ~70° latitude) | Pro |
 | Radar composite, nowcast, IR satellite | [LibreWXR](https://librewxr.net) | No | Worldwide | Both |
 | Satellite imagery (3D, optional) | Esri World Imagery (Esri, Maxar, Earthstar Geographics) | No | Worldwide | Pro |
 | Alerts | NWS, ECCC, LibreWXR (WMO CAP) | No | US, Canada, worldwide | Both |

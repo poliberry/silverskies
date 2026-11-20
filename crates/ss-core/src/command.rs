@@ -126,6 +126,8 @@ pub enum Command {
     Tilt(TiltArg),
     /// The hail/rotation-track period, minutes.
     TrackPeriod(u32),
+    /// What the satellite layer shows.
+    Sat(crate::types::SatProduct),
     Site(Option<String>),
     Play,
     Pause,
@@ -309,6 +311,12 @@ static COMMANDS: &[CmdInfo] = &[
         &[],
         "tilt <n|up|down>",
         "Choose the Level II tilt (1 = lowest)",
+    ),
+    ci(
+        "sat",
+        &["satellite-product"],
+        "sat <live|ir|color|airmass>",
+        "Satellite imagery: live infrared, or looped geostationary infrared, true colour or air mass",
     ),
     ci(
         "period",
@@ -622,6 +630,19 @@ pub fn parse(line: &str) -> Result<Command, ParseError> {
                     .map(|n| Command::Tilt(TiltArg::To(n - 1)))
                     .ok_or_else(|| bad(name, "tilt", a)),
             }
+        }
+        "sat" => {
+            use crate::types::SatProduct as S;
+            let a = args.first().ok_or_else(|| missing(name, "imagery"))?;
+            let p = match a.to_ascii_lowercase().as_str() {
+                "live" | "composite" => S::LiveInfrared,
+                "ir" | "infrared" => S::Infrared,
+                "color" | "colour" | "truecolor" | "truecolour" | "geocolor" | "visible"
+                | "vis" => S::TrueColor,
+                "airmass" | "air-mass" | "am" => S::AirMass,
+                _ => return Err(bad(name, "imagery", a)),
+            };
+            Ok(Command::Sat(p))
         }
         "period" => {
             let a = args.first().ok_or_else(|| missing(name, "period"))?;
@@ -1297,6 +1318,10 @@ mod tests {
         assert_eq!(p("tilt 3"), Command::Tilt(TiltArg::To(2)));
         assert_eq!(p("tilt up"), Command::Tilt(TiltArg::Step(1)));
         assert_eq!(p("period 24h"), Command::TrackPeriod(1440));
+        assert_eq!(
+            p("sat color"),
+            Command::Sat(crate::types::SatProduct::TrueColor)
+        );
         assert_eq!(p("period 30m"), Command::TrackPeriod(30));
         assert_eq!(p("swath 120"), Command::TrackPeriod(120));
         assert!(parse("period 5h").is_err());

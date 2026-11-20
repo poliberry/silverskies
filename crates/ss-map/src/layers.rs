@@ -129,6 +129,9 @@ pub struct RasterTileLayer {
     pub opacity: f32,
     pub max_zoom: u8,
     pub visible: bool,
+    /// Draw only between these longitudes (west, east; east may exceed 180
+    /// for a band across the date line).
+    pub lon_clip: Option<(f64, f64)>,
 }
 
 impl RasterTileLayer {
@@ -145,6 +148,7 @@ impl RasterTileLayer {
             opacity: 1.0,
             max_zoom,
             visible: true,
+            lon_clip: None,
         }
     }
 
@@ -175,6 +179,30 @@ impl Layer for RasterTileLayer {
     fn draw(&mut self, ctx: &mut DrawCtx, painter: &Painter) {
         let tint = Color32::WHITE.linear_multiply(self.opacity.clamp(0.0, 1.0));
         let full_uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+        // Clip to the longitude band in every copy of the world on screen.
+        let clips: Vec<Rect> = match self.lon_clip {
+            Some((west, east)) => {
+                let x = |lon: f64| ctx.viewport.screen_from_lonlat(lon, 0.0, ctx.rect).x;
+                let base = ((ctx.viewport.center_lon - (west + east) / 2.0) / 360.0).round();
+                (-1..=1)
+                    .map(|k| (base + f64::from(k)) * 360.0)
+                    .map(|off| {
+                        Rect::from_x_y_ranges(x(west + off)..=x(east + off), ctx.rect.y_range())
+                    })
+                    .filter(|r| r.intersects(ctx.rect))
+                    .collect()
+            }
+            None => vec![painter.clip_rect()],
+        };
+        for clip in clips {
+            let painter = painter.with_clip_rect(clip.intersect(painter.clip_rect()));
+            self.draw_tiles(ctx, &painter, tint, full_uv);
+        }
+    }
+}
+
+impl RasterTileLayer {
+    fn draw_tiles(&mut self, ctx: &mut DrawCtx, painter: &Painter, tint: Color32, full_uv: Rect) {
         for (tile, r) in ctx
             .viewport
             .visible_tiles_with_rects(ctx.rect, self.max_zoom)

@@ -957,6 +957,12 @@ fn run(app: &mut App, sh: &mut Shared, target: &WindowTarget, cmd: Command, fx: 
             sh.dirty_config = true;
             sh.log(LogLevel::Info, format!("Level II tilt {}", next + 1));
         }
+        Command::Sat(prod) => {
+            sh.config.radar.sat_product = prod;
+            sh.config.radar.satellite = true;
+            sh.dirty_config = true;
+            sh.log(LogLevel::Info, format!("satellite: {}", prod.label()));
+        }
         Command::TrackPeriod(m) => {
             sh.config.radar.track_minutes = m;
             sh.dirty_config = true;
