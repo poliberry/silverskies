@@ -198,6 +198,14 @@ pub struct Shared {
     pub lightning: Vec<ss_net::glm::Flash>,
     pub lightning_files: HashMap<String, i64>,
     pub lightning_pending: bool,
+    /// MRMS hail/rotation tracks (None: fetched, nothing to show), when
+    /// each was last requested, and those in flight.
+    pub tracks: HashMap<
+        ss_net::mrms::TrackKind,
+        (u32, Option<std::sync::Arc<crate::panels::tracks::Track>>),
+    >,
+    pub tracks_requested: HashMap<(ss_net::mrms::TrackKind, u32), std::time::Instant>,
+    pub tracks_pending: std::collections::HashSet<ss_net::mrms::TrackKind>,
     pub scene3d_pending: std::collections::HashSet<String>,
     pub scene3d_errors: HashMap<String, String>,
     pub sounding_errors: HashMap<String, String>,
@@ -292,6 +300,9 @@ impl Shared {
             lightning: Vec::new(),
             lightning_files: HashMap::new(),
             lightning_pending: false,
+            tracks: HashMap::new(),
+            tracks_requested: HashMap::new(),
+            tracks_pending: Default::default(),
             scene3d_pending: Default::default(),
             scene3d_errors: HashMap::new(),
             sounding_errors: HashMap::new(),

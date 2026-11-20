@@ -26,6 +26,7 @@ pub mod radio;
 pub mod sounding;
 pub mod storms;
 pub mod terrain_lod;
+pub mod tracks;
 
 pub struct PanelCx<'a> {
     pub shared: &'a mut Shared,

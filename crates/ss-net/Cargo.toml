@@ -21,6 +21,8 @@ percent-encoding = "2"
 image.workspace = true
 bzip2 = "0.6.1"
 netcdf-reader = "0.13"
+png = "0.18"
+flate2 = "1"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

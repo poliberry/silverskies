@@ -51,6 +51,7 @@ The radar bar, under the function keys in Pro's main window, has playback (back,
 | Storm cells (mosaic) | Computed from the composite | Worldwide |
 | Storm reports | Iowa Environmental Mesonet (NWS LSRs) | US |
 | Tropical cyclones | GDACS | Worldwide |
+| Hail swaths, rotation tracks | NOAA MRMS | US |
 | Lightning (flashes) | NOAA GOES GLM | The Americas, Atlantic and Pacific |
 | Lightning (density) | EUMETSAT MTG Lightning Imager | Europe, Africa |
 | Wind barbs | METAR observations (api.weather.gov) | Where stations exist |
@@ -69,6 +70,15 @@ The **LTG** toggle (bolt icon, `:layer lightning`, Settings → Radar) shows lig
 When there has been a flash within 100 km of your place in the last 15 minutes, a badge at the top of the map reads, e.g., **LTG 12 km NW · 3 min**: the nearest flash's distance, direction and age (red within 16 km, about 10 miles: thunder range). The 3D radar draws recent flashes as bolts above the ground.
 
 Satellite lightning mappers see total lightning (in-cloud and cloud-to-ground) at about 8–10 km resolution, so a flash's position is approximate. There is no free real-time feed for East and South Asia or Australia yet.
+
+## Pro: hail swaths and rotation tracks (US)
+
+Two layers from NOAA's Multi-Radar Multi-Sensor system (MRMS), which merges every US radar every two minutes:
+
+- **Hail swaths** (hail icon, `:layer hail`): the largest hail the radars estimated (MESH) at each point over the period, from 0.5 in: green 0.5″, lime 0.75″, yellow 1″, orange 1.5″, red 2″, maroon 2.75″, white 4″+.
+- **Rotation tracks** (cyclone icon, `:layer rotation`): the strongest low-level rotation (0–2 km azimuthal shear) over the period, from 0.008 s⁻¹: lavender, violet, purple, pink, rose, white for 0.03 s⁻¹ and up. A long, narrow, bright streak is the path of a rotating storm, often a tornado's.
+
+Choose how far back they reach in Settings → Radar → *Track period* or with `:period` (30 min, 1, 2, 4, 6 or 24 h; default 2 h). They refresh every few minutes. Hover the map for the value under the pointer, e.g. *hail up to 1.75 in (44 mm) · last 2 h*. Single isolated pixels (usually clutter) are left out. The values are radar estimates: compare with storm reports.
 
 ## Pro: NEXRAD single site
 

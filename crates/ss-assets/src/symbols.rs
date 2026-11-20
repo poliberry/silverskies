@@ -67,6 +67,7 @@ pub const VIEW_QUILT: &str = "\u{e8f1}";
 pub const VISIBILITY: &str = "\u{e417}";
 pub const WARNING: &str = "\u{e002}";
 pub const WATER_DROP: &str = "\u{e798}";
+pub const WEATHER_HAIL: &str = "\u{f67f}";
 
 /// Every icon above (for coverage tests).
 pub const ALL: &[&str] = &[
@@ -132,4 +133,5 @@ pub const ALL: &[&str] = &[
     VISIBILITY,
     WARNING,
     WATER_DROP,
+    WEATHER_HAIL,
 ];

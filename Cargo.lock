@@ -4226,11 +4226,13 @@ version = "2.0.2"
 dependencies = [
  "bzip2",
  "chrono",
+ "flate2",
  "futures",
  "image",
  "netcdf-reader",
  "once_cell",
  "percent-encoding",
+ "png",
  "regex",
  "reqwest",
  "serde",

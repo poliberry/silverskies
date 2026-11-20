@@ -429,6 +429,19 @@ impl App {
                 }
                 Err(e) => sh.log(LogLevel::Warn, format!("storm reports: {e}")),
             },
+            AppEvent::Track {
+                kind,
+                minutes,
+                result,
+            } => {
+                sh.tracks_pending.remove(&kind);
+                match result {
+                    Ok(t) => {
+                        sh.tracks.insert(kind, (minutes, t));
+                    }
+                    Err(e) => sh.log(LogLevel::Warn, format!("MRMS {kind:?} track: {e}")),
+                }
+            }
             AppEvent::Lightning(r) => {
                 sh.lightning_pending = false;
                 match r {
@@ -815,6 +828,7 @@ impl App {
         }
         self.maybe_mosaic_cells();
         self.maybe_lightning();
+        self.maybe_tracks();
         if self.last_spc.elapsed() >= Duration::from_secs(600) {
             self.last_spc = Instant::now();
             self.fetch_spc_if_enabled();
@@ -822,6 +836,37 @@ impl App {
         let mins = self.shared.read().config.auto_refresh_minutes;
         if mins > 0 && self.last_auto.elapsed() >= Duration::from_secs(u64::from(mins) * 60) {
             self.refresh_all();
+        }
+    }
+
+    /// Fetch the hail and rotation tracks that are on: when the period
+    /// changes, and every few minutes (MRMS updates every 2–30 min).
+    fn maybe_tracks(&mut self) {
+        use ss_net::mrms::TrackKind;
+        let mut sh = self.shared.write();
+        let rs = &sh.config.radar;
+        let minutes = rs.track_minutes;
+        let on = [
+            (TrackKind::Hail, rs.hail_track),
+            (TrackKind::Rotation, rs.rotation_track),
+        ];
+        for (kind, enabled) in on {
+            if !enabled {
+                sh.tracks.remove(&kind);
+                continue;
+            }
+            if sh.tracks_pending.contains(&kind) {
+                continue;
+            }
+            let due = sh
+                .tracks_requested
+                .get(&(kind, minutes))
+                .is_none_or(|t| t.elapsed() >= Duration::from_secs(240));
+            if due {
+                sh.tracks_requested.insert((kind, minutes), Instant::now());
+                sh.tracks_pending.insert(kind);
+                self.tasks.track(kind, minutes);
+            }
         }
     }
 

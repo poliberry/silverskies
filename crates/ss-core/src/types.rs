@@ -443,6 +443,16 @@ pub struct RadarSettings {
     /// MTG Lightning Imager (Europe, Africa).
     #[serde(default = "yes")]
     pub lightning: bool,
+    /// MRMS hail swaths (maximum estimated hail size), US.
+    #[serde(default)]
+    pub hail_track: bool,
+    /// MRMS rotation tracks (low-level rotation), US.
+    #[serde(default)]
+    pub rotation_track: bool,
+    /// The period the hail and rotation tracks cover, minutes (one of
+    /// `TRACK_PERIODS`).
+    #[serde(default = "default_track_minutes")]
+    pub track_minutes: u32,
     /// Auto-load alerts whose polygons fall inside the visible map area.
     pub viewport_alerts: bool,
 }
@@ -467,6 +477,9 @@ impl Default for RadarSettings {
             md_polygons: true,
             wind_barbs: false,
             lightning: true,
+            hail_track: false,
+            rotation_track: false,
+            track_minutes: default_track_minutes(),
             show_stations: true,
             owm_wind: false,
             owm_temp: false,
@@ -480,6 +493,22 @@ impl Default for RadarSettings {
             tropical: true,
             viewport_alerts: true,
         }
+    }
+}
+
+/// The periods MRMS publishes hail/rotation maxima for, minutes.
+pub const TRACK_PERIODS: [u32; 6] = [30, 60, 120, 240, 360, 1440];
+
+fn default_track_minutes() -> u32 {
+    120
+}
+
+/// "30 min", "2 h", "24 h".
+pub fn track_period_label(minutes: u32) -> String {
+    if minutes < 60 {
+        format!("{minutes} min")
+    } else {
+        format!("{} h", minutes / 60)
     }
 }
 

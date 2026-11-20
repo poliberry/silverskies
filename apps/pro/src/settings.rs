@@ -926,6 +926,39 @@ fn radar_tab(ui: &mut Ui, sh: &mut Shared, p: &Palette, st: &mut SettingsState) 
             ui,
             p,
             &mut rows,
+            "Hail swaths",
+            Some("US (MRMS): the largest hail the radars estimate, along each storm's path"),
+            &mut cfg.radar.hail_track,
+        );
+        toggle_row(
+            ui,
+            p,
+            &mut rows,
+            "Rotation tracks",
+            Some("US (MRMS): paths of rotating storms (low-level rotation)"),
+            &mut cfg.radar.rotation_track,
+        );
+        combo_row(
+            ui,
+            p,
+            &mut rows,
+            "Track period",
+            Some("How far back hail swaths and rotation tracks reach"),
+            "track-period",
+            &mut cfg.radar.track_minutes,
+            &[
+                (30, "Last 30 minutes"),
+                (60, "Last hour"),
+                (120, "Last 2 hours"),
+                (240, "Last 4 hours"),
+                (360, "Last 6 hours"),
+                (1440, "Last 24 hours"),
+            ],
+        );
+        toggle_row(
+            ui,
+            p,
+            &mut rows,
             "Radar sites",
             None,
             &mut cfg.radar.show_stations,

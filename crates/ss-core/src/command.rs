@@ -124,6 +124,8 @@ pub enum Command {
     Level2(Option<crate::radar3d::L2Product>),
     /// Level II tilt: absolute (0 = lowest) or a step.
     Tilt(TiltArg),
+    /// The hail/rotation-track period, minutes.
+    TrackPeriod(u32),
     Site(Option<String>),
     Play,
     Pause,
@@ -307,6 +309,12 @@ static COMMANDS: &[CmdInfo] = &[
         &[],
         "tilt <n|up|down>",
         "Choose the Level II tilt (1 = lowest)",
+    ),
+    ci(
+        "period",
+        &["swath"],
+        "period <30m|1h|2h|4h|6h|24h>",
+        "How far back the hail and rotation tracks reach",
     ),
     ci(
         "site",
@@ -615,6 +623,12 @@ pub fn parse(line: &str) -> Result<Command, ParseError> {
                     .ok_or_else(|| bad(name, "tilt", a)),
             }
         }
+        "period" => {
+            let a = args.first().ok_or_else(|| missing(name, "period"))?;
+            parse_track_period(a)
+                .map(Command::TrackPeriod)
+                .ok_or_else(|| bad(name, "period", a))
+        }
         "site" => Ok(Command::Site(rest_joined(args))),
         "play" => Ok(Command::Play),
         "pause" => Ok(Command::Pause),
@@ -654,7 +668,25 @@ pub const LAYER_NAMES: &[&str] = &[
     "imagery",
     "labels",
     "lightning",
+    "hail",
+    "rotation",
 ];
+
+/// A hail/rotation-track period: `30m`, `2h`, `24h`, `1d` or minutes.
+pub fn parse_track_period(s: &str) -> Option<u32> {
+    let s = s.trim().to_ascii_lowercase();
+    let mins = if let Some(h) = s.strip_suffix('h') {
+        h.parse::<u32>().ok()? * 60
+    } else if let Some(d) = s.strip_suffix('d') {
+        d.parse::<u32>().ok()? * 1440
+    } else {
+        s.trim_end_matches("min")
+            .trim_end_matches('m')
+            .parse()
+            .ok()?
+    };
+    crate::types::TRACK_PERIODS.contains(&mins).then_some(mins)
+}
 
 /// Map-layer names accepted by `:layer`. Returns the canonical name.
 pub fn canonical_layer(name: &str) -> Option<&'static str> {
@@ -684,6 +716,8 @@ pub fn canonical_layer(name: &str) -> Option<&'static str> {
         }
         "labels" | "places" | "names" | "roads" => "labels",
         "lightning" | "ltg" | "glm" | "strikes" | "flashes" => "lightning",
+        "hail" | "mesh" | "hail-track" | "hail-swath" | "swaths" => "hail",
+        "rotation" | "rot" | "rotation-track" | "rotation-tracks" => "rotation",
         _ => return None,
     };
     LAYER_NAMES.iter().copied().find(|l| *l == canon)
@@ -1262,6 +1296,12 @@ mod tests {
         assert_eq!(p("level2 off"), Command::Level2(None));
         assert_eq!(p("tilt 3"), Command::Tilt(TiltArg::To(2)));
         assert_eq!(p("tilt up"), Command::Tilt(TiltArg::Step(1)));
+        assert_eq!(p("period 24h"), Command::TrackPeriod(1440));
+        assert_eq!(p("period 30m"), Command::TrackPeriod(30));
+        assert_eq!(p("swath 120"), Command::TrackPeriod(120));
+        assert!(parse("period 5h").is_err());
+        assert_eq!(canonical_layer("mesh"), Some("hail"));
+        assert_eq!(canonical_layer("rot"), Some("rotation"));
         assert_eq!(p("product sr_bref"), Command::Product(RadarProduct::SrBref));
         assert!(parse("product nope").is_err());
         assert_eq!(p("s"), Command::Site(None));

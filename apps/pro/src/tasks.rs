@@ -198,8 +198,6 @@ impl Tasks {
         });
     }
 
-    /// The 3D scene for a location: terrain, plus the nearest NEXRAD
-    /// volume or (elsewhere) the extruded radar mosaic.
     /// Lightning flashes from GLM files since `since` not yet `known`.
     pub fn lightning(&self, since: i64, known: std::collections::HashSet<String>) {
         let (net, tx, ctx) = (self.net.clone(), self.tx.clone(), self.ctx.clone());
@@ -226,6 +224,36 @@ impl Tasks {
         });
     }
 
+    /// The newest MRMS hail or rotation track over `minutes`, drawn.
+    pub fn track(&self, kind: ss_net::mrms::TrackKind, minutes: u32) {
+        use crate::panels::tracks;
+        let (net, tx, ctx) = (self.net.clone(), self.tx.clone(), self.ctx.clone());
+        self.rt.spawn(async move {
+            let result = match net
+                .mrms_latest(&kind.product(minutes), tracks::factor(kind))
+                .await
+            {
+                Ok(grid) => tokio::task::spawn_blocking(move || {
+                    tracks::render(grid, kind, minutes).map(std::sync::Arc::new)
+                })
+                .await
+                .map_err(|e| e.to_string()),
+                Err(e) => Err(e.to_string()),
+            };
+            Self::post(
+                &tx,
+                &ctx,
+                AppEvent::Track {
+                    kind,
+                    minutes,
+                    result,
+                },
+            );
+        });
+    }
+
+    /// The 3D scene for a location: terrain, plus the nearest NEXRAD
+    /// volume or (elsewhere) the extruded radar mosaic.
     pub fn scene3d(
         &self,
         loc: &SavedLocation,

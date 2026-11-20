@@ -19,7 +19,6 @@ pub enum AppEvent {
     },
     /// Local storm reports (IEM).
     StormReports(Result<Vec<ss_core::storms::StormReport>, String>),
-    /// Forecast soundings for a location (Open-Meteo pressure levels).
     /// New lightning flashes, and the GLM files they came from.
     Lightning(Result<(Vec<ss_net::glm::Flash>, Vec<String>), String>),
     /// A radar site's newest Level II scan (for the 2D radar).
@@ -27,11 +26,18 @@ pub enum AppEvent {
         site: String,
         result: Result<std::sync::Arc<ss_core::radar3d::SiteScan>, String>,
     },
+    /// An MRMS hail or rotation track (None: nothing to show).
+    Track {
+        kind: ss_net::mrms::TrackKind,
+        minutes: u32,
+        result: Result<Option<std::sync::Arc<crate::panels::tracks::Track>>, String>,
+    },
     /// The 3D view's scene for a location.
     Scene3d {
         location_id: String,
         result: Result<Box<ss_core::radar3d::Scene>, String>,
     },
+    /// Forecast soundings for a location (Open-Meteo pressure levels).
     Soundings {
         location_id: String,
         result: Result<Vec<ss_core::sounding::Sounding>, String>,

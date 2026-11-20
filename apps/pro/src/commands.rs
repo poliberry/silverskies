@@ -493,6 +493,8 @@ pub fn run_layer(sh: &mut Shared, name: &str, on: Option<bool>) -> bool {
             "imagery" => &mut cfg.radar.imagery,
             "labels" => &mut cfg.radar.labels,
             "lightning" => &mut cfg.radar.lightning,
+            "hail" => &mut cfg.radar.hail_track,
+            "rotation" => &mut cfg.radar.rotation_track,
             _ => &mut cfg.radar.show_cells,
         };
         let want = on.unwrap_or(!*slot);
@@ -950,6 +952,17 @@ fn run(app: &mut App, sh: &mut Shared, target: &WindowTarget, cmd: Command, fx: 
             sh.config.radar.level2_tilt = next;
             sh.dirty_config = true;
             sh.log(LogLevel::Info, format!("Level II tilt {}", next + 1));
+        }
+        Command::TrackPeriod(m) => {
+            sh.config.radar.track_minutes = m;
+            sh.dirty_config = true;
+            sh.log(
+                LogLevel::Info,
+                format!(
+                    "hail and rotation tracks: last {}",
+                    ss_core::types::track_period_label(m)
+                ),
+            );
         }
         Command::Site(id) => run_site(sh, id),
         Command::Open(role) => app.open_window(sh, target, role),

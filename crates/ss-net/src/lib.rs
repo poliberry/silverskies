@@ -17,6 +17,7 @@ pub mod iem;
 pub mod level2;
 pub mod librewxr;
 pub mod mosaic;
+pub mod mrms;
 pub mod ncep;
 pub mod nwr;
 pub mod nws;

@@ -25,9 +25,10 @@ use ss_net::ncep;
 use ss_net::nws::is_live;
 use ss_net::owm::{self, OwmLayer};
 
-use super::{Panel, PanelCx};
+use super::{tracks, Panel, PanelCx};
 use crate::state::LogLevel;
 use crate::theme::{c32, c32a};
+use std::sync::Arc;
 
 /// Max native zoom of the LibreWXR radar / satellite tiles.
 const TILE_MAX_ZOOM: u8 = 12;
@@ -282,6 +283,8 @@ pub struct RadarPanel {
     /// The cross section under the drawn line, and its length (km).
     xs: super::l2map::XsWorker,
     xs_tex: Option<(egui::TextureHandle, f32)>,
+    /// Which hail/rotation track each layer's texture was made from.
+    track_keys: std::collections::HashMap<ss_net::mrms::TrackKind, Option<usize>>,
     last_wind_req: Option<(BBox, f64)>,
     last_alert_req: Option<(BBox, f64)>,
     view_sig: (u64, u64, u64),
@@ -381,6 +384,12 @@ impl RadarPanel {
         l.push(PolygonLayer::new("md"));
         l.push(PolygonLayer::new("alerts"));
         l.push(WindBarbLayer::new("barbs", Color32::GRAY));
+        // MRMS hail swaths and rotation tracks (US).
+        for name in ["hail-track", "rotation-track"] {
+            let mut t = ss_map::GeoImageLayer::new(name);
+            t.visible = false;
+            l.push(t);
+        }
         // Meteosat's lightning (Europe, Africa) as an image; GOES flashes
         // as sparks on top.
         let mut mtg =
@@ -420,6 +429,7 @@ impl RadarPanel {
             l2: Default::default(),
             xs: Default::default(),
             xs_tex: None,
+            track_keys: Default::default(),
             last_wind_req: None,
             last_alert_req: None,
             view_sig: (0, 0, 0),
@@ -767,6 +777,22 @@ pub fn layer_toggles(rs: &RadarSettings) -> Vec<(&'static str, bool, Command)> {
             },
         ),
         (
+            "HAL",
+            rs.hail_track,
+            Command::Layer {
+                name: "hail".to_string(),
+                on: Some(!rs.hail_track),
+            },
+        ),
+        (
+            "ROT",
+            rs.rotation_track,
+            Command::Layer {
+                name: "rotation".to_string(),
+                on: Some(!rs.rotation_track),
+            },
+        ),
+        (
             "LTG",
             rs.lightning,
             Command::Layer {
@@ -824,7 +850,7 @@ impl Panel for RadarPanel {
         }
 
         self.sync_basemap(rs.imagery);
-        self.sync_layers(cx, &rs, &frames);
+        self.sync_layers(cx, &rs, &frames, ui.ctx());
         self.sync_level2(cx, &rs, ui.ctx());
         self.handle_requests(cx);
 
@@ -997,6 +1023,29 @@ impl Panel for RadarPanel {
                     .find_map(|n| hit_polygon(&mut self.map, n, h, r.rect))
                     .and_then(|(_, label)| label)
             });
+            // Hail and rotation under the pointer.
+            let (lon, lat) = vp.lonlat_from_screen(h, r.rect);
+            let tracks: Vec<String> = cx
+                .shared
+                .tracks
+                .values()
+                .filter_map(|(_, t)| t.as_ref())
+                .filter_map(|t| {
+                    let v = t.grid.at(lat, lon)?;
+                    (v >= tracks::threshold(t.kind)).then(|| {
+                        format!(
+                            "{} · last {}",
+                            tracks::describe(t.kind, v),
+                            ss_core::types::track_period_label(t.minutes)
+                        )
+                    })
+                })
+                .collect();
+            let tip = match (tip, tracks.is_empty()) {
+                (t, true) => t,
+                (Some(t), false) => Some(format!("{t}\n{}", tracks.join("\n"))),
+                (None, false) => Some(tracks.join("\n")),
+            };
             if let Some(t) = tip {
                 r.response.clone().on_hover_text_at_pointer(t);
             }
@@ -1087,6 +1136,11 @@ pub fn layer_icon(label: &str) -> (&'static str, &'static str) {
         "STN" => (i::CELL_TOWER, "Radar sites"),
         "BRB" => (i::AIR, "Wind barbs"),
         "LTG" => (i::BOLT, "Lightning"),
+        "HAL" => (
+            i::WEATHER_HAIL,
+            "Hail swaths (US): largest hail estimated by radar",
+        ),
+        "ROT" => (i::CYCLONE, "Rotation tracks (US): paths of rotating storms"),
         _ => (i::LAYERS, "Layer"),
     }
 }
@@ -1647,7 +1701,13 @@ impl RadarPanel {
 
 impl RadarPanel {
     /// Update layer visibility / templates and rebuild item layers whose inputs changed.
-    fn sync_layers(&mut self, cx: &mut PanelCx, rs: &RadarSettings, frames: &[LoopFrame]) {
+    fn sync_layers(
+        &mut self,
+        cx: &mut PanelCx,
+        rs: &RadarSettings,
+        frames: &[LoopFrame],
+        ctx: &egui::Context,
+    ) {
         let p = cx.palette;
         let sh = &*cx.shared;
         let overrides = &sh.config.alert_type_overrides;
@@ -1905,6 +1965,33 @@ impl RadarPanel {
             }
         }
         layers.set_visible("barbs", rs.wind_barbs);
+
+        // --- hail and rotation tracks ---
+        for (kind, name, on) in [
+            (ss_net::mrms::TrackKind::Hail, "hail-track", rs.hail_track),
+            (
+                ss_net::mrms::TrackKind::Rotation,
+                "rotation-track",
+                rs.rotation_track,
+            ),
+        ] {
+            let track = sh.tracks.get(&kind).and_then(|(_, t)| t.clone());
+            let key = track.as_ref().map(|t| Arc::as_ptr(t) as usize);
+            if self.track_keys.get(&kind) != Some(&key) {
+                self.track_keys.insert(kind, key);
+                if let Some(l) = layers.get_mut::<ss_map::GeoImageLayer>(name) {
+                    l.image = track.map(|t| {
+                        let tex =
+                            ctx.load_texture(name, t.image.clone(), egui::TextureOptions::NEAREST);
+                        (tex, t.bounds)
+                    });
+                }
+            }
+            if let Some(l) = layers.get_mut::<ss_map::GeoImageLayer>(name) {
+                l.visible = on;
+                l.opacity = 0.9;
+            }
+        }
 
         // --- lightning ---
         layers.set_visible("lightning-mtg", rs.lightning);
@@ -2346,7 +2433,7 @@ mod tests {
     fn layer_toggles_reflect_state_and_flip() {
         let rs = RadarSettings::default();
         let toggles = layer_toggles(&rs);
-        assert_eq!(toggles.len(), 8);
+        assert_eq!(toggles.len(), 10);
         let sat = toggles.iter().find(|(l, _, _)| *l == "SAT").unwrap();
         assert!(!sat.1);
         assert_eq!(
