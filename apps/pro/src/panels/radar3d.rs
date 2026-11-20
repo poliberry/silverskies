@@ -1063,10 +1063,14 @@ impl Radar3dPanel {
 /// Mean storm motion (east, north, m/s) of the cells the scan's radar
 /// tracks, for storm-relative velocity; zero when there are none.
 fn storm_motion(cells: &[ss_core::storms::StormCell], scene: &Scene) -> [f32; 2] {
-    let site = match &scene.source {
-        Some(RadarSource::Nexrad { site, .. }) => site.as_str(),
-        _ => return [0.0; 2],
-    };
+    match &scene.source {
+        Some(RadarSource::Nexrad { site, .. }) => motion_for_site(cells, site),
+        _ => [0.0; 2],
+    }
+}
+
+/// Mean motion (east, north, m/s) of the cells radar `site` tracks.
+pub fn motion_for_site(cells: &[ss_core::storms::StormCell], site: &str) -> [f32; 2] {
     let short = site.get(1..).unwrap_or(site);
     let (mut u, mut v, mut n) = (0.0f64, 0.0f64, 0.0f64);
     for c in cells.iter().filter(|c| c.radar == short || c.radar == site) {

@@ -409,6 +409,13 @@ pub struct RadarSettings {
     /// Uppercase ICAO id of the single-site NEXRAD WMS (e.g. `KFSX`); `None` = composite radar.
     pub nexrad_site: Option<String>,
     pub nexrad_product: RadarProduct,
+    /// Show this Level II product (decoded in the app, any tilt) instead
+    /// of the NWS image product.
+    #[serde(default)]
+    pub level2: Option<crate::radar3d::L2Product>,
+    /// Which Level II tilt, lowest first.
+    #[serde(default)]
+    pub level2_tilt: usize,
     /// SPC mesoscale discussion polygons.
     pub md_polygons: bool,
     pub wind_barbs: bool,
@@ -451,6 +458,8 @@ impl Default for RadarSettings {
             legend: true,
             nexrad_site: None,
             nexrad_product: RadarProduct::SrBref,
+            level2: None,
+            level2_tilt: 0,
             md_polygons: true,
             wind_barbs: false,
             show_stations: true,

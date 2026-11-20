@@ -920,6 +920,36 @@ fn run(app: &mut App, sh: &mut Shared, target: &WindowTarget, cmd: Command, fx: 
             }
         }
         Command::Product(p) => run_product(sh, p),
+        Command::Level2(p) => {
+            sh.config.radar.level2 = p;
+            sh.dirty_config = true;
+            let line = match (p, &sh.config.radar.nexrad_site) {
+                (Some(p), Some(site)) => format!("Level II {}: {site}", p.label()),
+                (Some(p), None) => {
+                    format!("Level II {} (pick a radar with :site to see it)", p.label())
+                }
+                (None, _) => "Level II off".to_string(),
+            };
+            sh.log(LogLevel::Info, line);
+        }
+        Command::Tilt(t) => {
+            let cur = sh.config.radar.level2_tilt;
+            let n = sh
+                .config
+                .radar
+                .nexrad_site
+                .as_ref()
+                .and_then(|s| sh.level2.get(&s.to_ascii_uppercase()))
+                .map_or(24, |s| s.polar.sweeps.len().max(1));
+            let next = match t {
+                ss_core::command::TiltArg::To(i) => i,
+                ss_core::command::TiltArg::Step(d) => (cur as i64 + i64::from(d)).max(0) as usize,
+            }
+            .min(n - 1);
+            sh.config.radar.level2_tilt = next;
+            sh.dirty_config = true;
+            sh.log(LogLevel::Info, format!("Level II tilt {}", next + 1));
+        }
         Command::Site(id) => run_site(sh, id),
         Command::Open(role) => app.open_window(sh, target, role),
         Command::Close => match target {

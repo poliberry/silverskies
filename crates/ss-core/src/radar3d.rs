@@ -91,6 +91,131 @@ impl Moment {
     }
 }
 
+/// A Level II product to display (reflectivity, velocity, dual-pol).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum L2Product {
+    #[default]
+    Reflectivity,
+    Velocity,
+    StormRelative,
+    Zdr,
+    Cc,
+}
+
+impl L2Product {
+    pub const ALL: [L2Product; 5] = [
+        L2Product::Reflectivity,
+        L2Product::Velocity,
+        L2Product::StormRelative,
+        L2Product::Cc,
+        L2Product::Zdr,
+    ];
+
+    pub fn moment(self) -> Moment {
+        match self {
+            L2Product::Reflectivity => Moment::Ref,
+            L2Product::Velocity | L2Product::StormRelative => Moment::Vel,
+            L2Product::Zdr => Moment::Zdr,
+            L2Product::Cc => Moment::Rho,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            L2Product::Reflectivity => "Reflectivity",
+            L2Product::Velocity => "Velocity",
+            L2Product::StormRelative => "Storm-relative velocity",
+            L2Product::Zdr => "Differential reflectivity (ZDR)",
+            L2Product::Cc => "Correlation coefficient (CC)",
+        }
+    }
+
+    /// The colour scale: (value, RGB) stops.
+    pub fn stops(self) -> &'static [(f32, [u8; 3])] {
+        match self {
+            L2Product::Reflectivity => &[
+                (10.0, [0x40, 0x9c, 0xd8]),
+                (20.0, [0x2e, 0xb8, 0x4a]),
+                (30.0, [0x1f, 0x8f, 0x2a]),
+                (35.0, [0xd8, 0xd8, 0x20]),
+                (40.0, [0xf0, 0xb4, 0x00]),
+                (45.0, [0xf0, 0x78, 0x00]),
+                (50.0, [0xe8, 0x14, 0x14]),
+                (55.0, [0xb0, 0x00, 0x00]),
+                (60.0, [0xe0, 0x20, 0xe0]),
+                (68.0, [0xff, 0xff, 0xff]),
+            ],
+            L2Product::Velocity | L2Product::StormRelative => &[
+                (-64.0, [0x9c, 0xff, 0xb0]),
+                (-40.0, [0x00, 0xe0, 0x50]),
+                (-20.0, [0x00, 0x96, 0x2e]),
+                (-5.0, [0x1d, 0x4f, 0x2a]),
+                (0.0, [0x6a, 0x6a, 0x6a]),
+                (5.0, [0x5a, 0x1d, 0x1d]),
+                (20.0, [0xb0, 0x14, 0x14]),
+                (40.0, [0xff, 0x30, 0x30]),
+                (64.0, [0xff, 0xb4, 0xd2]),
+            ],
+            L2Product::Zdr => &[
+                (-4.0, [0x50, 0x50, 0x50]),
+                (-1.0, [0x9a, 0x9a, 0x9a]),
+                (0.0, [0xc8, 0xc8, 0xc8]),
+                (0.5, [0x3c, 0x3c, 0xc8]),
+                (1.0, [0x3c, 0xb4, 0xdc]),
+                (1.5, [0x3c, 0xc8, 0x5a]),
+                (2.0, [0xe6, 0xe6, 0x3c]),
+                (3.0, [0xf0, 0x96, 0x28]),
+                (4.0, [0xe6, 0x32, 0x32]),
+                (6.0, [0xe6, 0x3c, 0xdc]),
+                (8.0, [0xff, 0xff, 0xff]),
+            ],
+            L2Product::Cc => &[
+                (0.2, [0x14, 0x14, 0x50]),
+                (0.45, [0x28, 0x28, 0xa0]),
+                (0.65, [0x3c, 0x78, 0xdc]),
+                (0.8, [0x28, 0xc8, 0x78]),
+                (0.9, [0xe6, 0xdc, 0x28]),
+                (0.95, [0xf0, 0x8c, 0x1e]),
+                (0.98, [0xdc, 0x28, 0x28]),
+                (1.0, [0xc8, 0x3c, 0xc8]),
+                (1.05, [0xff, 0xbe, 0xff]),
+            ],
+        }
+    }
+
+    /// Short name for compact labels.
+    pub fn short(self) -> &'static str {
+        match self {
+            L2Product::Reflectivity => "REF",
+            L2Product::Velocity => "VEL",
+            L2Product::StormRelative => "SRV",
+            L2Product::Zdr => "ZDR",
+            L2Product::Cc => "CC",
+        }
+    }
+
+    /// Colour of a value on this product's scale.
+    pub fn color(self, v: f32) -> [u8; 3] {
+        let st = self.stops();
+        let mut c = st[0].1;
+        for w in st.windows(2) {
+            if v >= w[0].0 && v < w[1].0 {
+                let t = (v - w[0].0) / (w[1].0 - w[0].0);
+                let l = |a: u8, b: u8| (f32::from(a) + (f32::from(b) - f32::from(a)) * t) as u8;
+                return [
+                    l(w[0].1[0], w[1].1[0]),
+                    l(w[0].1[1], w[1].1[1]),
+                    l(w[0].1[2], w[1].1[2]),
+                ];
+            }
+            if v >= w[1].0 {
+                c = w[1].1;
+            }
+        }
+        c
+    }
+}
+
 /// One moment of a radial: gate geometry and encoded values
 /// ([`Moment::encode`]; 0 = no data).
 #[derive(Debug, Clone, PartialEq)]
@@ -195,6 +320,17 @@ pub struct Scene {
     /// The measured scan itself, for volume rendering (NEXRAD only).
     #[serde(skip)]
     pub polar: Option<PolarVolume>,
+}
+
+/// A radar's newest Level II scan, laid out around the radar itself.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SiteScan {
+    pub site: String,
+    /// Scan time, RFC 3339.
+    pub time: String,
+    pub lat: f64,
+    pub lon: f64,
+    pub polar: PolarVolume,
 }
 
 /// Azimuth bins per sweep in a [`PolarVolume`] (0.5° each).

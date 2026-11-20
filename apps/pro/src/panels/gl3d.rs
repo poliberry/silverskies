@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex};
 use eframe::egui_glow;
 use eframe::glow::{self, HasContext};
 use egui::Rect;
-use ss_core::radar3d::{Moment, PolarVolume, Scene, AZIMUTHS};
+use ss_core::radar3d::{PolarVolume, Scene, AZIMUTHS};
 
 use super::radar3d::{dbz_color, V3};
 use super::terrain_lod::{Leaf, LeafKey, LEAF_N};
@@ -56,120 +56,16 @@ pub struct Frame {
     pub haze: [f32; 3],
 }
 
-/// The radar product shown in the volume.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Product {
-    #[default]
-    Reflectivity,
-    Velocity,
-    StormRelative,
-    Zdr,
-    Cc,
-}
+pub use ss_core::radar3d::L2Product as Product;
 
-impl Product {
-    pub const ALL: [Product; 5] = [
-        Product::Reflectivity,
-        Product::Velocity,
-        Product::StormRelative,
-        Product::Cc,
-        Product::Zdr,
-    ];
-
-    pub fn moment(self) -> Moment {
-        match self {
-            Product::Reflectivity => Moment::Ref,
-            Product::Velocity | Product::StormRelative => Moment::Vel,
-            Product::Zdr => Moment::Zdr,
-            Product::Cc => Moment::Rho,
-        }
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Product::Reflectivity => "Reflectivity",
-            Product::Velocity => "Velocity",
-            Product::StormRelative => "Storm-relative velocity",
-            Product::Zdr => "Differential reflectivity (ZDR)",
-            Product::Cc => "Correlation coefficient (CC)",
-        }
-    }
-
-    fn code(self) -> i32 {
-        match self {
-            Product::Reflectivity => 0,
-            Product::Velocity => 1,
-            Product::StormRelative => 2,
-            Product::Zdr => 3,
-            Product::Cc => 4,
-        }
-    }
-
-    /// The colour scale: (value, RGB) stops.
-    pub fn stops(self) -> &'static [(f32, [u8; 3])] {
-        match self {
-            Product::Reflectivity => &[],
-            Product::Velocity | Product::StormRelative => &[
-                (-64.0, [0x9c, 0xff, 0xb0]),
-                (-40.0, [0x00, 0xe0, 0x50]),
-                (-20.0, [0x00, 0x96, 0x2e]),
-                (-5.0, [0x1d, 0x4f, 0x2a]),
-                (0.0, [0x6a, 0x6a, 0x6a]),
-                (5.0, [0x5a, 0x1d, 0x1d]),
-                (20.0, [0xb0, 0x14, 0x14]),
-                (40.0, [0xff, 0x30, 0x30]),
-                (64.0, [0xff, 0xb4, 0xd2]),
-            ],
-            Product::Zdr => &[
-                (-4.0, [0x50, 0x50, 0x50]),
-                (-1.0, [0x9a, 0x9a, 0x9a]),
-                (0.0, [0xc8, 0xc8, 0xc8]),
-                (0.5, [0x3c, 0x3c, 0xc8]),
-                (1.0, [0x3c, 0xb4, 0xdc]),
-                (1.5, [0x3c, 0xc8, 0x5a]),
-                (2.0, [0xe6, 0xe6, 0x3c]),
-                (3.0, [0xf0, 0x96, 0x28]),
-                (4.0, [0xe6, 0x32, 0x32]),
-                (6.0, [0xe6, 0x3c, 0xdc]),
-                (8.0, [0xff, 0xff, 0xff]),
-            ],
-            Product::Cc => &[
-                (0.2, [0x14, 0x14, 0x50]),
-                (0.45, [0x28, 0x28, 0xa0]),
-                (0.65, [0x3c, 0x78, 0xdc]),
-                (0.8, [0x28, 0xc8, 0x78]),
-                (0.9, [0xe6, 0xdc, 0x28]),
-                (0.95, [0xf0, 0x8c, 0x1e]),
-                (0.98, [0xdc, 0x28, 0x28]),
-                (1.0, [0xc8, 0x3c, 0xc8]),
-                (1.05, [0xff, 0xbe, 0xff]),
-            ],
-        }
-    }
-
-    /// Colour of a value on this product's scale.
-    pub fn color(self, v: f32) -> [u8; 3] {
-        let st = self.stops();
-        let Some(first) = st.first() else {
-            let c = dbz_color(v);
-            return [c.r(), c.g(), c.b()];
-        };
-        let mut c = first.1;
-        for w in st.windows(2) {
-            if v >= w[0].0 && v < w[1].0 {
-                let t = (v - w[0].0) / (w[1].0 - w[0].0);
-                let l = |a: u8, b: u8| (f32::from(a) + (f32::from(b) - f32::from(a)) * t) as u8;
-                return [
-                    l(w[0].1[0], w[1].1[0]),
-                    l(w[0].1[1], w[1].1[1]),
-                    l(w[0].1[2], w[1].1[2]),
-                ];
-            }
-            if v >= w[1].0 {
-                c = w[1].1;
-            }
-        }
-        c
+/// The shader's code for a product.
+fn product_code(p: Product) -> i32 {
+    match p {
+        Product::Reflectivity => 0,
+        Product::Velocity => 1,
+        Product::StormRelative => 2,
+        Product::Zdr => 3,
+        Product::Cc => 4,
     }
 }
 
@@ -858,7 +754,7 @@ impl Inner {
                     self.ground = Some((gid, tex, t.n, t.cell_km));
                 }
             }
-            let code = f.product.code();
+            let code = product_code(f.product);
             if self.plut.as_ref().is_none_or(|(c, _)| *c != code) {
                 if let Some((_, old)) = self.plut.take() {
                     gl.delete_texture(old);
@@ -960,7 +856,7 @@ impl Inner {
             } else {
                 Product::Reflectivity
             };
-            gl.uniform_1_i32(u("u_product").as_ref(), product.code());
+            gl.uniform_1_i32(u("u_product").as_ref(), product_code(product));
             let (lo, hi) = product.moment().range();
             gl.uniform_2_f32(u("u_prange").as_ref(), lo, hi);
             gl.uniform_2_f32(u("u_motion").as_ref(), f.motion[0], f.motion[1]);

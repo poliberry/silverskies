@@ -492,6 +492,47 @@ impl Layer for WmsImageLayer {
     }
 }
 
+/// An image the app made itself, drawn over a lon/lat box (rows spaced
+/// evenly in Web Mercator, as the map is).
+pub struct GeoImageLayer {
+    pub name: String,
+    pub visible: bool,
+    pub opacity: f32,
+    /// The texture and its west, south, east, north bounds.
+    pub image: Option<(TextureHandle, [f64; 4])>,
+}
+
+impl GeoImageLayer {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            visible: true,
+            opacity: 1.0,
+            image: None,
+        }
+    }
+}
+
+impl Layer for GeoImageLayer {
+    layer_boilerplate!();
+
+    fn draw(&mut self, ctx: &mut DrawCtx, painter: &Painter) {
+        let Some((tex, [w, s, e, n])) = &self.image else {
+            return;
+        };
+        let vp = ctx.viewport;
+        let a = vp.screen_from_lonlat(*w, *n, ctx.rect);
+        let c = vp.screen_from_lonlat(*e, *s, ctx.rect);
+        let tint = Color32::WHITE.linear_multiply(self.opacity.clamp(0.0, 1.0));
+        painter.image(
+            tex.id(),
+            Rect::from_min_max(a, c),
+            Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+            tint,
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Polygons
 // ---------------------------------------------------------------------------

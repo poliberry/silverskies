@@ -427,6 +427,20 @@ impl App {
                 }
                 Err(e) => sh.log(LogLevel::Warn, format!("storm reports: {e}")),
             },
+            AppEvent::Level2 { site, result } => match result {
+                Ok(s) => {
+                    sh.level2_errors.remove(&site);
+                    sh.log(
+                        LogLevel::Info,
+                        format!("Level II {site}: {} tilts", s.polar.sweeps.len()),
+                    );
+                    sh.level2.insert(site, s);
+                }
+                Err(e) => {
+                    sh.log(LogLevel::Warn, format!("Level II {site}: {e}"));
+                    sh.level2_errors.insert(site, e);
+                }
+            },
             AppEvent::Scene3d {
                 location_id,
                 result,

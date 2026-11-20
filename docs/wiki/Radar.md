@@ -21,6 +21,15 @@ Under the radar you can choose a plain **map** or a **satellite** photo map (Esr
 
 You can zoom in like a real map, from the whole globe down to street level (zoom 21). Imagery is sharp to about zoom 19; past that, and wherever a closer tile doesn't exist or is still loading, the nearest coarser tile is enlarged so the map never goes blank.
 
+## Pro: single-site NEXRAD and Level II
+
+`:site KTLX` (or clicking a radar site) switches the radar from the composite to one US radar. The product menu in the control bar then offers:
+
+- **Level II · every tilt** — the radar's full-resolution volume scan, decoded in the app: reflectivity, velocity, storm-relative velocity, correlation coefficient (CC) and differential reflectivity (ZDR). Step through the tilts with − and + (or `:tilt 3`, `:tilt up`); the elevation angle and scan time are shown. Refreshes every few minutes. `:level2 vel` (`:l2 srv`, `:l2 off`, …) does the same from the command line.
+- **NWS images · lowest tilt** — the National Weather Service's ready-made images (base reflectivity and velocity, hydrometeor classification, rainfall totals).
+
+Velocity is green toward the radar and red away; storm-relative velocity subtracts the average motion of the storm cells the radar is tracking, so rotation (green beside red) stands out. Velocity isn't dealiased: very fast winds can fold over to the opposite colour. Low CC inside a strong echo can mean hail or tornado debris.
+
 ## Pro: layers
 
 The floating control box in Pro has playback (back, play/pause, forward, **LIVE**), a frame slider, the colour scheme and icon toggles for the most-used layers. Everything else is in Settings → Radar or `:layer`.

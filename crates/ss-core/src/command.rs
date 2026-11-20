@@ -52,6 +52,14 @@ pub enum RadioCmd {
     Test,
 }
 
+/// `:tilt` argument.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TiltArg {
+    /// Tilt index, 0 = lowest.
+    To(usize),
+    Step(i32),
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     Goto {
@@ -111,6 +119,11 @@ pub enum Command {
         on: Option<bool>,
     },
     Product(RadarProduct),
+    /// A Level II product on the single-site radar (`None` = back to the
+    /// NWS images).
+    Level2(Option<crate::radar3d::L2Product>),
+    /// Level II tilt: absolute (0 = lowest) or a step.
+    Tilt(TiltArg),
     Site(Option<String>),
     Play,
     Pause,
@@ -282,6 +295,18 @@ static COMMANDS: &[CmdInfo] = &[
         &["p"],
         "product <name>",
         "Select the radar product",
+    ),
+    ci(
+        "level2",
+        &["l2"],
+        "level2 <ref|vel|srv|cc|zdr|off>",
+        "Show a Level II product (every tilt) on the single-site radar",
+    ),
+    ci(
+        "tilt",
+        &[],
+        "tilt <n|up|down>",
+        "Choose the Level II tilt (1 = lowest)",
     ),
     ci(
         "site",
@@ -562,6 +587,33 @@ pub fn parse(line: &str) -> Result<Command, ParseError> {
             Ok(Command::Product(
                 RadarProduct::parse(a).ok_or_else(|| bad(name, "product", a))?,
             ))
+        }
+        "level2" => {
+            use crate::radar3d::L2Product as P;
+            let a = args.first().ok_or_else(|| missing(name, "product"))?;
+            let p = match a.to_ascii_lowercase().as_str() {
+                "ref" | "refl" | "reflectivity" | "dbz" => Some(P::Reflectivity),
+                "vel" | "velocity" | "v" => Some(P::Velocity),
+                "srv" | "srm" | "storm-relative" => Some(P::StormRelative),
+                "cc" | "rho" | "rhohv" => Some(P::Cc),
+                "zdr" => Some(P::Zdr),
+                "off" | "none" => None,
+                _ => return Err(bad(name, "product", a)),
+            };
+            Ok(Command::Level2(p))
+        }
+        "tilt" => {
+            let a = args.first().ok_or_else(|| missing(name, "tilt"))?;
+            match a.to_ascii_lowercase().as_str() {
+                "up" | "+" => Ok(Command::Tilt(TiltArg::Step(1))),
+                "down" | "-" => Ok(Command::Tilt(TiltArg::Step(-1))),
+                n => n
+                    .parse::<usize>()
+                    .ok()
+                    .filter(|&n| n >= 1)
+                    .map(|n| Command::Tilt(TiltArg::To(n - 1)))
+                    .ok_or_else(|| bad(name, "tilt", a)),
+            }
         }
         "site" => Ok(Command::Site(rest_joined(args))),
         "play" => Ok(Command::Play),
@@ -1201,6 +1253,13 @@ mod tests {
         assert!(parse("layer wind maybe").is_err());
         assert!(parse("layer").is_err());
         assert_eq!(p("p vel"), Command::Product(RadarProduct::SrBvel));
+        assert_eq!(
+            p("l2 srv"),
+            Command::Level2(Some(crate::radar3d::L2Product::StormRelative))
+        );
+        assert_eq!(p("level2 off"), Command::Level2(None));
+        assert_eq!(p("tilt 3"), Command::Tilt(TiltArg::To(2)));
+        assert_eq!(p("tilt up"), Command::Tilt(TiltArg::Step(1)));
         assert_eq!(p("product sr_bref"), Command::Product(RadarProduct::SrBref));
         assert!(parse("product nope").is_err());
         assert_eq!(p("s"), Command::Site(None));

@@ -1,7 +1,7 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::{Local, Utc};
 use egui::{vec2, Align, Align2, Color32, FontId, Layout, RichText, Ui};
@@ -275,6 +275,8 @@ pub struct RadarPanel {
     /// Signature of the storm data the storm layers were built from.
     storms_sig: u64,
     nexrad_cfg: Option<(String, RadarProduct)>,
+    /// Level II products drawn here.
+    l2: super::l2map::L2Map,
     last_wind_req: Option<(BBox, f64)>,
     last_alert_req: Option<(BBox, f64)>,
     view_sig: (u64, u64, u64),
@@ -363,6 +365,9 @@ impl RadarPanel {
         let mut nx = nexrad_layer("kxxx", RadarProduct::SrBref);
         nx.visible = false;
         l.push(nx);
+        let mut l2 = ss_map::GeoImageLayer::new("level2");
+        l2.visible = false;
+        l.push(l2);
         let mut ring =
             RangeRingLayer::new("range-ring", 0.0, 0.0, ncep::RANGE_RING_M, Color32::GRAY);
         ring.visible = false;
@@ -390,6 +395,7 @@ impl RadarPanel {
             barbs_sig: 0,
             storms_sig: 0,
             nexrad_cfg: None,
+            l2: Default::default(),
             last_wind_req: None,
             last_alert_req: None,
             view_sig: (0, 0, 0),
@@ -652,9 +658,10 @@ fn hit_polygon(
 }
 
 fn legend_stops(rs: &RadarSettings) -> Option<Vec<(Color32, &'static str)>> {
-    let dbz = match &rs.nexrad_site {
-        None => true,
-        Some(_) => rs.nexrad_product == RadarProduct::SrBref,
+    let dbz = match (&rs.nexrad_site, rs.level2) {
+        (None, _) => true,
+        (Some(_), Some(p)) => p == ss_core::radar3d::L2Product::Reflectivity,
+        (Some(_), None) => rs.nexrad_product == RadarProduct::SrBref,
     };
     (rs.legend && dbz).then(|| radar_dbz_stops(rs.color_scheme))
 }
@@ -786,6 +793,7 @@ impl Panel for RadarPanel {
 
         self.sync_basemap(rs.imagery);
         self.sync_layers(cx, &rs, &frames);
+        self.sync_level2(cx, &rs, ui.ctx());
         self.handle_requests(cx);
 
         let stops = legend_stops(&rs);
@@ -1062,6 +1070,180 @@ fn frame_time_label(time: i64, fmt: TimeFormat) -> String {
 }
 
 impl RadarPanel {
+    /// Fetch the site's Level II scan and redraw the chosen tilt when
+    /// anything changes.
+    fn sync_level2(&mut self, cx: &mut PanelCx, rs: &RadarSettings, ctx: &egui::Context) {
+        let want = rs
+            .nexrad_site
+            .as_ref()
+            .map(|s| s.to_ascii_uppercase())
+            .zip(rs.level2);
+        let Some((site, product)) = want else {
+            if let Some(l) = self.map.layers.get_mut::<ss_map::GeoImageLayer>("level2") {
+                l.image = None;
+                l.visible = false;
+            }
+            self.l2.clear();
+            return;
+        };
+        let sh = &mut *cx.shared;
+        let due = sh
+            .level2_requested
+            .get(&site)
+            .is_none_or(|t| t.elapsed() > Duration::from_secs(240));
+        if due {
+            sh.level2_requested.insert(site.clone(), Instant::now());
+            cx.tasks.level2(&site);
+        }
+        let Some(scan) = sh.level2.get(&site).cloned() else {
+            return;
+        };
+        let motion = super::radar3d::motion_for_site(&sh.storm_cells, &site);
+        let done = self.l2.update(&scan, product, rs.level2_tilt, motion);
+        if self.l2.busy() {
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
+        if let Some(l) = self.map.layers.get_mut::<ss_map::GeoImageLayer>("level2") {
+            if let Some(img) = done {
+                l.image = img.map(|img| {
+                    let tex =
+                        ctx.load_texture("level2-map", img.image, egui::TextureOptions::LINEAR);
+                    (tex, img.bounds)
+                });
+            }
+            l.visible = true;
+            l.opacity = 1.0;
+        }
+    }
+
+    /// The NEXRAD product menu (Level II products decoded here, or the
+    /// NWS images) and, for Level II, the tilt.
+    fn product_controls(&mut self, ui: &mut Ui, cx: &mut PanelCx, rs: &RadarSettings, site: &str) {
+        use ss_core::radar3d::L2Product;
+        let p = cx.palette;
+        let current = match rs.level2 {
+            Some(l) => format!("Level II {}", l.short()),
+            None => rs.nexrad_product.label().to_string(),
+        };
+        let (mut pick_l2, mut pick_l3) = (None, None);
+        egui::ComboBox::from_id_salt("nexrad_product")
+            .width(150.0)
+            .selected_text(current)
+            .show_ui(ui, |ui| {
+                ui.label(
+                    RichText::new("Level II · every tilt")
+                        .small()
+                        .color(c32a(p.text3)),
+                );
+                for prod in L2Product::ALL {
+                    if ui
+                        .selectable_label(rs.level2 == Some(prod), prod.label())
+                        .clicked()
+                    {
+                        pick_l2 = Some(prod);
+                    }
+                }
+                ui.separator();
+                ui.label(
+                    RichText::new("NWS images · lowest tilt")
+                        .small()
+                        .color(c32a(p.text3)),
+                );
+                for prod in RadarProduct::ALL {
+                    let on = rs.level2.is_none() && rs.nexrad_product == prod;
+                    if ui.selectable_label(on, prod.label()).clicked() {
+                        pick_l3 = Some(prod);
+                    }
+                }
+            });
+        if let Some(l2) = pick_l2 {
+            cx.shared.config.radar.level2 = Some(l2);
+            cx.shared.dirty_config = true;
+        }
+        if let Some(l3) = pick_l3 {
+            cx.shared.config.radar.level2 = None;
+            cx.shared.dirty_config = true;
+            cx.emit.push(Command::Product(l3));
+        }
+        let Some(product) = rs.level2 else {
+            return;
+        };
+        let key = site.to_ascii_uppercase();
+        let Some(scan) = cx.shared.level2.get(&key).cloned() else {
+            let text = match cx.shared.level2_errors.get(&key) {
+                Some(e) => format!("Level II: {e}"),
+                None => "loading Level II…".to_string(),
+            };
+            ui.label(RichText::new(text).monospace().color(c32a(p.text3)));
+            return;
+        };
+        let n = scan.polar.sweeps.len();
+        if n == 0 {
+            return;
+        }
+        let tilt = rs.level2_tilt.min(n - 1);
+        if mono_button(ui, RichText::new("−"))
+            .on_hover_text("Lower tilt")
+            .clicked()
+            && tilt > 0
+        {
+            cx.shared.config.radar.level2_tilt = tilt - 1;
+            cx.shared.dirty_config = true;
+        }
+        ui.label(
+            RichText::new(format!("{:.1}°", scan.polar.sweeps[tilt].elevation_deg))
+                .monospace()
+                .color(c32(p.a0)),
+        )
+        .on_hover_text(format!("Tilt {} of {n}", tilt + 1));
+        if mono_button(ui, RichText::new("+"))
+            .on_hover_text("Higher tilt")
+            .clicked()
+            && tilt + 1 < n
+        {
+            cx.shared.config.radar.level2_tilt = tilt + 1;
+            cx.shared.dirty_config = true;
+        }
+        let time = chrono::DateTime::parse_from_rfc3339(&scan.time)
+            .map(|t| t.with_timezone(&chrono::Local).format("%H:%M").to_string())
+            .unwrap_or_default();
+        ui.label(RichText::new(time).monospace().color(c32a(p.text3)));
+        // The product's colours (reflectivity has the usual legend).
+        if product != L2Product::Reflectivity {
+            let (lo, hi) = product.moment().range();
+            let (lo, hi) = match product {
+                L2Product::Cc => (0.5, 1.02),
+                L2Product::Zdr => (-2.0, 6.0),
+                _ => (lo, hi),
+            };
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(96.0, 10.0), egui::Sense::hover());
+            for k in 0..24 {
+                let v = lo + (hi - lo) * (k as f32 + 0.5) / 24.0;
+                let c = product.color(v);
+                let x0 = rect.left() + rect.width() * k as f32 / 24.0;
+                ui.painter().rect_filled(
+                    egui::Rect::from_min_max(
+                        egui::pos2(x0, rect.top()),
+                        egui::pos2(x0 + rect.width() / 24.0 + 0.5, rect.bottom()),
+                    ),
+                    0.0,
+                    Color32::from_rgb(c[0], c[1], c[2]),
+                );
+            }
+            let hint = match product {
+                L2Product::Velocity | L2Product::StormRelative => {
+                    format!("{lo:.0}…{hi:.0} m/s, green toward")
+                }
+                L2Product::Cc => format!("{lo:.2}…{hi:.2}"),
+                _ => format!("{lo:.0}…{hi:.0} dB"),
+            };
+            ui.label(RichText::new(hint).small().color(c32a(p.text3)));
+        }
+        if self.l2.busy() {
+            ui.spinner();
+        }
+    }
+
     fn control_bar(
         &mut self,
         ui: &mut Ui,
@@ -1075,12 +1257,14 @@ impl RadarPanel {
                 .shared
                 .radar_stations
                 .iter()
-                .find(|s| s.id.eq_ignore_ascii_case(site));
-            let mut text = format!("NEXRAD {site} · {}", rs.nexrad_product.label());
-            if let Some(s) = station {
-                text.push_str(&format!(" · {}", s.name));
+                .find(|s| s.id.eq_ignore_ascii_case(site))
+                .map(|s| s.name.clone());
+            let mut text = format!("NEXRAD {site}");
+            if let Some(name) = &station {
+                text.push_str(&format!(" · {name}"));
             }
             ui.label(RichText::new(text).monospace().color(c32(p.text)));
+            self.product_controls(ui, cx, rs, site);
             if station.is_none() && !cx.shared.radar_stations.is_empty() {
                 ui.label(
                     RichText::new("site not found")
@@ -1397,7 +1581,7 @@ impl RadarPanel {
             }
             self.nexrad_cfg = wanted.clone();
         }
-        layers.set_visible("nexrad", wanted.is_some());
+        layers.set_visible("nexrad", wanted.is_some() && rs.level2.is_none());
         let station = wanted.as_ref().and_then(|(site, _)| {
             sh.radar_stations
                 .iter()

@@ -539,7 +539,7 @@ mod tests {
         };
         b.tab();
         assert!(b.input.starts_with('u'));
-        b.input = "ti".into();
+        b.input = "tim".into();
         b.tab();
         assert_eq!(b.input, "time");
     }

@@ -200,6 +200,20 @@ impl Tasks {
 
     /// The 3D scene for a location: terrain, plus the nearest NEXRAD
     /// volume or (elsewhere) the extruded radar mosaic.
+    /// A radar site's newest Level II scan.
+    pub fn level2(&self, site: &str) {
+        let (net, tx, ctx) = (self.net.clone(), self.tx.clone(), self.ctx.clone());
+        let site = site.to_ascii_uppercase();
+        self.rt.spawn(async move {
+            let result = net
+                .site_scan(&site)
+                .await
+                .map(std::sync::Arc::new)
+                .map_err(|e| e.to_string());
+            Self::post(&tx, &ctx, AppEvent::Level2 { site, result });
+        });
+    }
+
     pub fn scene3d(
         &self,
         loc: &SavedLocation,

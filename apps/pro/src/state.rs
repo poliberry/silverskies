@@ -186,6 +186,10 @@ pub struct Shared {
     pub soundings_pending: std::collections::HashSet<String>,
     /// 3D scenes (terrain + radar volume) by location id.
     pub scenes3d: HashMap<String, std::sync::Arc<ss_core::radar3d::Scene>>,
+    /// Level II scans by site (2D radar), with when they were requested.
+    pub level2: HashMap<String, std::sync::Arc<ss_core::radar3d::SiteScan>>,
+    pub level2_requested: HashMap<String, std::time::Instant>,
+    pub level2_errors: HashMap<String, String>,
     pub scene3d_pending: std::collections::HashSet<String>,
     pub scene3d_errors: HashMap<String, String>,
     pub sounding_errors: HashMap<String, String>,
@@ -270,6 +274,9 @@ impl Shared {
             soundings: HashMap::new(),
             soundings_pending: Default::default(),
             scenes3d: HashMap::new(),
+            level2: HashMap::new(),
+            level2_requested: HashMap::new(),
+            level2_errors: HashMap::new(),
             scene3d_pending: Default::default(),
             scene3d_errors: HashMap::new(),
             sounding_errors: HashMap::new(),

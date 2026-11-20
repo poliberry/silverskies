@@ -18,6 +18,7 @@ pub mod conditions;
 pub mod forecast;
 pub mod gl3d;
 pub mod hourly;
+pub mod l2map;
 pub mod locations;
 pub mod radar;
 pub mod radar3d;

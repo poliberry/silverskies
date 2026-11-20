@@ -245,6 +245,20 @@ pub fn parse_volume(buf: &[u8], site: &str) -> Result<Volume> {
 
 impl Net {
     /// The newest volume scan for `site` (today's, else yesterday's, UTC).
+    /// The site's newest scan, laid out around the radar.
+    pub async fn site_scan(&self, site: &str) -> Result<ss_core::radar3d::SiteScan> {
+        let vol = self.latest_level2(site).await?;
+        tokio::task::spawn_blocking(move || ss_core::radar3d::SiteScan {
+            polar: ss_core::radar3d::polar_volume(&vol, vol.lat, vol.lon),
+            site: vol.site,
+            time: vol.time,
+            lat: vol.lat,
+            lon: vol.lon,
+        })
+        .await
+        .map_err(|e| NetError::Parse(e.to_string()))
+    }
+
     pub async fn latest_level2(&self, site: &str) -> Result<Volume> {
         let today = chrono::Utc::now().date_naive();
         let mut key = None;

@@ -20,6 +20,11 @@ pub enum AppEvent {
     /// Local storm reports (IEM).
     StormReports(Result<Vec<ss_core::storms::StormReport>, String>),
     /// Forecast soundings for a location (Open-Meteo pressure levels).
+    /// A radar site's newest Level II scan (for the 2D radar).
+    Level2 {
+        site: String,
+        result: Result<std::sync::Arc<ss_core::radar3d::SiteScan>, String>,
+    },
     /// The 3D view's scene for a location.
     Scene3d {
         location_id: String,
