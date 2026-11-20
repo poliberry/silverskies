@@ -29,6 +29,7 @@ pub const INFO: &str = "\u{e88e}";
 pub const LANDSCAPE: &str = "\u{e3f7}";
 pub const LAYERS: &str = "\u{e53b}";
 pub const LOCATION_ON: &str = "\u{e0c8}";
+pub const MAP: &str = "\u{e55b}";
 pub const MY_LOCATION: &str = "\u{e1b3}";
 pub const NAVIGATION: &str = "\u{e55d}";
 pub const NOTIFICATIONS: &str = "\u{e7f4}";
@@ -37,6 +38,7 @@ pub const PARTLY_CLOUDY_DAY: &str = "\u{f172}";
 pub const PAUSE: &str = "\u{e034}";
 pub const PLAY_ARROW: &str = "\u{e037}";
 pub const POLYLINE: &str = "\u{ebbb}";
+pub const PUBLIC: &str = "\u{e80b}";
 pub const RADAR: &str = "\u{f04e}";
 pub const RADIO: &str = "\u{e03e}";
 pub const RADIO_BUTTON_CHECKED: &str = "\u{e837}";
@@ -90,6 +92,7 @@ pub const ALL: &[&str] = &[
     LANDSCAPE,
     LAYERS,
     LOCATION_ON,
+    MAP,
     MY_LOCATION,
     NAVIGATION,
     NOTIFICATIONS,
@@ -98,6 +101,7 @@ pub const ALL: &[&str] = &[
     PAUSE,
     PLAY_ARROW,
     POLYLINE,
+    PUBLIC,
     RADAR,
     RADIO,
     RADIO_BUTTON_CHECKED,

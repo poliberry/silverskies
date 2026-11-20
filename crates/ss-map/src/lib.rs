@@ -12,13 +12,14 @@ pub mod tiles;
 pub mod viewport;
 
 pub use layers::{
-    barb_components, bbox_intersects, carto_basemap, esri_basemap, esri_hillshade, geometry_bbox,
-    lonlat_from_3857, lonlat_to_3857, point_in_polygon, triangulate, Barb, DrawCtx, Layer,
-    LayerStack, Marker, MarkerKind, MarkerLayer, PolyItem, PolygonLayer, RangeRingLayer,
-    RasterTileLayer, SelectionLayer, TriData, WindBarbLayer, WmsImageLayer,
+    ancestor, barb_components, basemap, bbox_intersects, carto_basemap, esri_basemap,
+    esri_hillshade, esri_imagery, esri_labels, esri_roads, geometry_bbox, lonlat_from_3857,
+    lonlat_to_3857, point_in_polygon, triangulate, Barb, Basemap, DrawCtx, Layer, LayerStack,
+    Marker, MarkerKind, MarkerLayer, PolyItem, PolygonLayer, RangeRingLayer, RasterTileLayer,
+    SelectionLayer, TriData, WindBarbLayer, WmsImageLayer,
 };
 pub use legend::{draw_color_legend, radar_dbz_stops};
-pub use map::{MapResponse, MapWidget, BACKGROUND};
+pub use map::{attribution_for, MapResponse, MapWidget, BACKGROUND};
 pub use radar_loop::{LoopClock, LoopFrameSource, RadarLoopLayer, TileUrlFn};
 pub use storm_layer::{StormLayer, StormMark, StormShape};
 pub use tiles::{TileCache, TileKey, TileState, TileStats};

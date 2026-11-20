@@ -15,7 +15,7 @@ use ss_core::{
 };
 use ss_map::viewport::world_px_at;
 use ss_map::{
-    draw_color_legend, esri_basemap, esri_hillshade, radar_dbz_stops, Barb, Layer, LayerStack,
+    draw_color_legend, esri_basemap, esri_hillshade, radar_dbz_stops, Barb, LayerStack,
     LoopFrameSource, MapWidget, Marker, MarkerKind, MarkerLayer, PolyItem, PolygonLayer,
     RadarLoopLayer, RangeRingLayer, RasterTileLayer, StormLayer, StormMark, StormShape, TileCache,
     TileId, WindBarbLayer, WmsImageLayer,
@@ -278,6 +278,8 @@ pub struct RadarPanel {
     last_wind_req: Option<(BBox, f64)>,
     last_alert_req: Option<(BBox, f64)>,
     view_sig: (u64, u64, u64),
+    /// (imagery, dark) the basemap and labels were built for.
+    basemap_sig: Option<(bool, bool)>,
     last_view_change: f64,
 }
 
@@ -350,6 +352,11 @@ impl RadarPanel {
         l.push(esri_hillshade(0.32));
         l.push(placeholder_raster("satellite", TILE_MAX_ZOOM, 0.75));
         l.push(RadarLoopLayer::new("radar", TILE_MAX_ZOOM, 0.7));
+        // Roads (imagery only) and place labels sit above the radar.
+        let mut roads = ss_map::esri_roads();
+        roads.visible = false;
+        l.push(roads);
+        l.push(ss_map::esri_labels(ss_map::Basemap::Map, true));
         l.push(placeholder_raster("owm-wind", OWM_MAX_ZOOM, 0.55));
         l.push(placeholder_raster("owm-temp", OWM_MAX_ZOOM, 0.55));
         l.push(placeholder_raster("owm-precip", OWM_MAX_ZOOM, 0.55));
@@ -386,6 +393,7 @@ impl RadarPanel {
             last_wind_req: None,
             last_alert_req: None,
             view_sig: (0, 0, 0),
+            basemap_sig: None,
             last_view_change: 0.0,
         }
     }
@@ -393,11 +401,27 @@ impl RadarPanel {
     fn set_dark(&mut self, dark: bool) {
         self.dark = dark;
         self.map.dark = dark;
-        self.map.layers.remove("basemap");
+    }
+
+    /// Swap the basemap and labels when the style or the theme changes.
+    fn sync_basemap(&mut self, imagery: bool) {
+        let want = (imagery, self.dark);
+        if self.basemap_sig == Some(want) {
+            return;
+        }
+        self.basemap_sig = Some(want);
+        let style = if imagery {
+            ss_map::Basemap::Satellite
+        } else {
+            ss_map::Basemap::Map
+        };
         self.map
             .layers
+            .replace("basemap", Box::new(ss_map::basemap(style, self.dark)));
+        self.map
             .layers
-            .insert(0, Box::new(esri_basemap(dark)) as Box<dyn Layer>);
+            .replace("labels", Box::new(ss_map::esri_labels(style, self.dark)));
+        self.map.attribution = ss_map::attribution_for(style).to_string();
     }
 }
 
@@ -656,6 +680,14 @@ pub fn scheme_options(maps: Option<&WeatherMaps>) -> Vec<(u8, String)> {
 pub fn layer_toggles(rs: &RadarSettings) -> Vec<(&'static str, bool, Command)> {
     vec![
         (
+            "IMG",
+            rs.imagery,
+            Command::Layer {
+                name: "imagery".to_string(),
+                on: Some(!rs.imagery),
+            },
+        ),
+        (
             "SAT",
             rs.satellite,
             Command::Layer {
@@ -752,6 +784,7 @@ impl Panel for RadarPanel {
             ui.ctx().request_repaint();
         }
 
+        self.sync_basemap(rs.imagery);
         self.sync_layers(cx, &rs, &frames);
         self.handle_requests(cx);
 
@@ -1006,6 +1039,7 @@ fn icon_button(
 pub fn layer_icon(label: &str) -> (&'static str, &'static str) {
     use ss_assets::symbols as i;
     match label {
+        "IMG" => (i::PUBLIC, "Satellite imagery map"),
         "SAT" => (i::SATELLITE_ALT, "IR satellite"),
         "PLY" => (i::POLYLINE, "Alert polygons"),
         "ARW" => (i::NAVIGATION, "Storm motion arrows"),
@@ -1280,11 +1314,15 @@ impl RadarPanel {
             l.pos = self.playback.pos;
         }
 
-        // --- terrain relief ---
+        // --- terrain relief (the photos already show relief) ---
         if let Some(l) = layers.get_mut::<RasterTileLayer>("terrain") {
-            l.visible = rs.terrain;
+            l.visible = rs.terrain && !rs.imagery;
             l.opacity = if self.dark { 0.28 } else { 0.42 };
         }
+
+        // --- labels and roads ---
+        layers.set_visible("labels", rs.labels);
+        layers.set_visible("roads", rs.labels && rs.imagery);
 
         // --- storm cells and storm reports ---
         layers.set_visible("storm-cells", rs.storm_cells);
@@ -1900,7 +1938,7 @@ mod tests {
     fn layer_toggles_reflect_state_and_flip() {
         let rs = RadarSettings::default();
         let toggles = layer_toggles(&rs);
-        assert_eq!(toggles.len(), 6);
+        assert_eq!(toggles.len(), 7);
         let sat = toggles.iter().find(|(l, _, _)| *l == "SAT").unwrap();
         assert!(!sat.1);
         assert_eq!(

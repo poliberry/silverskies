@@ -145,6 +145,7 @@ impl App {
         let mut config = store.load_config();
         let locations = store.load_locations();
         let mut prefs = Prefs::load(&store);
+        let radar_imagery = prefs.radar_imagery;
         if prefs.migrate_into(&mut config.ai) {
             if let Err(e) = store.save_config(&config) {
                 tracing::warn!("saving migrated AI settings: {e}");
@@ -189,7 +190,11 @@ impl App {
             ai_summary: HashMap::new(),
             ai_seq: 0,
             ai_targets: HashMap::new(),
-            radar: Radar::new(tiles),
+            radar: {
+                let mut r = Radar::new(tiles);
+                r.imagery = radar_imagery;
+                r
+            },
             settings_open: false,
             chat: Default::default(),
             ai_http: ss_ai::http_client(),
@@ -1290,14 +1295,17 @@ impl eframe::App for App {
                             .inner_margin(Margin::ZERO);
                         frame.show(ui, |ui| {
                             ui.set_min_size(ui.available_size() - egui::vec2(0.0, 18.0));
-                            self.radar.show(
+                            if self.radar.show(
                                 ui,
                                 &p,
                                 self.maps.as_ref(),
                                 place.as_ref().map(|(a, b, c)| (*a, *b, c.as_str())),
                                 &alerts,
                                 tz.as_deref(),
-                            );
+                            ) {
+                                self.prefs.radar_imagery = self.radar.imagery;
+                                self.save_prefs();
+                            }
                         });
                     }
                 }

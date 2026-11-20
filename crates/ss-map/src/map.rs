@@ -34,10 +34,22 @@ pub struct MapWidget {
     pub units: Units,
     pub show_scale: bool,
     pub show_attribution: bool,
+    /// The credit line (follows the basemap; see [`attribution_for`]).
+    pub attribution: String,
     pub show_coords: bool,
     pub show_stats: bool,
     pub dark: bool,
     selection: SelectionLayer,
+}
+
+/// The credit line each basemap requires.
+pub fn attribution_for(style: crate::Basemap) -> &'static str {
+    match style {
+        crate::Basemap::Map => "Esri, HERE, Garmin, \u{a9} OpenStreetMap contributors",
+        crate::Basemap::Satellite => {
+            "Esri, Maxar, Earthstar Geographics, \u{a9} OpenStreetMap contributors"
+        }
+    }
 }
 
 impl MapWidget {
@@ -51,6 +63,7 @@ impl MapWidget {
             units: Units::Metric,
             show_scale: true,
             show_attribution: true,
+            attribution: attribution_for(crate::Basemap::Map).to_string(),
             show_coords: true,
             show_stats: false,
             dark: true,
@@ -253,7 +266,7 @@ impl MapWidget {
             text(
                 pos2(rect.right() - 8.0, y),
                 Align2::RIGHT_BOTTOM,
-                "Esri, HERE, Garmin, \u{a9} OpenStreetMap contributors",
+                &self.attribution,
                 FontId::monospace(9.0),
             );
         }

@@ -743,6 +743,22 @@ fn radar_tab(ui: &mut Ui, sh: &mut Shared, p: &Palette, st: &mut SettingsState) 
         if !opts.iter().any(|(i, _)| *i == cfg.radar.color_scheme) {
             opts.push((cfg.radar.color_scheme, cur_name.as_str()));
         }
+        toggle_row(
+            ui,
+            p,
+            &mut rows,
+            "Satellite imagery map",
+            Some("Photos of the ground under the radar, to street level (off: the grey map)"),
+            &mut cfg.radar.imagery,
+        );
+        toggle_row(
+            ui,
+            p,
+            &mut rows,
+            "Labels",
+            Some("Place names and borders over the radar, and roads on imagery"),
+            &mut cfg.radar.labels,
+        );
         combo_row(
             ui,
             p,

@@ -5,7 +5,8 @@ use ss_core::types::BBox;
 
 pub const TILE_SIZE: f64 = 256.0;
 pub const MAX_LAT: f64 = 85.0511;
-pub const MAX_ZOOM: f64 = 18.0;
+/// Street level and beyond (tiles past a layer's deepest level are enlarged).
+pub const MAX_ZOOM: f64 = 21.0;
 const EARTH_CIRCUMFERENCE_M: f64 = 40_075_016.685_578_5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

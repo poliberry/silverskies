@@ -420,6 +420,12 @@ pub struct RadarSettings {
     pub aqi_badge: bool,
     /// Shaded-relief terrain under the radar.
     pub terrain: bool,
+    /// Satellite imagery as the basemap instead of the grey map.
+    #[serde(default)]
+    pub imagery: bool,
+    /// Place names and borders (and, on imagery, roads) over the radar.
+    #[serde(default = "yes")]
+    pub labels: bool,
     /// NEXRAD storm cells with tornado/mesocyclone/hail markers and tracks.
     pub storm_cells: bool,
     /// Local storm reports (tornado, hail, wind, flood) from the last 24 h.
@@ -453,12 +459,18 @@ impl Default for RadarSettings {
             owm_precip: false,
             aqi_badge: false,
             terrain: true,
+            imagery: false,
+            labels: true,
             storm_cells: true,
             storm_reports: true,
             tropical: true,
             viewport_alerts: true,
         }
     }
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// Persisted user configuration (`config.json`). `#[serde(default)]` on the

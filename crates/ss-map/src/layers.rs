@@ -82,6 +82,15 @@ impl LayerStack {
             l.set_visible(visible);
         }
     }
+    /// Swap the layer called `name` for `layer`, keeping its place in the
+    /// stack (or add it on top when there is none).
+    pub fn replace(&mut self, name: &str, layer: Box<dyn Layer>) {
+        match self.layers.iter().position(|l| l.name() == name) {
+            Some(i) => self.layers[i] = layer,
+            None => self.layers.push(layer),
+        }
+    }
+
     pub fn remove(&mut self, name: &str) {
         self.layers.retain(|l| l.name() != name);
     }
@@ -176,16 +185,104 @@ impl Layer for RasterTileLayer {
                 painter.image(tex.id(), snap(r), full_uv, tint);
                 continue;
             }
-            // Placeholder: parent tile, one level up.
-            if tile.z > 0 {
-                let pk = TileKey::new(self.key.clone(), tile.z - 1, tile.x / 2, tile.y / 2);
-                if let Some(tex) = ctx.cache.get_ready(&pk) {
-                    let (qx, qy) = ((tile.x & 1) as f32 * 0.5, (tile.y & 1) as f32 * 0.5);
-                    let uv = Rect::from_min_max(pos2(qx, qy), pos2(qx + 0.5, qy + 0.5));
-                    painter.image(tex.id(), snap(r), uv, tint);
-                }
+            // A tile that failed (e.g. no imagery that deep here) gets its
+            // parent fetched, so the deepest available level shows, enlarged.
+            if ctx.cache.is_failed(&key) && tile.z > 0 {
+                let parent = TileId {
+                    z: tile.z - 1,
+                    x: tile.x / 2,
+                    y: tile.y / 2,
+                };
+                let pk = TileKey::new(self.key.clone(), parent.z, parent.x, parent.y);
+                let _ = ctx.cache.request(&pk, (self.url_template)(parent));
+            }
+            // Meanwhile: the nearest loaded ancestor, the matching part of it.
+            if let Some((tex, uv)) = ancestor(ctx.cache, &self.key, tile, 8) {
+                painter.image(tex, snap(r), uv, tint);
             }
         }
+    }
+}
+
+/// The nearest loaded ancestor of `tile` (up to `levels` up) and the part of
+/// it that covers `tile`, as a texture and UV rect.
+pub fn ancestor(
+    cache: &mut TileCache,
+    key: &str,
+    tile: TileId,
+    levels: u8,
+) -> Option<(egui::TextureId, Rect)> {
+    for up in 1..=levels.min(tile.z) {
+        let (px, py) = (tile.x >> up, tile.y >> up);
+        let pk = TileKey::new(key.to_string(), tile.z - up, px, py);
+        if let Some(tex) = cache.get_ready(&pk) {
+            let n = (1u32 << up) as f32;
+            let (qx, qy) = (
+                (tile.x - (px << up)) as f32 / n,
+                (tile.y - (py << up)) as f32 / n,
+            );
+            let uv = Rect::from_min_max(pos2(qx, qy), pos2(qx + 1.0 / n, qy + 1.0 / n));
+            return Some((tex.id(), uv));
+        }
+    }
+    None
+}
+
+/// The map style under the radar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Basemap {
+    /// Esri's grey canvas: quiet, so the radar stands out.
+    Map,
+    /// Esri World Imagery: satellite and aerial photos, to street level.
+    Satellite,
+}
+
+/// Esri World Imagery (satellite / aerial photos), free with attribution
+/// (Esri, Maxar, Earthstar Geographics). Requested to level 19, enlarged
+/// beyond; where a level is missing the parent is used.
+pub fn esri_imagery() -> RasterTileLayer {
+    RasterTileLayer::new("basemap", "esri-imagery", 19, |t| {
+        format!(
+            "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{}/{}/{}?blankTile=false",
+            t.z, t.y, t.x
+        )
+    })
+}
+
+/// Labels drawn over the radar: for the grey map, Esri's matching reference
+/// layer; for imagery, boundaries and place names.
+pub fn esri_labels(style: Basemap, dark: bool) -> RasterTileLayer {
+    let service = match (style, dark) {
+        (Basemap::Satellite, _) => "Reference/World_Boundaries_and_Places",
+        (Basemap::Map, true) => "Canvas/World_Dark_Gray_Reference",
+        (Basemap::Map, false) => "Canvas/World_Light_Gray_Reference",
+    };
+    let key = format!("esri-labels-{}", service.replace('/', "-"));
+    RasterTileLayer::new("labels", key, 19, move |t| {
+        format!(
+            "https://server.arcgisonline.com/ArcGIS/rest/services/{service}/MapServer/tile/{}/{}/{}",
+            t.z, t.y, t.x
+        )
+    })
+}
+
+/// Roads and transport over imagery (Esri World Transportation), from
+/// regional zooms down.
+pub fn esri_roads() -> RasterTileLayer {
+    RasterTileLayer::new("roads", "esri-roads", 19, |t| {
+        format!(
+            "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{}/{}/{}",
+            t.z, t.y, t.x
+        )
+    })
+    .with_opacity(0.75)
+}
+
+/// The basemap layer for a style.
+pub fn basemap(style: Basemap, dark: bool) -> RasterTileLayer {
+    match style {
+        Basemap::Map => esri_basemap(dark),
+        Basemap::Satellite => esri_imagery(),
     }
 }
 

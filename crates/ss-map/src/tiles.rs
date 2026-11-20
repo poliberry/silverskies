@@ -334,6 +334,14 @@ impl TileCache {
         }
     }
 
+    /// Whether the last fetch of this tile failed (and isn't due a retry yet).
+    pub fn is_failed(&self, key: &TileKey) -> bool {
+        matches!(
+            self.entries.get(key).map(|e| &e.state),
+            Some(TileState::Failed { .. })
+        )
+    }
+
     /// Drop an entry so the next request re-fetches.
     pub fn invalidate(&mut self, key: &TileKey) {
         self.entries.remove(key);

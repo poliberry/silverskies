@@ -17,6 +17,8 @@ pub struct Prefs {
     pub ai_auto_summary: bool,
     /// Turn off entrance, morph and transition animations.
     pub reduce_motion: bool,
+    /// Satellite imagery under the radar instead of the grey map.
+    pub radar_imagery: bool,
     // --- legacy (pre-multi-provider) fields, read once for migration ---
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ai_enabled: Option<bool>,

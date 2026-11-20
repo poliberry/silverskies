@@ -9,8 +9,9 @@ use ss_core::alerts::colors::class_color;
 use ss_core::theme::Palette;
 use ss_core::{Alert, RadarFrame, WeatherMaps};
 use ss_map::{
-    carto_basemap, draw_color_legend, radar_dbz_stops, LayerStack, LoopClock, LoopFrameSource,
-    MapWidget, Marker, MarkerKind, MarkerLayer, PolyItem, PolygonLayer, RadarLoopLayer, TileCache,
+    basemap, draw_color_legend, esri_labels, esri_roads, radar_dbz_stops, Basemap, LayerStack,
+    LoopClock, LoopFrameSource, MapWidget, Marker, MarkerKind, MarkerLayer, PolyItem, PolygonLayer,
+    RadarLoopLayer, TileCache,
 };
 use ss_net::librewxr::radar_tile_url;
 
@@ -30,15 +31,28 @@ pub struct Radar {
     centred_on: Option<(f64, f64)>,
     /// The place the pin marker was last placed for.
     pinned: Option<(f64, f64)>,
-    dark: Option<bool>,
+    /// (dark, imagery) the layers were built for.
+    built: Option<(bool, bool)>,
     alerts_key: Option<String>,
+    /// Satellite imagery instead of the grey map (the Map / Satellite switch).
+    pub imagery: bool,
 }
 
-/// Basemap, radar frames, alert areas, then the place pin on top.
-fn layer_stack(dark: bool) -> LayerStack {
+/// Basemap (grey map or satellite imagery), radar frames, labels (and
+/// roads on imagery), alert areas, then the place pin on top.
+fn layer_stack(dark: bool, imagery: bool) -> LayerStack {
+    let style = if imagery {
+        Basemap::Satellite
+    } else {
+        Basemap::Map
+    };
     let mut layers = LayerStack::new();
-    layers.push(carto_basemap(dark));
+    layers.push(basemap(style, dark));
     layers.push(RadarLoopLayer::new("radar", 12, 0.8));
+    if imagery {
+        layers.push(esri_roads());
+    }
+    layers.push(esri_labels(style, dark));
     layers.push(PolygonLayer::new("alerts"));
     layers.push(MarkerLayer::new("pin"));
     layers
@@ -63,8 +77,9 @@ impl Radar {
             live_time: None,
             centred_on: None,
             pinned: None,
-            dark: None,
+            built: None,
             alerts_key: None,
+            imagery: false,
         }
     }
 
@@ -76,13 +91,20 @@ impl Radar {
         place: Option<(f64, f64, &str)>,
         alerts: &[Alert],
         tz: Option<&str>,
-    ) {
+    ) -> bool {
+        let mut toggled = false;
         let dark = crate::theme::is_dark(p);
-        if self.dark != Some(dark) {
-            // Theme changed (or first frame): rebuild with the matching basemap.
-            self.dark = Some(dark);
+        if self.built != Some((dark, self.imagery)) {
+            // Theme or map style changed (or first frame): rebuild the layers.
+            self.built = Some((dark, self.imagery));
             self.map.dark = dark;
-            self.map.layers = layer_stack(dark);
+            self.map.layers = layer_stack(dark, self.imagery);
+            self.map.attribution = ss_map::attribution_for(if self.imagery {
+                Basemap::Satellite
+            } else {
+                Basemap::Map
+            })
+            .to_string();
             self.alerts_key = None;
             self.pinned = None;
         }
@@ -193,6 +215,11 @@ impl Radar {
 
         let resp = self.map.show(ui);
         let rect = resp.rect;
+
+        // --- Map / Satellite switch (top left, a Material segmented button) ---
+        if map_style_switch(ui, rect, p, &mut self.imagery) {
+            toggled = true;
+        }
 
         // --- floating controls ---
         let bar = egui::Rect::from_min_size(
@@ -334,7 +361,68 @@ impl Radar {
                 ui.set_width(legend.width() - 20.0);
                 draw_color_legend(ui, "Rain intensity (dBZ)", &radar_dbz_stops(COLOR_SCHEME));
             });
+        toggled
     }
+}
+
+/// A two-segment "Map | Satellite" switch in the map's top-left corner.
+/// Returns true when it was flipped.
+fn map_style_switch(ui: &mut Ui, map: egui::Rect, p: &Palette, imagery: &mut bool) -> bool {
+    let s = crate::theme::scheme(p);
+    let seg = egui::vec2(96.0, 36.0);
+    let outer = egui::Rect::from_min_size(
+        map.left_top() + egui::vec2(16.0, 14.0),
+        egui::vec2(seg.x * 2.0, seg.y),
+    );
+    ui.painter().rect_filled(
+        outer.translate(egui::vec2(0.0, 2.0)),
+        CornerRadius::same(255),
+        egui::Color32::from_black_alpha(if s.dark { 80 } else { 28 }),
+    );
+    ui.painter()
+        .rect_filled(outer, CornerRadius::same(255), s.surface_container_high);
+    let mut flipped = false;
+    for (i, (label, sat)) in [("Map", false), ("Satellite", true)]
+        .into_iter()
+        .enumerate()
+    {
+        let r =
+            egui::Rect::from_min_size(outer.left_top() + egui::vec2(seg.x * i as f32, 0.0), seg)
+                .shrink(3.0);
+        let id = ui.scope_id().with(("map_style", i));
+        let resp = ui
+            .interact(r, id, egui::Sense::click())
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
+        let on = *imagery == sat;
+        if on {
+            ui.painter()
+                .rect_filled(r, CornerRadius::same(255), s.secondary_container);
+        } else if resp.hovered() {
+            ui.painter().rect_filled(
+                r,
+                CornerRadius::same(255),
+                s.on_surface.gamma_multiply(0.08),
+            );
+        }
+        crate::views::text_on_baseline(
+            ui.painter(),
+            r.center().x,
+            crate::views::baseline_for_center(r.center().y, 14.0),
+            egui::Align::Center,
+            label,
+            crate::theme::medium_font(14.0),
+            if on {
+                s.on_secondary_container
+            } else {
+                s.on_surface_variant
+            },
+        );
+        if resp.clicked() && !on {
+            *imagery = sat;
+            flipped = true;
+        }
+    }
+    flipped
 }
 
 #[cfg(test)]
