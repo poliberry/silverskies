@@ -222,6 +222,9 @@ pub struct Shared {
     pub palette: Palette,
     pub log: VecDeque<LogLine>,
     pub layout: Layout,
+    /// Where the radar's controls go this frame (the strip under the
+    /// function keys), when the radar is in the main window.
+    pub radar_bar: Option<egui::Rect>,
     pub session: SessionFile,
     pub radio: RadioView,
 
@@ -273,6 +276,7 @@ impl Shared {
             mosaic_for: None,
             soundings: HashMap::new(),
             soundings_pending: Default::default(),
+            radar_bar: None,
             scenes3d: HashMap::new(),
             level2: HashMap::new(),
             level2_requested: HashMap::new(),

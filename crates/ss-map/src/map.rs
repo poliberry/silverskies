@@ -20,6 +20,8 @@ pub struct MapResponse {
     pub double_clicked: Option<(f64, f64)>,
     pub hovered: Option<(f64, f64)>,
     pub selection_changed: bool,
+    /// A line was just drawn in line mode ([`MapWidget::line`]).
+    pub line_drawn: bool,
     pub viewport_changed: bool,
     /// Screen rect the map was drawn into (for layer hit tests).
     pub rect: Rect,
@@ -40,6 +42,12 @@ pub struct MapWidget {
     pub show_stats: bool,
     pub dark: bool,
     selection: SelectionLayer,
+    /// While set, dragging draws a line (for cross sections) instead of
+    /// panning.
+    pub line_mode: bool,
+    /// The last line drawn, (lon, lat) ends; drawn over the map, A to B.
+    pub line: Option<((f64, f64), (f64, f64))>,
+    drag_line: Option<(Pos2, Pos2)>,
 }
 
 /// The credit line each basemap requires.
@@ -68,6 +76,9 @@ impl MapWidget {
             show_stats: false,
             dark: true,
             selection: SelectionLayer::default(),
+            line_mode: false,
+            line: None,
+            drag_line: None,
         }
     }
 
@@ -97,6 +108,7 @@ impl MapWidget {
             double_clicked: None,
             hovered: None,
             selection_changed: false,
+            line_drawn: false,
             viewport_changed: false,
             rect,
         };
@@ -106,13 +118,21 @@ impl MapWidget {
         if response.clicked() || response.drag_started() {
             response.request_focus();
         }
-        if response.drag_started_by(PointerButton::Primary) && shift {
+        if response.drag_started_by(PointerButton::Primary) && self.line_mode {
+            if let Some(p) = response.interact_pointer_pos() {
+                self.drag_line = Some((p, p));
+            }
+        } else if response.drag_started_by(PointerButton::Primary) && shift {
             if let Some(p) = response.interact_pointer_pos() {
                 self.drag_sel = Some((p, p));
             }
         }
         if response.dragged_by(PointerButton::Primary) {
-            if let Some((a, _)) = self.drag_sel {
+            if let Some((a, _)) = self.drag_line {
+                if let Some(p) = response.interact_pointer_pos() {
+                    self.drag_line = Some((a, p.clamp(rect.min, rect.max)));
+                }
+            } else if let Some((a, _)) = self.drag_sel {
                 if let Some(p) = response.interact_pointer_pos() {
                     self.drag_sel = Some((a, p.clamp(rect.min, rect.max)));
                 }
@@ -121,6 +141,16 @@ impl MapWidget {
             }
         }
         if response.drag_stopped() {
+            if let Some((a, b)) = self.drag_line.take() {
+                if (a - b).length() >= MIN_SELECTION_PX {
+                    self.line = Some((
+                        self.viewport.lonlat_from_screen(a, rect),
+                        self.viewport.lonlat_from_screen(b, rect),
+                    ));
+                    self.line_mode = false;
+                    out.line_drawn = true;
+                }
+            }
             if let Some((a, b)) = self.drag_sel.take() {
                 if (a - b).abs().max_elem() >= MIN_SELECTION_PX {
                     let (w1, n1) = self.viewport.lonlat_from_screen(a, rect);
@@ -206,6 +236,33 @@ impl MapWidget {
         self.selection.bbox = self.selected_bbox;
         self.selection.drag = self.drag_sel;
         self.selection.paint(&self.viewport, rect, &painter);
+        // The cross-section line: being drawn, or the last one.
+        let ends = self.drag_line.or_else(|| {
+            self.line.map(|(a, b)| {
+                (
+                    self.viewport.screen_from_lonlat(a.0, a.1, rect),
+                    self.viewport.screen_from_lonlat(b.0, b.1, rect),
+                )
+            })
+        });
+        if let Some((a, b)) = ends {
+            let col = egui::Color32::from_rgb(0xff, 0xd0, 0x40);
+            painter.line_segment(
+                [a, b],
+                egui::Stroke::new(4.0, egui::Color32::from_black_alpha(160)),
+            );
+            painter.line_segment([a, b], egui::Stroke::new(2.0, col));
+            for (p, t) in [(a, "A"), (b, "B")] {
+                painter.circle_filled(p, 8.0, egui::Color32::from_black_alpha(190));
+                painter.text(
+                    p,
+                    egui::Align2::CENTER_CENTER,
+                    t,
+                    egui::FontId::monospace(11.0),
+                    col,
+                );
+            }
+        }
         self.draw_overlays(&painter, rect, out.hovered);
 
         let after = (

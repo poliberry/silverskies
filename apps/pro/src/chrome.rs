@@ -195,6 +195,35 @@ pub fn function_keys(ui: &mut Ui, sh: &Shared, cmds: &mut Vec<Command>) {
         });
 }
 
+/// Height of the radar controls strip under the function keys.
+pub const RADAR_BAR_H: f32 = 34.0;
+
+/// The strip under the function keys that holds the 2D radar's controls
+/// (playback, layers, legend), when the radar is in the main window.
+/// Returns where the radar should draw them.
+pub fn radar_bar(ui: &mut Ui, sh: &Shared) -> Option<egui::Rect> {
+    sh.layout.find(ss_core::PanelKind::Radar)?;
+    let p = sh.palette;
+    let r = egui::Panel::top("radar_bar")
+        .exact_size(RADAR_BAR_H)
+        .resizable(false)
+        .frame(
+            egui::Frame::NONE
+                .fill(c32(p.bg))
+                .inner_margin(egui::Margin::symmetric(8, 2)),
+        )
+        .show(ui, |ui| {
+            let r = ui.max_rect();
+            ui.painter().hline(
+                r.x_range(),
+                r.bottom() + 1.5,
+                egui::Stroke::new(1.0, c32a(p.border)),
+            );
+            r
+        });
+    Some(r.inner)
+}
+
 fn fkey_width(ui: &Ui, font: &FontId, n: usize, label: Option<&str>) -> f32 {
     let w = |t: String| {
         ui.painter()

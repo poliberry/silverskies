@@ -28,11 +28,13 @@ You can zoom in like a real map, from the whole globe down to street level (zoom
 - **Level II · every tilt** — the radar's full-resolution volume scan, decoded in the app: reflectivity, velocity, storm-relative velocity, correlation coefficient (CC) and differential reflectivity (ZDR). Step through the tilts with − and + (or `:tilt 3`, `:tilt up`); the elevation angle and scan time are shown. Refreshes every few minutes. `:level2 vel` (`:l2 srv`, `:l2 off`, …) does the same from the command line.
 - **NWS images · lowest tilt** — the National Weather Service's ready-made images (base reflectivity and velocity, hydrometeor classification, rainfall totals).
 
+**Cross sections:** with a Level II product showing, click the ruler icon in the radar bar (next to the layer toggles) and drag a line across a storm. A window shows the vertical slice under the line, from the ground to 16 km, in the same product: each point is taken from the tilt(s) the radar measured it with (close tilts blended, gaps between far-apart high tilts left empty), so you see the real structure: the height of the core, overhangs, the echo top. A and B mark the ends on the map; closing the window clears the line.
+
 Velocity is green toward the radar and red away; storm-relative velocity subtracts the average motion of the storm cells the radar is tracking, so rotation (green beside red) stands out. Velocity isn't dealiased: very fast winds can fold over to the opposite colour. Low CC inside a strong echo can mean hail or tornado debris.
 
 ## Pro: layers
 
-The floating control box in Pro has playback (back, play/pause, forward, **LIVE**), a frame slider, the colour scheme and icon toggles for the most-used layers. Everything else is in Settings → Radar or `:layer`.
+The radar bar, under the function keys in Pro's main window, has playback (back, play/pause, forward, **LIVE**) and the frame slider (or, on a single NEXRAD site, the product, tilt and cross-section tool), the colour scheme, icon toggles for the most-used layers (amber = on) and the legend. Nothing sits over the map. A radar in its own window keeps these controls under its map. Everything else is in Settings → Radar or `:layer`.
 
 | Layer | Source | Coverage |
 |---|---|---|

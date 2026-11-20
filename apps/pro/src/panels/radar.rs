@@ -277,6 +277,9 @@ pub struct RadarPanel {
     nexrad_cfg: Option<(String, RadarProduct)>,
     /// Level II products drawn here.
     l2: super::l2map::L2Map,
+    /// The cross section under the drawn line, and its length (km).
+    xs: super::l2map::XsWorker,
+    xs_tex: Option<(egui::TextureHandle, f32)>,
     last_wind_req: Option<(BBox, f64)>,
     last_alert_req: Option<(BBox, f64)>,
     view_sig: (u64, u64, u64),
@@ -396,6 +399,8 @@ impl RadarPanel {
             storms_sig: 0,
             nexrad_cfg: None,
             l2: Default::default(),
+            xs: Default::default(),
+            xs_tex: None,
             last_wind_req: None,
             last_alert_req: None,
             view_sig: (0, 0, 0),
@@ -811,63 +816,38 @@ impl Panel for RadarPanel {
             (ui.available_height() - below).max(64.0)
         };
         let r = ui.allocate_ui(vec2(w, map_h), |ui| self.map.show(ui)).inner;
+        self.cross_section_window(ui.ctx(), ui.scope_id().with("xsect"), &rs, &cx.palette);
 
-        if let Some(slot) = slot {
-            let box_h = 8.0
-                + BAR_H
-                + LAYERS_GAP
-                + LAYERS_H
-                + if stops.is_some() {
-                    LAYERS_GAP + LEGEND_H
-                } else {
-                    0.0
-                }
-                + 8.0;
-            let box_h = box_h.min(slot.height());
-            let bx = egui::Rect::from_min_max(
-                egui::pos2(slot.left(), slot.bottom() - box_h),
-                slot.right_bottom(),
-            );
-            ui.painter().rect_filled(
-                bx,
-                0.0,
-                Color32::from_rgba_unmultiplied(p.surface[0], p.surface[1], p.surface[2], 232),
-            );
-            ui.painter().rect_stroke(
-                bx,
-                0.0,
-                egui::Stroke::new(1.0, c32a(p.border)),
-                egui::StrokeKind::Inside,
-            );
-            // Block the map underneath the controls.
-            ui.interact(
-                bx,
-                egui::Id::unique("radar_controls_card"),
-                egui::Sense::click_and_drag(),
-            );
-            let inner = bx.shrink2(vec2(6.0, 4.0));
+        if let Some(bar) = slot {
+            // In the strip under the function keys: one row.
             let mut child = ui.new_child(
                 egui::UiBuilder::new()
                     .id_salt("radar_controls_body")
-                    .max_rect(inner)
-                    .layout(Layout::top_down(Align::Min)),
+                    .max_rect(bar)
+                    .layout(Layout::left_to_right(Align::Center)),
             );
-            child.set_clip_rect(bx.intersect(ui.clip_rect()));
-            let inner_w = inner.width();
+            child.set_clip_rect(bar);
+            child.spacing_mut().item_spacing.x = 6.0;
+            // Layers and legend take what they need; playback (with its
+            // time slider) gets the rest.
+            let n_icons = layer_toggles(&rs).len() as f32 + 1.0;
+            let layers_w = 112.0 + n_icons * 24.0;
+            let legend_w = if stops.is_some() { 300.0 } else { 0.0 };
+            let ctrl_w = (bar.width() - layers_w - legend_w - 40.0).max(300.0);
             child.allocate_ui_with_layout(
-                vec2(inner_w, BAR_H),
+                vec2(ctrl_w, BAR_H),
                 Layout::left_to_right(Align::Center),
                 |ui| self.control_bar(ui, cx, &rs, &frames),
             );
-            child.add_space(LAYERS_GAP);
+            child.separator();
             child.allocate_ui_with_layout(
-                vec2(inner_w, LAYERS_H),
+                vec2(layers_w, LAYERS_H),
                 Layout::left_to_right(Align::Center),
-                |ui| self.layers_bar(ui, cx, &rs),
+                |ui| self.layers_bar_inner(ui, cx, &rs, false),
             );
             if let Some(s) = &stops {
-                child.add_space(LAYERS_GAP);
-                draw_color_legend(&mut child, "dBZ", s);
+                child.separator();
+                ss_map::draw_color_legend_inline(&mut child, "dBZ", s);
             }
         } else {
             ui.allocate_ui_with_layout(
@@ -1009,10 +989,6 @@ impl Panel for RadarPanel {
     }
 }
 
-fn mono_button(ui: &mut Ui, text: RichText) -> egui::Response {
-    ui.add(egui::Button::new(text.monospace()))
-}
-
 /// A square icon button; `active` draws it in the accent colour.
 fn icon_button(
     ui: &mut Ui,
@@ -1026,19 +1002,14 @@ fn icon_button(
         Some(false) => c32a(p.text3),
         None => c32(p.text),
     };
-    let mut b = egui::Button::new(
+    // Bare icons: amber when on, grey when off.
+    let b = egui::Button::new(
         RichText::new(glyph)
             .font(crate::theme::icon(17.0))
             .color(color),
     )
-    .min_size(vec2(26.0, 22.0));
-    if active == Some(true) {
-        b = b
-            .fill(Color32::from_rgba_unmultiplied(
-                p.a0[0], p.a0[1], p.a0[2], 40,
-            ))
-            .stroke(egui::Stroke::new(1.0, c32(p.a0)));
-    }
+    .frame(false)
+    .min_size(vec2(22.0, 22.0));
     let r = ui.add(b);
     r.on_hover_text(tip)
 }
@@ -1084,6 +1055,10 @@ impl RadarPanel {
                 l.visible = false;
             }
             self.l2.clear();
+            self.xs.clear();
+            self.xs_tex = None;
+            self.map.line = None;
+            self.map.line_mode = false;
             return;
         };
         let sh = &mut *cx.shared;
@@ -1099,6 +1074,17 @@ impl RadarPanel {
             return;
         };
         let motion = super::radar3d::motion_for_site(&sh.storm_cells, &site);
+        if let Some(line) = self.map.line {
+            if let Some(x) = self.xs.update(&scan, product, line, motion) {
+                self.xs_tex = x.map(|x| {
+                    let tex = ctx.load_texture("xsect", x.image, egui::TextureOptions::LINEAR);
+                    (tex, x.length_km)
+                });
+            }
+            if self.xs.busy() {
+                ctx.request_repaint_after(Duration::from_millis(100));
+            }
+        }
         let done = self.l2.update(&scan, product, rs.level2_tilt, motion);
         if self.l2.busy() {
             ctx.request_repaint_after(Duration::from_millis(100));
@@ -1113,6 +1099,120 @@ impl RadarPanel {
             }
             l.visible = true;
             l.opacity = 1.0;
+        }
+    }
+
+    /// The cross section under the drawn line, in a window over the radar.
+    fn cross_section_window(
+        &mut self,
+        ctx: &egui::Context,
+        id: egui::Id,
+        rs: &RadarSettings,
+        p: &ss_core::theme::Palette,
+    ) {
+        let (Some((tex, len)), Some(product)) = (&self.xs_tex, rs.level2) else {
+            return;
+        };
+        if self.map.line.is_none() {
+            return;
+        }
+        let (tex_id, len) = (tex.id(), *len);
+        let mut open = true;
+        egui::Window::new(format!("Cross section · {}", product.label()))
+            .id(id)
+            .open(&mut open)
+            .default_size(vec2(640.0, 300.0))
+            .resizable(true)
+            .collapsible(false)
+            .show(ctx, |ui| {
+                let avail = ui.available_size();
+                let (rect, _) = ui.allocate_exact_size(
+                    vec2(avail.x.max(300.0), (avail.y - 6.0).max(160.0)),
+                    egui::Sense::hover(),
+                );
+                let plot = egui::Rect::from_min_max(
+                    rect.min + vec2(34.0, 4.0),
+                    rect.max - vec2(6.0, 18.0),
+                );
+                let painter = ui.painter_at(rect);
+                painter.rect_filled(plot, 0.0, Color32::from_rgb(10, 12, 18));
+                painter.image(
+                    tex_id,
+                    plot,
+                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                    Color32::WHITE,
+                );
+                let font = egui::FontId::monospace(10.0);
+                let faint = c32a(p.text3);
+                let top = super::l2map::XS_TOP_KM;
+                for km in (0..=top as i32).step_by(4) {
+                    let y = plot.bottom() - plot.height() * km as f32 / top;
+                    painter.hline(
+                        plot.x_range(),
+                        y,
+                        egui::Stroke::new(0.5, Color32::from_white_alpha(28)),
+                    );
+                    painter.text(
+                        egui::pos2(plot.left() - 4.0, y),
+                        egui::Align2::RIGHT_CENTER,
+                        format!("{km}"),
+                        font.clone(),
+                        faint,
+                    );
+                }
+                painter.text(
+                    egui::pos2(rect.left(), plot.top()),
+                    egui::Align2::LEFT_TOP,
+                    "km",
+                    font.clone(),
+                    faint,
+                );
+                let step = if len > 150.0 {
+                    50.0
+                } else if len > 60.0 {
+                    20.0
+                } else {
+                    10.0
+                };
+                let mut d = 0.0;
+                while d <= len + 0.1 {
+                    let x = plot.left() + plot.width() * d / len.max(0.1);
+                    painter.text(
+                        egui::pos2(x, plot.bottom() + 2.0),
+                        egui::Align2::CENTER_TOP,
+                        format!("{d:.0}"),
+                        font.clone(),
+                        faint,
+                    );
+                    d += step;
+                }
+                let gold = Color32::from_rgb(0xff, 0xd0, 0x40);
+                painter.text(
+                    plot.left_top() + vec2(4.0, 2.0),
+                    egui::Align2::LEFT_TOP,
+                    "A",
+                    font.clone(),
+                    gold,
+                );
+                painter.text(
+                    plot.right_top() + vec2(-4.0, 2.0),
+                    egui::Align2::RIGHT_TOP,
+                    "B",
+                    font.clone(),
+                    gold,
+                );
+                painter.text(
+                    egui::pos2(plot.right(), plot.bottom() + 2.0),
+                    egui::Align2::RIGHT_TOP,
+                    format!("{len:.0} km"),
+                    font,
+                    faint,
+                );
+            });
+        if !open {
+            self.map.line = None;
+            self.xs.clear();
+            self.xs_tex = None;
         }
     }
 
@@ -1182,9 +1282,7 @@ impl RadarPanel {
             return;
         }
         let tilt = rs.level2_tilt.min(n - 1);
-        if mono_button(ui, RichText::new("−"))
-            .on_hover_text("Lower tilt")
-            .clicked()
+        if icon_button(ui, &p, ss_assets::symbols::CHEVRON_LEFT, None, "Lower tilt").clicked()
             && tilt > 0
         {
             cx.shared.config.radar.level2_tilt = tilt - 1;
@@ -1196,9 +1294,14 @@ impl RadarPanel {
                 .color(c32(p.a0)),
         )
         .on_hover_text(format!("Tilt {} of {n}", tilt + 1));
-        if mono_button(ui, RichText::new("+"))
-            .on_hover_text("Higher tilt")
-            .clicked()
+        if icon_button(
+            ui,
+            &p,
+            ss_assets::symbols::CHEVRON_RIGHT,
+            None,
+            "Higher tilt",
+        )
+        .clicked()
             && tilt + 1 < n
         {
             cx.shared.config.radar.level2_tilt = tilt + 1;
@@ -1208,6 +1311,7 @@ impl RadarPanel {
             .map(|t| t.with_timezone(&chrono::Local).format("%H:%M").to_string())
             .unwrap_or_default();
         ui.label(RichText::new(time).monospace().color(c32a(p.text3)));
+
         // The product's colours (reflectivity has the usual legend).
         if product != L2Product::Reflectivity {
             let (lo, hi) = product.moment().range();
@@ -1272,7 +1376,15 @@ impl RadarPanel {
                         .color(c32(p.danger)),
                 );
             }
-            if mono_button(ui, RichText::new("[COMPOSITE]")).clicked() {
+            if icon_button(
+                ui,
+                &p,
+                ss_assets::symbols::MAP,
+                None,
+                "Back to the composite radar",
+            )
+            .clicked()
+            {
                 cx.emit.push(Command::Site(None));
             }
             return;
@@ -1310,7 +1422,11 @@ impl RadarPanel {
             live_text.color(c32a(p.text3))
         };
         if ui
-            .add(egui::Button::new(live_text).min_size(vec2(0.0, 22.0)))
+            .add(
+                egui::Button::new(live_text)
+                    .frame(false)
+                    .min_size(vec2(0.0, 22.0)),
+            )
             .on_hover_text("Jump to the newest frame")
             .clicked()
         {
@@ -1343,6 +1459,18 @@ impl RadarPanel {
     /// through the normal pipeline (dirty config + log). Wrapped in a
     /// horizontal scroll so the 240 px docked slot still fits everything.
     fn layers_bar(&mut self, ui: &mut Ui, cx: &mut PanelCx, rs: &RadarSettings) {
+        self.layers_bar_inner(ui, cx, rs, true);
+    }
+
+    /// The layers row; `scroll` wraps it in a horizontal scroll area (the
+    /// narrow docked pane), otherwise it takes its natural width.
+    fn layers_bar_inner(
+        &mut self,
+        ui: &mut Ui,
+        cx: &mut PanelCx,
+        rs: &RadarSettings,
+        scroll: bool,
+    ) {
         let p = cx.palette;
         let schemes = scheme_options(cx.shared.weather_maps.as_ref());
         let cur_name = schemes
@@ -1350,11 +1478,20 @@ impl RadarPanel {
             .find(|(id, _)| *id == rs.color_scheme)
             .map(|(id, n)| format!("{id}:{n}"))
             .unwrap_or_else(|| format!("{}", rs.color_scheme));
-        egui::ScrollArea::horizontal()
-            .id_salt("radar_layers_scroll")
-            .auto_shrink([false, true])
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
+        let row = |ui: &mut Ui| {
+            ui.horizontal(|ui| {
+                    // Cross sections need a Level II scan.
+                    if rs.nexrad_site.is_some() && rs.level2.is_some() {
+                        let armed = self.map.line_mode;
+                        let tip = if armed {
+                            "Cross section: now drag a line across a storm"
+                        } else {
+                            "Cross section: click, then drag a line across a storm to see it from the side"
+                        };
+                        if icon_button(ui, &p, ss_assets::symbols::STRAIGHTEN, Some(armed), tip).clicked() {
+                            self.map.line_mode = !armed;
+                        }
+                    }
                     egui::ComboBox::from_id_salt("radar_scheme")
                         .selected_text(RichText::new(cur_name).monospace().size(11.0))
                         .width(92.0)
@@ -1376,7 +1513,15 @@ impl RadarPanel {
                         }
                     }
                 });
-            });
+        };
+        if scroll {
+            egui::ScrollArea::horizontal()
+                .id_salt("radar_layers_scroll")
+                .auto_shrink([false, true])
+                .show(ui, row);
+        } else {
+            row(ui);
+        }
     }
 
     /// Auto-load alerts for the visible area when the view moved or the data is old.

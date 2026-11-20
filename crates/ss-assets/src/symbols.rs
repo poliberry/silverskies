@@ -54,6 +54,7 @@ pub const SETTINGS: &str = "\u{e8b8}";
 pub const SKIP_NEXT: &str = "\u{e044}";
 pub const SKIP_PREVIOUS: &str = "\u{e045}";
 pub const STACKED_LINE_CHART: &str = "\u{f22b}";
+pub const STRAIGHTEN: &str = "\u{e41c}";
 pub const STORM: &str = "\u{f070}";
 pub const SYNC: &str = "\u{e627}";
 pub const THERMOSTAT: &str = "\u{f076}";
@@ -118,6 +119,7 @@ pub const ALL: &[&str] = &[
     SKIP_PREVIOUS,
     STACKED_LINE_CHART,
     STORM,
+    STRAIGHTEN,
     SYNC,
     THERMOSTAT,
     THUNDERSTORM,

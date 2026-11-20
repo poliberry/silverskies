@@ -4,6 +4,65 @@ use egui::epaint::{Vertex, WHITE_UV};
 use egui::{vec2, Align2, Color32, FontId, Mesh, Rect, Sense, Shape, Stroke, StrokeKind, Ui};
 
 /// Horizontal gradient bar with monospace labels. Stops with an empty label get no text.
+/// A one-line legend: the title, then the colour bar with its labels
+/// underneath (for toolbars).
+pub fn draw_color_legend_inline(ui: &mut Ui, title: &str, stops: &[(Color32, &str)]) {
+    if stops.len() < 2 {
+        return;
+    }
+    let width = ui.available_width().clamp(120.0, 300.0);
+    let (rect, _) = ui.allocate_exact_size(vec2(width, 26.0), Sense::hover());
+    let painter = ui.painter_at(rect);
+    let fg = ui.visuals().text_color();
+    let title_w = 34.0;
+    painter.text(
+        egui::pos2(rect.left(), rect.center().y),
+        Align2::LEFT_CENTER,
+        title,
+        FontId::monospace(10.5),
+        fg,
+    );
+    let bar = Rect::from_min_max(
+        egui::pos2(rect.left() + title_w, rect.top() + 4.0),
+        egui::pos2(rect.right() - 4.0, rect.top() + 12.0),
+    );
+    let n = stops.len();
+    let x_at = |i: usize| bar.left() + bar.width() * i as f32 / (n - 1) as f32;
+    let mut mesh = Mesh::default();
+    for (i, (c, _)) in stops.iter().enumerate() {
+        let x = x_at(i);
+        mesh.vertices.push(Vertex {
+            pos: egui::pos2(x, bar.top()),
+            uv: WHITE_UV,
+            color: *c,
+        });
+        mesh.vertices.push(Vertex {
+            pos: egui::pos2(x, bar.bottom()),
+            uv: WHITE_UV,
+            color: *c,
+        });
+    }
+    for i in 0..n as u32 - 1 {
+        let k = i * 2;
+        mesh.indices
+            .extend_from_slice(&[k, k + 1, k + 3, k, k + 3, k + 2]);
+    }
+    painter.add(egui::Shape::mesh(mesh));
+    let step = (n / 6).max(1);
+    for (i, (_, label)) in stops.iter().enumerate() {
+        if label.is_empty() || (i % step != 0 && i != n - 1) {
+            continue;
+        }
+        painter.text(
+            egui::pos2(x_at(i), bar.bottom() + 1.0),
+            Align2::CENTER_TOP,
+            *label,
+            FontId::monospace(9.0),
+            fg,
+        );
+    }
+}
+
 pub fn draw_color_legend(ui: &mut Ui, title: &str, stops: &[(Color32, &str)]) {
     if stops.is_empty() {
         return;

@@ -17,16 +17,12 @@ use crate::tasks::Tasks;
 use crate::theme::{c32, c32a, on, PRO_BAR, PRO_BLUE};
 
 pub const TITLE_H: f32 = 24.0;
-const MARGIN: f32 = 12.0;
 /// Gap between docked panes (the black background shows through).
 const DOCK_GAP: f32 = 4.0;
 /// Width of the right-hand tool strip.
 pub const STRIP_W: f32 = 46.0;
 const MIN_SIDE_W: f32 = 240.0;
 const CARD_ALPHA: u8 = 255;
-/// Height of the radar backdrop's floating controls slot (bottom-left).
-/// Sized for the two-row transport + layers box plus the dBZ legend.
-pub const CONTROLS_H: f32 = 120.0;
 const COLUMNS: [Column; 3] = [Column::Left, Column::Center, Column::Right];
 
 #[derive(Default)]
@@ -314,16 +310,6 @@ pub fn dock(area: Rect, layout: &Layout, console_h: f32) -> Dock {
     }
 }
 
-/// Where the radar draws its transport/legend box: bottom-left of the viewport.
-pub fn controls_slot(area: Rect, layout: &Layout, console_h: f32) -> Rect {
-    let v = dock(area, layout, console_h).viewport;
-    let w = v.width().min(500.0) - 2.0 * MARGIN;
-    Rect::from_min_size(
-        pos2(v.left() + MARGIN, v.bottom() - MARGIN - CONTROLS_H),
-        vec2(w.max(0.0), CONTROLS_H),
-    )
-}
-
 /// The command console strip under the bottom dock.
 pub fn cmdbar_rect(area: Rect, layout: &Layout, height: f32) -> Rect {
     dock(area, layout, height).console
@@ -580,7 +566,7 @@ pub fn show(
             emit,
             req,
             location,
-            Some(controls_slot(area, &layout, console_h)),
+            shared.radar_bar,
         );
         // Viewport frame: grey outline with an amber function tag.
         ui.painter().rect_stroke(
@@ -884,16 +870,6 @@ mod tests {
         assert_eq!(d.viewport.left(), area.left());
         assert_eq!(d.bottom.height(), 0.0);
         assert!((d.viewport.bottom() - (d.console.top() - DOCK_GAP)).abs() < 0.01);
-    }
-
-    #[test]
-    fn controls_slot_sits_in_the_viewport() {
-        let area = Rect::from_min_max(pos2(0.0, 40.0), pos2(1400.0, 900.0));
-        let l = layout();
-        let s = controls_slot(area, &l, 80.0);
-        let v = dock(area, &l, 80.0).viewport;
-        assert!(v.contains_rect(s));
-        assert!((s.height() - CONTROLS_H).abs() < 0.01);
     }
 
     #[test]

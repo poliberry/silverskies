@@ -1178,6 +1178,7 @@ impl eframe::App for App {
                 .response
                 .rect;
             crate::chrome::function_keys(ui, &sh, &mut main_cmds);
+            sh.radar_bar = crate::chrome::radar_bar(ui, &sh);
             crate::chrome::ticker(ui, &sh);
             let cmd_h = self.cmdbar.panel_height(h);
             let phase = sh
