@@ -135,6 +135,16 @@ pub enum RadioStatus {
     },
 }
 
+/// A placefile's latest read: the file (if any read worked), when it
+/// was last asked for, whether a read is in flight, and the last error.
+#[derive(Default)]
+pub struct PlacefileState {
+    pub pf: Option<std::sync::Arc<ss_core::placefile::Placefile>>,
+    pub requested: Option<std::time::Instant>,
+    pub pending: bool,
+    pub error: Option<String>,
+}
+
 /// How long lightning flashes are kept and shown, seconds.
 pub const LIGHTNING_KEEP_S: i64 = 15 * 60;
 
@@ -206,6 +216,10 @@ pub struct Shared {
     >,
     pub tracks_requested: HashMap<(ss_net::mrms::TrackKind, u32), std::time::Instant>,
     pub tracks_pending: std::collections::HashSet<ss_net::mrms::TrackKind>,
+    /// Loaded placefiles by URL.
+    pub placefiles: HashMap<String, PlacefileState>,
+    /// Icon sheets by URL (shared between placefiles, fetched once).
+    pub placefile_sheets: HashMap<String, (std::sync::Arc<egui::ColorImage>, bool)>,
     /// The last Xweather lightning check: when, and strikes found or the
     /// error; and a request to check now (from Settings).
     pub xweather_status: Option<(chrono::DateTime<chrono::Local>, Result<usize, String>)>,
@@ -313,6 +327,8 @@ impl Shared {
             tracks_requested: HashMap::new(),
             tracks_pending: Default::default(),
             arrivals: Vec::new(),
+            placefiles: HashMap::new(),
+            placefile_sheets: HashMap::new(),
             xweather_status: None,
             xweather_check_now: false,
             sat_latest: HashMap::new(),

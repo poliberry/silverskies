@@ -115,6 +115,8 @@ pub struct SettingsState {
     show_ai_key: bool,
     show_xw_id: bool,
     show_xw_secret: bool,
+    /// The URL being typed into the placefile box.
+    pf_url: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -453,7 +455,10 @@ pub fn settings_ui(
                             sources_tab(ui, &mut sh.config, p, st);
                             noncommercial_card(ui, sh, p, st);
                         }
-                        Tab::Radar => radar_tab(ui, sh, p, st),
+                        Tab::Radar => {
+                            radar_tab(ui, sh, p, st);
+                            placefiles_card(ui, sh, p, st);
+                        }
                         Tab::Alerts => alerts_tab(ui, &mut sh.config, p, st),
                         Tab::Radio => radio_tab(ui, &mut sh.config, p),
                         Tab::Ai => ai_tab(ui, &mut sh.config.ai, p, st),
@@ -719,6 +724,93 @@ fn sources_tab(ui: &mut Ui, cfg: &mut Config, p: &Palette, st: &mut SettingsStat
         p,
         "Keys are stored in your Silver Skies config file and only sent to their own service. \
          Storm cells, storm reports, tropical cyclones, soundings and terrain use free services that need no key.",
+    );
+}
+
+/// GRLevelX placefiles: the list, and a box to add one.
+fn placefiles_card(ui: &mut Ui, sh: &mut Shared, p: &Palette, st: &mut SettingsState) {
+    let mut remove = None;
+    let mut add = None;
+    kit::card(ui, p, "Placefiles", |ui| {
+        let mut rows = Rows::new();
+        let list = sh.config.radar.placefiles.clone();
+        for (i, src) in list.iter().enumerate() {
+            let state = sh.placefiles.get(&src.url);
+            let title = state
+                .and_then(|s| s.pf.as_ref())
+                .map(|f| f.title.clone())
+                .filter(|t| !t.trim().is_empty())
+                .unwrap_or_else(|| src.url.clone());
+            let help = match state {
+                Some(s) if s.error.is_some() => {
+                    format!("{} · {}", src.url, s.error.clone().unwrap_or_default())
+                }
+                Some(s) if s.pf.is_some() => {
+                    let n = s.pf.as_ref().map_or(0, |f| f.items.len());
+                    format!("{} · {n} items", src.url)
+                }
+                _ if src.enabled => format!("{} · loading…", src.url),
+                _ => src.url.clone(),
+            };
+            rows.next(ui, p);
+            kit::row(ui, p, &title, Some(&help), SWITCH_W + 70.0, |ui| {
+                ui.horizontal(|ui| {
+                    if kit::button(ui, p, "Remove").clicked() {
+                        remove = Some(i);
+                    }
+                    let mut on = src.enabled;
+                    if kit::toggle(ui, p, &mut on).changed() {
+                        sh.config.radar.placefiles[i].enabled = on;
+                    }
+                });
+            });
+        }
+        rows.next(ui, p);
+        kit::row(
+            ui,
+            p,
+            "Add a placefile",
+            Some("Its URL (http or https), e.g. a spotter network or IEM feed"),
+            FIELD_W,
+            |ui| {
+                ui.horizontal(|ui| {
+                    let r = kit::text_field(ui, p, &mut st.pf_url, "https://…", FIELD_W - 60.0);
+                    let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    if kit::button(ui, p, "Add").clicked() || enter {
+                        add = Some(st.pf_url.trim().to_string());
+                    }
+                });
+            },
+        );
+    });
+    if let Some(i) = remove {
+        let src = sh.config.radar.placefiles.remove(i);
+        sh.placefiles.remove(&src.url);
+    }
+    if let Some(url) = add.filter(|u| !u.is_empty()) {
+        if !(url.starts_with("http://") || url.starts_with("https://")) {
+            st.notice = Some((
+                true,
+                "A placefile URL must start with http:// or https://".into(),
+            ));
+        } else if !sh.config.radar.placefiles.iter().any(|p| p.url == url) {
+            sh.config
+                .radar
+                .placefiles
+                .push(ss_core::types::PlacefileSource { url, enabled: true });
+            st.pf_url.clear();
+        }
+    }
+    if let Some((true, text)) = &st.notice {
+        if text.starts_with("A placefile URL") {
+            warn(ui, p, &text.clone());
+        }
+    }
+    note(
+        ui,
+        p,
+        "Placefiles are the GRLevelX overlay format: spotter positions, reports, warning tracks, station plots and more. \
+         Each refreshes on its own schedule; hover an icon for its details. The command :placefile add URL does the same.",
     );
 }
 

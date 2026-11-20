@@ -106,6 +106,21 @@ Two layers from NOAA's Multi-Radar Multi-Sensor system (MRMS), which merges ever
 
 Choose how far back they reach in Settings → Radar → *Track period* or with `:period` (30 min, 1, 2, 4, 6 or 24 h; default 2 h). They refresh every few minutes. Hover the map for the value under the pointer, e.g. *hail up to 1.75 in (44 mm) · last 2 h*. Single isolated pixels (usually clutter) are left out. The values are radar estimates: compare with storm reports.
 
+## Pro: placefiles
+
+Pro reads **placefiles**, the plain-text overlay format GRLevelX made popular and many feeds publish: spotter positions, local reports, warning tracks, station plots, storm attributes, your own annotations. Add one in Settings → Radar → *Placefiles* (paste its URL) or with `:placefile add URL`; `:placefile list`, `:placefile toggle N` and `:placefile remove N` manage them.
+
+What's drawn: lines, filled polygons and triangles, text, places, and icons from icon sheets (rotated, e.g. wind barbs; white-on-black sheets are drawn in the file's colour, as GRLevelX does), including `Object` groups placed by pixel offsets around a point. Each item appears only when you're zoomed in past its `Threshold`. Each file refreshes on its own `Refresh` interval (5 minutes if it doesn't say; at least 30 seconds). Hover an icon, a text or a line for its details. `Image` and `Raster` lines aren't supported.
+
+Some public placefiles:
+
+| Feed | URL |
+|---|---|
+| Spotter Network positions | `https://www.spotternetwork.org/feeds/gr.txt` |
+| IEM NEXRAD storm attributes | `https://mesonet.agron.iastate.edu/request/grx/l3attr.txt` |
+| IEM warning time-motion-location | `https://mesonet.agron.iastate.edu/request/grx/time_mot_loc.txt` |
+| IEM Iowa station plots | `https://mesonet.agron.iastate.edu/request/grx/asos.php` |
+
 ## Pro: NEXRAD single site
 
 `:site KTLX` (or Settings → Radar) switches from the composite to one US radar via NOAA's NCEP GeoServer, with a choice of product (`:product`): **Reflectivity**, **Velocity**, **Hydrometeor classification**, **Storm total precipitation**, **1-hour accumulation**. `:site` with no argument returns to the composite.

@@ -289,6 +289,9 @@ pub struct RadarPanel {
     sat_time: Option<i64>,
     /// The basemap's own credit line.
     base_attribution: String,
+    /// Icon sheet textures by URL, and which placefiles the layer holds.
+    pf_textures: std::collections::HashMap<String, (egui::TextureHandle, [usize; 2], bool)>,
+    pf_sig: Vec<usize>,
     last_wind_req: Option<(BBox, f64)>,
     last_alert_req: Option<(BBox, f64)>,
     view_sig: (u64, u64, u64),
@@ -428,6 +431,7 @@ impl RadarPanel {
         l.push(PolygonLayer::new("tc-swaths"));
         l.push(StormLayer::new("storm-reports"));
         l.push(StormLayer::new("storm-cells"));
+        l.push(ss_map::PlacefileLayer::new("placefiles"));
         l.push(StormLayer::new("tropical"));
         l.push(MarkerLayer::new("locations"));
         l.push(MarkerLayer::new("radar-sites"));
@@ -450,6 +454,8 @@ impl RadarPanel {
             track_keys: Default::default(),
             sat_time: None,
             base_attribution: ss_map::attribution_for(ss_map::Basemap::Map).to_string(),
+            pf_textures: Default::default(),
+            pf_sig: Vec::new(),
             last_wind_req: None,
             last_alert_req: None,
             view_sig: (0, 0, 0),
@@ -1060,6 +1066,12 @@ impl Panel for RadarPanel {
                         .and_then(|l| l.hit_test(h, 10.0, &vp, r.rect))
                         .map(|m| m.tooltip.clone())
                 });
+            let storm_tip = storm_tip.or_else(|| {
+                self.map
+                    .layers
+                    .get_mut::<ss_map::PlacefileLayer>("placefiles")
+                    .and_then(|l| l.hit_test(h, &vp, r.rect))
+            });
             let tip = storm_tip.or_else(|| {
                 ["alerts", "md", "spc-outlook", "tc-swaths"]
                     .iter()
@@ -2070,6 +2082,53 @@ impl RadarPanel {
             }
         }
         layers.set_visible("barbs", rs.wind_barbs);
+
+        // --- placefiles ---
+        let shown: Vec<std::sync::Arc<ss_core::placefile::Placefile>> = rs
+            .placefiles
+            .iter()
+            .filter(|p| p.enabled)
+            .filter_map(|p| sh.placefiles.get(&p.url).and_then(|s| s.pf.clone()))
+            .collect();
+        let sig: Vec<usize> = shown
+            .iter()
+            .map(|p| Arc::as_ptr(p) as usize)
+            .chain(std::iter::once(sh.placefile_sheets.len()))
+            .collect();
+        if sig != self.pf_sig {
+            self.pf_sig = sig;
+            let mut files = Vec::new();
+            for pf in shown {
+                let mut sheets = Vec::new();
+                for f in &pf.icon_files {
+                    if !self.pf_textures.contains_key(&f.url) {
+                        if let Some((img, tint)) = sh.placefile_sheets.get(&f.url) {
+                            let tex = ctx.load_texture(
+                                format!("pf:{}", f.url),
+                                (**img).clone(),
+                                egui::TextureOptions::LINEAR,
+                            );
+                            self.pf_textures
+                                .insert(f.url.clone(), (tex, img.size, *tint));
+                        }
+                    }
+                    if let Some((tex, size, tint)) = self.pf_textures.get(&f.url) {
+                        sheets.push((
+                            f.number,
+                            ss_map::Sheet {
+                                tex: tex.clone(),
+                                size: *size,
+                                tint: *tint,
+                            },
+                        ));
+                    }
+                }
+                files.push(ss_map::LoadedPlacefile { pf, sheets });
+            }
+            if let Some(l) = layers.get_mut::<ss_map::PlacefileLayer>("placefiles") {
+                l.files = files;
+            }
+        }
 
         // --- hail and rotation tracks ---
         for (kind, name, on) in [

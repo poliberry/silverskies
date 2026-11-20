@@ -7,6 +7,7 @@ pub mod heights;
 pub mod layers;
 pub mod legend;
 pub mod map;
+pub mod placefile_layer;
 pub mod radar_loop;
 pub mod storm_layer;
 pub mod tiles;
@@ -21,6 +22,7 @@ pub use layers::{
 };
 pub use legend::{draw_color_legend, draw_color_legend_inline, radar_dbz_stops};
 pub use map::{attribution_for, distance_label, MapResponse, MapWidget, BACKGROUND};
+pub use placefile_layer::{LoadedPlacefile, PlacefileLayer, Sheet};
 pub use radar_loop::{LoopClock, LoopFrameSource, RadarLoopLayer, TileUrlFn};
 pub use storm_layer::{StormLayer, StormMark, StormShape};
 pub use tiles::{TileCache, TileKey, TileState, TileStats};

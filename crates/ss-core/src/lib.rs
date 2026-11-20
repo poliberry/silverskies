@@ -10,6 +10,7 @@ pub mod cells;
 pub mod command;
 pub mod geo;
 pub mod opera;
+pub mod placefile;
 pub mod radar3d;
 pub mod same;
 pub mod sounding;

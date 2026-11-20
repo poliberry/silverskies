@@ -53,6 +53,16 @@ pub enum RadioCmd {
 }
 
 /// `:tilt` argument.
+/// `:placefile …`
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlacefileCmd {
+    Add(String),
+    /// By 1-based number in the list.
+    Remove(usize),
+    Toggle(usize),
+    List,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TiltArg {
     /// Tilt index, 0 = lowest.
@@ -128,6 +138,7 @@ pub enum Command {
     TrackPeriod(u32),
     /// What the satellite layer shows.
     Sat(crate::types::SatProduct),
+    Placefile(PlacefileCmd),
     Site(Option<String>),
     Play,
     Pause,
@@ -311,6 +322,12 @@ static COMMANDS: &[CmdInfo] = &[
         &[],
         "tilt <n|up|down>",
         "Choose the Level II tilt (1 = lowest)",
+    ),
+    ci(
+        "placefile",
+        &["pf"],
+        "placefile <add URL|remove N|toggle N|list>",
+        "GRLevelX placefiles over the radar",
     ),
     ci(
         "sat",
@@ -629,6 +646,32 @@ pub fn parse(line: &str) -> Result<Command, ParseError> {
                     .filter(|&n| n >= 1)
                     .map(|n| Command::Tilt(TiltArg::To(n - 1)))
                     .ok_or_else(|| bad(name, "tilt", a)),
+            }
+        }
+        "placefile" => {
+            let sub = args
+                .first()
+                .map(|s| s.to_ascii_lowercase())
+                .unwrap_or_else(|| "list".into());
+            let n = |i: usize| -> Result<usize, ParseError> {
+                let a = args.get(i).ok_or_else(|| missing(name, "number"))?;
+                a.parse::<usize>()
+                    .ok()
+                    .filter(|n| *n >= 1)
+                    .ok_or_else(|| bad(name, "number", a))
+            };
+            match sub.as_str() {
+                "add" => {
+                    let url = args.get(1).ok_or_else(|| missing(name, "URL"))?;
+                    if !(url.starts_with("http://") || url.starts_with("https://")) {
+                        return Err(bad(name, "URL", url));
+                    }
+                    Ok(Command::Placefile(PlacefileCmd::Add(url.clone())))
+                }
+                "remove" | "rm" | "delete" => Ok(Command::Placefile(PlacefileCmd::Remove(n(1)?))),
+                "toggle" | "on" | "off" => Ok(Command::Placefile(PlacefileCmd::Toggle(n(1)?))),
+                "list" | "ls" => Ok(Command::Placefile(PlacefileCmd::List)),
+                _ => Err(bad(name, "subcommand", &sub)),
             }
         }
         "sat" => {
@@ -1318,6 +1361,16 @@ mod tests {
         assert_eq!(p("tilt 3"), Command::Tilt(TiltArg::To(2)));
         assert_eq!(p("tilt up"), Command::Tilt(TiltArg::Step(1)));
         assert_eq!(p("period 24h"), Command::TrackPeriod(1440));
+        assert_eq!(
+            p("placefile add https://x.org/gr.txt"),
+            Command::Placefile(PlacefileCmd::Add("https://x.org/gr.txt".into()))
+        );
+        assert_eq!(
+            p("pf remove 2"),
+            Command::Placefile(PlacefileCmd::Remove(2))
+        );
+        assert_eq!(p("placefile"), Command::Placefile(PlacefileCmd::List));
+        assert!(parse("placefile add ftp://x").is_err());
         assert_eq!(
             p("sat color"),
             Command::Sat(crate::types::SatProduct::TrueColor)

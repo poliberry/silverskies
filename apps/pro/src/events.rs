@@ -26,6 +26,17 @@ pub enum AppEvent {
         site: String,
         result: Result<std::sync::Arc<ss_core::radar3d::SiteScan>, String>,
     },
+    /// A placefile read: the file and any new icon sheets.
+    Placefile {
+        url: String,
+        result: Result<
+            (
+                ss_core::placefile::Placefile,
+                Vec<ss_net::placefiles::SheetImage>,
+            ),
+            String,
+        >,
+    },
     /// Strikes near the tracked place from Xweather.
     XweatherLightning(Result<Vec<ss_net::glm::Flash>, String>),
     /// Newest image time of each satellite of a product.

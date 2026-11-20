@@ -445,6 +445,32 @@ impl App {
                 }
                 Err(e) => sh.log(LogLevel::Warn, format!("storm reports: {e}")),
             },
+            AppEvent::Placefile { url, result } => {
+                let st = sh.placefiles.entry(url.clone()).or_default();
+                st.pending = false;
+                match result {
+                    Ok((pf, sheets)) => {
+                        st.error = None;
+                        let first = st.pf.is_none();
+                        let title = pf.title.clone();
+                        st.pf = Some(std::sync::Arc::new(pf));
+                        for s in sheets {
+                            let img = egui::ColorImage::from_rgba_unmultiplied(s.size, &s.rgba);
+                            sh.placefile_sheets
+                                .insert(s.url, (std::sync::Arc::new(img), s.tint));
+                        }
+                        if first {
+                            sh.log(LogLevel::Info, format!("placefile loaded: {title}"));
+                        }
+                    }
+                    Err(e) => {
+                        if st.error.as_deref() != Some(e.as_str()) {
+                            st.error = Some(e.clone());
+                            sh.log(LogLevel::Warn, format!("placefile {url}: {e}"));
+                        }
+                    }
+                }
+            }
             AppEvent::XweatherLightning(r) => {
                 let now = chrono::Local::now();
                 match r {
@@ -891,6 +917,7 @@ impl App {
         self.update_arrivals();
         self.maybe_satellite();
         self.maybe_xweather();
+        self.maybe_placefiles();
         if self.last_spc.elapsed() >= Duration::from_secs(600) {
             self.last_spc = Instant::now();
             self.fetch_spc_if_enabled();
@@ -974,6 +1001,47 @@ impl App {
         sh.tracks_pending.insert(TrackKind::Swath);
         self.tasks
             .swath(host, frames, loc.lat, loc.lon, (span as u32).min(minutes));
+    }
+
+    /// Read each shown placefile, then again at its own refresh interval
+    /// (at least 30 s; 5 minutes when it doesn't say).
+    fn maybe_placefiles(&mut self) {
+        let mut sh = self.shared.write();
+        let urls: Vec<String> = sh
+            .config
+            .radar
+            .placefiles
+            .iter()
+            .filter(|p| p.enabled)
+            .map(|p| p.url.clone())
+            .collect();
+        let have: std::collections::HashSet<String> = sh.placefile_sheets.keys().cloned().collect();
+        for url in urls {
+            let st = sh.placefiles.entry(url.clone()).or_default();
+            if st.pending {
+                continue;
+            }
+            let every = st
+                .pf
+                .as_ref()
+                .and_then(|p| p.refresh_s)
+                .unwrap_or(300)
+                .max(30);
+            // After an error, retry less often.
+            let every = if st.error.is_some() {
+                every.max(300)
+            } else {
+                every
+            };
+            if st
+                .requested
+                .is_none_or(|t| t.elapsed() >= Duration::from_secs(every))
+            {
+                st.requested = Some(Instant::now());
+                st.pending = true;
+                self.tasks.placefile(url, have.clone());
+            }
+        }
     }
 
     /// Xweather lightning for the tracked place, where the GOES mappers

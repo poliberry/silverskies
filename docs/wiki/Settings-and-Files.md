@@ -46,6 +46,7 @@ Keys are camelCase. The most useful:
 | `theme` / `themeId` | `"system"` / `"default"` | Light/dark preference; named theme or `custom` |
 | `autoRefreshMinutes` | `10` | 0 = off |
 | `notificationsEnabled` | `true` | Desktop notifications (Pro) |
+| `radar.placefiles` | `[]` | Placefiles: `{ "url": …, "enabled": true }` |
 | `radar.*` | | Radar layers and options (scheme, opacity, terrain, stormCells, stormReports, tropical, nexradSite, …) |
 | `alertTypeOverrides` | `{}` | Per alert class colour/visibility |
 | `ttsAlertsEnabled`, `ttsSeverityFilter`, `ttsRate` | off, severe, 0.95 | Spoken alerts |

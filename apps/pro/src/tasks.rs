@@ -252,6 +252,15 @@ impl Tasks {
         });
     }
 
+    /// Read a placefile (and icon sheets not in `have`).
+    pub fn placefile(&self, url: String, have: std::collections::HashSet<String>) {
+        let (net, tx, ctx) = (self.net.clone(), self.tx.clone(), self.ctx.clone());
+        self.rt.spawn(async move {
+            let result = net.placefile(&url, &have).await.map_err(|e| e.to_string());
+            Self::post(&tx, &ctx, AppEvent::Placefile { url, result });
+        });
+    }
+
     /// Xweather strikes within 100 km of a point (last 5 minutes).
     pub fn xweather_lightning(&self, id: String, secret: String, lat: f64, lon: f64) {
         let (net, tx, ctx) = (self.net.clone(), self.tx.clone(), self.ctx.clone());

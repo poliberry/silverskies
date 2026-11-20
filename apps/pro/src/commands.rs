@@ -523,6 +523,67 @@ pub fn run_product(sh: &mut Shared, p: ss_core::RadarProduct) {
 }
 
 /// `:site [id]`.
+fn run_placefile(sh: &mut Shared, c: ss_core::command::PlacefileCmd) {
+    use ss_core::command::PlacefileCmd as P;
+    let list = &mut sh.config.radar.placefiles;
+    let msg = match c {
+        P::Add(url) => {
+            if list.iter().any(|p| p.url == url) {
+                "that placefile is already in the list".to_string()
+            } else {
+                list.push(ss_core::types::PlacefileSource {
+                    url: url.clone(),
+                    enabled: true,
+                });
+                format!("placefile {} added: {url}", list.len())
+            }
+        }
+        P::Remove(n) if n <= list.len() => {
+            let p = list.remove(n - 1);
+            sh.placefiles.remove(&p.url);
+            format!("placefile removed: {}", p.url)
+        }
+        P::Toggle(n) if n <= list.len() => {
+            let p = &mut list[n - 1];
+            p.enabled = !p.enabled;
+            format!(
+                "placefile {n} {}",
+                if p.enabled { "shown" } else { "hidden" }
+            )
+        }
+        P::Remove(_) | P::Toggle(_) => {
+            "no placefile with that number (:placefile list)".to_string()
+        }
+        P::List => {
+            if list.is_empty() {
+                "no placefiles (:placefile add URL)".to_string()
+            } else {
+                list.iter()
+                    .enumerate()
+                    .map(|(i, p)| {
+                        let title = sh
+                            .placefiles
+                            .get(&p.url)
+                            .and_then(|s| s.pf.as_ref())
+                            .map(|f| f.title.clone())
+                            .filter(|t| !t.is_empty())
+                            .unwrap_or_else(|| p.url.clone());
+                        format!(
+                            "{}. {}{}",
+                            i + 1,
+                            title,
+                            if p.enabled { "" } else { " (hidden)" }
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" · ")
+            }
+        }
+    };
+    sh.dirty_config = true;
+    sh.log(LogLevel::Info, msg);
+}
+
 pub fn run_site(sh: &mut Shared, id: Option<String>) {
     let Some(id) = id else {
         sh.config.radar.nexrad_site = None;
@@ -957,6 +1018,7 @@ fn run(app: &mut App, sh: &mut Shared, target: &WindowTarget, cmd: Command, fx: 
             sh.dirty_config = true;
             sh.log(LogLevel::Info, format!("Level II tilt {}", next + 1));
         }
+        Command::Placefile(c) => run_placefile(sh, c),
         Command::Sat(prod) => {
             sh.config.radar.sat_product = prod;
             sh.config.radar.satellite = true;

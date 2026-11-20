@@ -446,6 +446,9 @@ pub struct RadarSettings {
     /// MTG Lightning Imager (Europe, Africa).
     #[serde(default = "yes")]
     pub lightning: bool,
+    /// GRLevelX placefiles drawn over the radar.
+    #[serde(default)]
+    pub placefiles: Vec<PlacefileSource>,
     /// MRMS hail swaths (maximum estimated hail size), US.
     #[serde(default)]
     pub hail_track: bool,
@@ -481,6 +484,7 @@ impl Default for RadarSettings {
             md_polygons: true,
             wind_barbs: false,
             lightning: true,
+            placefiles: Vec::new(),
             hail_track: false,
             rotation_track: false,
             track_minutes: default_track_minutes(),
@@ -929,6 +933,14 @@ pub struct RadarStation {
     pub alarm_summary: Option<String>,
     /// RFC 3339.
     pub last_received_time: Option<String>,
+}
+
+/// A placefile the person added: its URL and whether it's shown.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlacefileSource {
+    pub url: String,
+    #[serde(default = "yes")]
+    pub enabled: bool,
 }
 
 /// Satellite imagery for the radar's satellite layer.

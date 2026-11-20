@@ -38,6 +38,7 @@ Press `:` to open the command line. Commands are case-insensitive; Tab completes
 | `:product <name>` | Select the radar product | `:p` |
 | `:level2 <ref\|vel\|srv\|cc\|zdr\|off>` | Show a Level II product (every tilt) on the single-site radar | `:l2` |
 | `:tilt <n\|up\|down>` | Choose the Level II tilt (1 = lowest) | |
+| `:placefile <add URL\|list\|toggle N\|remove N>` | GRLevelX placefiles over the radar | `:pf` |
 | `:sat <live\|ir\|color\|airmass>` | Satellite imagery: live infrared, or looped geostationary infrared, true colour or air mass | |
 | `:period <30m\|1h\|2h\|4h\|6h\|24h>` | How far back the hail swaths and rotation tracks reach | `:swath` |
 | `:site [id]` | Select or clear the radar site | `:s` |
