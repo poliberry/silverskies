@@ -1077,6 +1077,32 @@ fn run(app: &mut App, sh: &mut Shared, target: &WindowTarget, cmd: Command, fx: 
         }
         Command::Placefile(c) => run_placefile(sh, c),
         Command::Archive(c) => run_archive(sh, c),
+        Command::Model(f) => {
+            sh.config.radar.model = f;
+            sh.model_error = None;
+            sh.dirty_config = true;
+            let msg = match f {
+                Some(f) => format!("forecast map: {} (ECMWF)", f.label()),
+                None => "forecast map off: back to the radar".to_string(),
+            };
+            sh.log(LogLevel::Info, msg);
+        }
+        Command::ModelStep(arg) => {
+            let steps = ss_net::ecmwf::steps();
+            let cur = steps.iter().position(|s| *s == sh.model_step).unwrap_or(0);
+            let i = match arg {
+                ss_core::command::TiltArg::To(h) => steps
+                    .iter()
+                    .enumerate()
+                    .min_by_key(|(_, s)| (i64::from(**s) - h as i64).abs())
+                    .map_or(0, |(i, _)| i),
+                ss_core::command::TiltArg::Step(d) => {
+                    (cur as i64 + i64::from(d)).clamp(0, steps.len() as i64 - 1) as usize
+                }
+            };
+            sh.model_step = steps[i];
+            sh.model_error = None;
+        }
         Command::Sat(prod) => {
             sh.config.radar.sat_product = prod;
             sh.config.radar.satellite = true;

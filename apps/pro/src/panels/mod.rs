@@ -21,6 +21,7 @@ pub mod gl3d;
 pub mod hourly;
 pub mod l2map;
 pub mod locations;
+pub mod model;
 pub mod quad;
 pub mod radar;
 pub mod radar3d;

@@ -289,6 +289,8 @@ pub struct RadarPanel {
     sat_time: Option<i64>,
     /// The basemap's own credit line.
     base_attribution: String,
+    /// The forecast map on screen (kept while the next hour loads).
+    model_shown: Option<Arc<super::model::ModelMap>>,
     /// A loop export in progress.
     export: Option<super::export::LoopExport>,
     /// Icon sheet textures by URL, and which placefiles the layer holds.
@@ -379,6 +381,10 @@ impl RadarPanel {
         let l = &mut map.layers;
         l.push(esri_basemap(true));
         l.push(esri_hillshade(0.32));
+        // A forecast model field, when one is chosen (instead of the radar).
+        let mut model = ss_map::GeoImageLayer::new("model");
+        model.visible = false;
+        l.push(model);
         l.push(placeholder_raster("satellite", TILE_MAX_ZOOM, 0.75));
         // Geostationary imagery, one layer per satellite sector.
         for name in SAT_LAYERS {
@@ -456,6 +462,7 @@ impl RadarPanel {
             track_keys: Default::default(),
             sat_time: None,
             base_attribution: ss_map::attribution_for(ss_map::Basemap::Map).to_string(),
+            model_shown: None,
             export: None,
             pf_textures: Default::default(),
             pf_sig: Vec::new(),
@@ -721,6 +728,9 @@ fn hit_polygon(
 }
 
 fn legend_stops(rs: &RadarSettings) -> Option<Vec<(Color32, &'static str)>> {
+    if rs.model.is_some() {
+        return None;
+    }
     let dbz = match (&rs.nexrad_site, rs.level2) {
         (None, _) => true,
         (Some(_), Some(p)) => p == ss_core::radar3d::L2Product::Reflectivity,
@@ -1084,6 +1094,18 @@ impl Panel for RadarPanel {
             });
             // Hail and rotation under the pointer.
             let (lon, lat) = vp.lonlat_from_screen(h, r.rect);
+            let model_tip = self.model_shown.as_ref().and_then(|m| {
+                let v = m.grid.at(lat, lon)?;
+                let hour = m.step;
+                Some(format!(
+                    "{} · +{hour}h ECMWF",
+                    super::model::describe(m.field, v, cx.shared.config.units)
+                ))
+            });
+            let tip = match (tip, model_tip) {
+                (Some(t), Some(m)) => Some(format!("{t}\n{m}")),
+                (t, m) => t.or(m),
+            };
             let tracks: Vec<String> = cx
                 .shared
                 .tracks
@@ -1695,6 +1717,10 @@ impl RadarPanel {
             return;
         }
 
+        if let Some(field) = rs.model {
+            self.model_controls(ui, cx, field);
+            return;
+        }
         if frames.is_empty() {
             ui.label(
                 RichText::new("radar: loading frames…")
@@ -1756,6 +1782,88 @@ impl RadarPanel {
             ui.label(RichText::new("NOWCAST").monospace().color(c32a(p.text3)));
         } else if live {
             ui.label(RichText::new("LIVE").monospace().color(c32(p.a0)));
+        }
+    }
+
+    /// The forecast map's controls (in place of the loop's): field, hour
+    /// slider with the valid time, the colour key, and back to the radar.
+    fn model_controls(&mut self, ui: &mut Ui, cx: &mut PanelCx, field: ss_core::types::ModelField) {
+        use ss_core::types::ModelField;
+        let p = cx.palette;
+        let mut pick = None;
+        egui::ComboBox::from_id_salt("model_field")
+            .width(150.0)
+            .selected_text(RichText::new(field.label()).small())
+            .show_ui(ui, |ui| {
+                for f in ModelField::ALL {
+                    if ui.selectable_label(f == field, f.label()).clicked() {
+                        pick = Some(f);
+                    }
+                }
+            });
+        if let Some(f) = pick.filter(|f| *f != field) {
+            cx.emit.push(Command::Model(Some(f)));
+        }
+        let steps = ss_net::ecmwf::steps();
+        let sh = &*cx.shared;
+        let cur = steps.iter().position(|s| *s == sh.model_step).unwrap_or(0);
+        let mut i = cur;
+        ui.spacing_mut().slider_width = (ui.available_width() - 520.0).clamp(80.0, 600.0);
+        ui.add(egui::Slider::new(&mut i, 0..=steps.len() - 1).show_value(false))
+            .on_hover_text("Forecast hour (also :hour +24, :hour next)");
+        if i != cur {
+            cx.emit
+                .push(Command::ModelStep(ss_core::command::TiltArg::To(
+                    steps[i] as usize,
+                )));
+        }
+        let valid = sh.model_run.map(|r| r + i64::from(steps[i]) * 3600);
+        let when = valid
+            .and_then(|t| chrono::DateTime::from_timestamp(t, 0))
+            .map(|d| d.with_timezone(&Local).format("%a %d %H:%M").to_string())
+            .unwrap_or_else(|| "finding the latest run…".into());
+        ui.label(
+            RichText::new(format!("+{}h {when}", steps[i]))
+                .monospace()
+                .color(c32(p.text)),
+        );
+        let loading = sh.model_pending.is_some_and(|k| k.1 == steps[i]);
+        if loading {
+            ui.spinner();
+        }
+        if let Some(e) = &sh.model_error {
+            ui.label(RichText::new("!").color(c32(p.danger)))
+                .on_hover_text(e.clone());
+        }
+        // Colour key.
+        let units = sh.config.units;
+        let (lo, hi, text) = super::model::legend(field, units);
+        let (rect, _) = ui.allocate_exact_size(vec2(80.0, 10.0), egui::Sense::hover());
+        for k in 0..20 {
+            let v = lo + (hi - lo) * (k as f32 + 0.5) / 20.0;
+            let c = super::model::color(field, v);
+            let c = Color32::from_rgb(c.r(), c.g(), c.b()).gamma_multiply(if c.a() == 0 {
+                0.2
+            } else {
+                1.0
+            });
+            let x0 = rect.left() + rect.width() * k as f32 / 20.0;
+            ui.painter().rect_filled(
+                egui::Rect::from_min_max(
+                    egui::pos2(x0, rect.top()),
+                    egui::pos2(x0 + rect.width() / 20.0 + 0.5, rect.bottom()),
+                ),
+                0.0,
+                c,
+            );
+        }
+        ui.label(RichText::new(text).small().color(c32a(p.text3)));
+        if ui
+            .add(egui::Button::new(RichText::new("RADAR").monospace().size(11.0)).frame(false))
+            .on_hover_text("Back to the radar (:model off)")
+            .clicked()
+        {
+            cx.emit.push(Command::Model(None));
         }
     }
 
@@ -1939,7 +2047,7 @@ impl RadarPanel {
         sync_raster(
             layers,
             "satellite",
-            rs.satellite && live_ir && sat.is_some(),
+            rs.satellite && live_ir && sat.is_some() && rs.model.is_none(),
             0.75,
             sat_key,
             move |t| satellite_tile_url(&h, &sp, u32::from(t.z), t.x, t.y),
@@ -1958,7 +2066,7 @@ impl RadarPanel {
                     .then(|| sh.sat_latest.get(s.name).copied())
                     .flatten()
             });
-            let on = rs.satellite && !live_ir && latest.is_some();
+            let on = rs.satellite && !live_ir && latest.is_some() && rs.model.is_none();
             let time = latest.map(|l| match frame_time {
                 Some(t) => (t / 600 * 600).min(l),
                 None => l,
@@ -1985,7 +2093,7 @@ impl RadarPanel {
         // --- composite radar: the whole loop in one fluid layer ---
         let dark = self.dark;
         if let Some(l) = layers.get_mut::<RadarLoopLayer>("radar") {
-            l.visible = composite && !frames.is_empty();
+            l.visible = composite && !frames.is_empty() && rs.model.is_none();
             l.opacity = rs.opacity;
             l.set_frames(
                 frames
@@ -2219,6 +2327,36 @@ impl RadarPanel {
         }
         layers.set_visible("barbs", rs.wind_barbs);
 
+        // --- forecast model map ---
+        let model_map = rs.model.and_then(|f| {
+            let run = sh.model_run?;
+            sh.model_maps.get(&(run, sh.model_step, f)).cloned()
+        });
+        // Keep the last map of the same field on screen while the next loads.
+        let model_map = model_map.or_else(|| {
+            self.model_shown
+                .clone()
+                .filter(|m| Some(m.field) == rs.model)
+        });
+        let key = model_map.as_ref().map(|m| Arc::as_ptr(m) as usize);
+        if key != self.model_shown.as_ref().map(|m| Arc::as_ptr(m) as usize) {
+            if let Some(l) = layers.get_mut::<ss_map::GeoImageLayer>("model") {
+                l.image = model_map.as_ref().map(|m| {
+                    let tex = ctx.load_texture(
+                        "model-map",
+                        m.image.clone(),
+                        egui::TextureOptions::LINEAR,
+                    );
+                    (tex, m.bounds)
+                });
+            }
+            self.model_shown = model_map;
+        }
+        if let Some(l) = layers.get_mut::<ss_map::GeoImageLayer>("model") {
+            l.visible = rs.model.is_some();
+            l.opacity = 1.0;
+        }
+
         // --- placefiles ---
         let shown: Vec<std::sync::Arc<ss_core::placefile::Placefile>> = rs
             .placefiles
@@ -2297,6 +2435,9 @@ impl RadarPanel {
         // --- lightning ---
         layers.set_visible("lightning-mtg", rs.lightning);
         let mut attribution = self.base_attribution.clone();
+        if rs.model.is_some() {
+            attribution.push_str(" · Forecast: ECMWF IFS open data (CC BY 4.0)");
+        }
         if let Some(t) = self.sat_time {
             let when = chrono::DateTime::from_timestamp(t, 0)
                 .map(|d| d.with_timezone(&Local).format("%H:%M").to_string())

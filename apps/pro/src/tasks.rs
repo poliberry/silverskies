@@ -253,6 +253,53 @@ impl Tasks {
         });
     }
 
+    /// Find the newest complete ECMWF run.
+    pub fn model_run(&self) {
+        let (net, tx, ctx) = (self.net.clone(), self.tx.clone(), self.ctx.clone());
+        self.rt.spawn(async move {
+            let r = net.ecmwf_latest_run().await.map_err(|e| e.to_string());
+            Self::post(&tx, &ctx, AppEvent::ModelRun(r));
+        });
+    }
+
+    /// Fetch and draw one forecast map.
+    pub fn model_map(&self, run: i64, step: u32, field: ss_core::types::ModelField) {
+        use crate::panels::model;
+        let (net, tx, ctx) = (self.net.clone(), self.tx.clone(), self.ctx.clone());
+        self.rt.spawn(async move {
+            let mut raw = Vec::new();
+            let mut err = None;
+            for (param, level) in field.params() {
+                match net.ecmwf_field(run, step, param, *level).await {
+                    Ok(f) => raw.push(f),
+                    Err(e) => {
+                        err = Some(e.to_string());
+                        break;
+                    }
+                }
+            }
+            let result = match err {
+                Some(e) => Err(e),
+                None => tokio::task::spawn_blocking(move || {
+                    model::combine(field, &raw)
+                        .map(|g| std::sync::Arc::new(model::render(field, run, step, g)))
+                        .ok_or_else(|| "missing data".to_string())
+                })
+                .await
+                .map_err(|e| e.to_string())
+                .and_then(|r| r),
+            };
+            Self::post(
+                &tx,
+                &ctx,
+                AppEvent::ModelMap {
+                    key: (run, step, field),
+                    result,
+                },
+            );
+        });
+    }
+
     /// Read a placefile (and icon sheets not in `have`).
     pub fn placefile(&self, url: String, have: std::collections::HashSet<String>) {
         let (net, tx, ctx) = (self.net.clone(), self.tx.clone(), self.ctx.clone());

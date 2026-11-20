@@ -26,6 +26,13 @@ pub enum AppEvent {
         site: String,
         result: Result<std::sync::Arc<ss_core::radar3d::SiteScan>, String>,
     },
+    /// The newest ECMWF run (unix s).
+    ModelRun(Result<i64, String>),
+    /// A rendered forecast map.
+    ModelMap {
+        key: (i64, u32, ss_core::types::ModelField),
+        result: Result<std::sync::Arc<crate::panels::model::ModelMap>, String>,
+    },
     /// A placefile read: the file and any new icon sheets.
     Placefile {
         url: String,

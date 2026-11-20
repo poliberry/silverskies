@@ -57,6 +57,7 @@ pub struct App {
     last_arrivals: Option<Instant>,
     last_sat: Option<(Instant, ss_core::types::SatProduct)>,
     last_xweather: Option<Instant>,
+    last_model_run: Option<Instant>,
     /// When the storm swath was last requested, for which place and period.
     last_swath: Option<(Instant, String, u32)>,
     /// (place id, cell key) → when a storm-arrival warning was given.
@@ -161,6 +162,7 @@ impl App {
             last_arrivals: None,
             last_sat: None,
             last_xweather: None,
+            last_model_run: None,
             last_swath: None,
             arrival_warned: HashMap::new(),
             last_mosaic: None,
@@ -445,6 +447,43 @@ impl App {
                 }
                 Err(e) => sh.log(LogLevel::Warn, format!("storm reports: {e}")),
             },
+            AppEvent::ModelRun(r) => match r {
+                Ok(run) => {
+                    if sh.model_run != Some(run) {
+                        let when = chrono::DateTime::from_timestamp(run, 0)
+                            .map(|d| d.format("%d %b %Hz").to_string())
+                            .unwrap_or_default();
+                        sh.log(LogLevel::Info, format!("ECMWF forecast: run of {when}"));
+                        sh.model_maps.clear();
+                    }
+                    sh.model_run = Some(run);
+                }
+                Err(e) => sh.model_error = Some(e),
+            },
+            AppEvent::ModelMap { key, result } => {
+                if sh.model_pending == Some(key) {
+                    sh.model_pending = None;
+                }
+                match result {
+                    Ok(m) => {
+                        sh.model_error = None;
+                        // Keep a handful of hours for scrubbing back and forth.
+                        if sh.model_maps.len() >= 12 {
+                            let step = sh.model_step;
+                            let far = sh
+                                .model_maps
+                                .keys()
+                                .max_by_key(|k| (i64::from(k.1) - i64::from(step)).abs())
+                                .copied();
+                            if let Some(k) = far {
+                                sh.model_maps.remove(&k);
+                            }
+                        }
+                        sh.model_maps.insert(key, m);
+                    }
+                    Err(e) => sh.model_error = Some(e),
+                }
+            }
             AppEvent::Placefile { url, result } => {
                 let st = sh.placefiles.entry(url.clone()).or_default();
                 st.pending = false;
@@ -925,6 +964,7 @@ impl App {
         self.maybe_satellite();
         self.maybe_xweather();
         self.maybe_placefiles();
+        self.maybe_model();
         if self.last_spc.elapsed() >= Duration::from_secs(600) {
             self.last_spc = Instant::now();
             self.fetch_spc_if_enabled();
@@ -1008,6 +1048,42 @@ impl App {
         sh.tracks_pending.insert(TrackKind::Swath);
         self.tasks
             .swath(host, frames, loc.lat, loc.lon, (span as u32).min(minutes));
+    }
+
+    /// Keep the shown forecast map loaded: find the newest run (again every
+    /// 30 minutes), then fetch the field at the hour shown, and the next
+    /// hour ahead of time.
+    fn maybe_model(&mut self) {
+        let mut sh = self.shared.write();
+        let Some(field) = sh.config.radar.model else {
+            return;
+        };
+        let stale = self
+            .last_model_run
+            .is_none_or(|t| t.elapsed() >= Duration::from_secs(30 * 60));
+        if stale {
+            self.last_model_run = Some(Instant::now());
+            self.tasks.model_run();
+        }
+        let Some(run) = sh.model_run else {
+            return;
+        };
+        if sh.model_pending.is_some() {
+            return;
+        }
+        let steps = ss_net::ecmwf::steps();
+        let i = steps.iter().position(|s| *s == sh.model_step).unwrap_or(0);
+        for step in [steps[i], steps[(i + 1).min(steps.len() - 1)]] {
+            let key = (run, step, field);
+            if !sh.model_maps.contains_key(&key) {
+                if sh.model_error.is_some() && step != sh.model_step {
+                    break;
+                }
+                sh.model_pending = Some(key);
+                self.tasks.model_map(run, step, field);
+                break;
+            }
+        }
     }
 
     /// Read each shown placefile, then again at its own refresh interval

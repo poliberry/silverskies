@@ -106,6 +106,22 @@ Two layers from NOAA's Multi-Radar Multi-Sensor system (MRMS), which merges ever
 
 Choose how far back they reach in Settings → Radar → *Track period* or with `:period` (30 min, 1, 2, 4, 6 or 24 h; default 2 h). They refresh every few minutes. Hover the map for the value under the pointer, e.g. *hail up to 1.75 in (44 mm) · last 2 h*. Single isolated pixels (usually clutter) are left out. The values are radar estimates: compare with storm reports.
 
+## Pro: forecast maps (worldwide)
+
+`:model temp` (or `precip`, `wind`, `gust`, `mslp`, `cape`, `cloud`, `z500`) replaces the radar with a field from the **ECMWF** forecast, the European Centre's global model, free as open data (CC BY 4.0): the newest 00z or 12z run at 0.25°, out to 10 days (every 3 hours to day 6, then every 6). The radar bar then holds the field menu, a forecast-hour slider with the valid time (`:hour +48`, `:hour next`), the colour key and **RADAR** (`:model off`) to go back.
+
+| Field | What |
+|---|---|
+| Temperature (2 m) | Air temperature near the ground |
+| Precipitation rate | Rain and snow falling at that hour, mm/h (in/h) |
+| Wind (10 m), Wind gusts | Speed near the ground, km/h (mph); gusts are the strongest in the hours before |
+| Pressure (sea level) | Shaded, with isobars every 4 hPa: lows, highs and fronts |
+| Instability (MUCAPE) | Energy available to thunderstorms, J/kg; over ~1,000 storms can be strong |
+| Cloud cover | Total cloud, % |
+| 500 hPa height | The mid-level pattern (troughs and ridges), contours every 6 dam |
+
+Hover the map for the value under the pointer in your units. A new run is picked up about 7 hours after its start time; each field is fetched for the hour you look at (about 0.3–0.7 MB) and the next hour ahead of time, so scrubbing stays quick. Satellite and the radar loop step aside while a forecast map is shown; alerts, storm layers and placefiles stay on top.
+
 ## Pro: archive replay (US radars)
 
 NOAA keeps every NEXRAD volume scan since the early 1990s. `:archive 2013-05-20 20:00 KTLX` (UTC; the radar is optional if one is already selected) loads the scan nearest that time and shows it in every Level II view: the radar pane's products and tilts, cross sections, the 4-panel. The radar bar then reads **ARCHIVE 2013-05-20 19:59Z** with ◀ ▶ to step scan by scan (`:scan next`, `:scan prev`), and **LIVE** (`:archive off`) to return; nothing refreshes while you're in the archive. Scans from 2008 on can be read (older ones use a format Pro doesn't decode). European radars keep only 24 hours, so archive replay is for US radars. The composite loop, lightning and other layers stay live.

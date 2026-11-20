@@ -446,6 +446,9 @@ pub struct RadarSettings {
     /// MTG Lightning Imager (Europe, Africa).
     #[serde(default = "yes")]
     pub lightning: bool,
+    /// A forecast model field shown instead of the radar (None = radar).
+    #[serde(default)]
+    pub model: Option<ModelField>,
     /// GRLevelX placefiles drawn over the radar.
     #[serde(default)]
     pub placefiles: Vec<PlacefileSource>,
@@ -484,6 +487,7 @@ impl Default for RadarSettings {
             md_polygons: true,
             wind_barbs: false,
             lightning: true,
+            model: None,
             placefiles: Vec::new(),
             hail_track: false,
             rotation_track: false,
@@ -939,6 +943,87 @@ pub struct RadarStation {
     pub alarm_summary: Option<String>,
     /// RFC 3339.
     pub last_received_time: Option<String>,
+}
+
+/// A field of the ECMWF forecast shown on the map.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ModelField {
+    Temperature,
+    Precipitation,
+    Wind,
+    Gusts,
+    Pressure,
+    Cape,
+    Cloud,
+    Height500,
+}
+
+impl ModelField {
+    pub const ALL: [ModelField; 8] = [
+        ModelField::Temperature,
+        ModelField::Precipitation,
+        ModelField::Wind,
+        ModelField::Gusts,
+        ModelField::Pressure,
+        ModelField::Cape,
+        ModelField::Cloud,
+        ModelField::Height500,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ModelField::Temperature => "Temperature (2 m)",
+            ModelField::Precipitation => "Precipitation rate",
+            ModelField::Wind => "Wind (10 m)",
+            ModelField::Gusts => "Wind gusts",
+            ModelField::Pressure => "Pressure (sea level)",
+            ModelField::Cape => "Instability (MUCAPE)",
+            ModelField::Cloud => "Cloud cover",
+            ModelField::Height500 => "500 hPa height",
+        }
+    }
+
+    pub fn short(self) -> &'static str {
+        match self {
+            ModelField::Temperature => "TEMP",
+            ModelField::Precipitation => "PRECIP",
+            ModelField::Wind => "WIND",
+            ModelField::Gusts => "GUST",
+            ModelField::Pressure => "MSLP",
+            ModelField::Cape => "CAPE",
+            ModelField::Cloud => "CLOUD",
+            ModelField::Height500 => "Z500",
+        }
+    }
+
+    /// The ECMWF parameters it needs: (param, pressure level).
+    pub fn params(self) -> &'static [(&'static str, Option<&'static str>)] {
+        match self {
+            ModelField::Temperature => &[("2t", None)],
+            ModelField::Precipitation => &[("tprate", None)],
+            ModelField::Wind => &[("10u", None), ("10v", None)],
+            ModelField::Gusts => &[("10fg", None)],
+            ModelField::Pressure => &[("msl", None)],
+            ModelField::Cape => &[("mucape", None)],
+            ModelField::Cloud => &[("tcc", None)],
+            ModelField::Height500 => &[("gh", Some("500"))],
+        }
+    }
+
+    /// `:model …` names.
+    pub fn parse(s: &str) -> Option<ModelField> {
+        Some(match s.to_ascii_lowercase().as_str() {
+            "temp" | "temperature" | "t2m" | "2t" => ModelField::Temperature,
+            "precip" | "precipitation" | "rain" | "tp" => ModelField::Precipitation,
+            "wind" | "10m" => ModelField::Wind,
+            "gust" | "gusts" => ModelField::Gusts,
+            "mslp" | "pressure" | "msl" | "isobars" => ModelField::Pressure,
+            "cape" | "mucape" | "instability" => ModelField::Cape,
+            "cloud" | "clouds" | "tcc" => ModelField::Cloud,
+            "z500" | "500" | "500mb" | "500hpa" | "height" => ModelField::Height500,
+            _ => return None,
+        })
+    }
 }
 
 /// A placefile the person added: its URL and whether it's shown.

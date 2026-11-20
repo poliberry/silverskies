@@ -221,6 +221,17 @@ pub struct Shared {
     >,
     pub tracks_requested: HashMap<(ss_net::mrms::TrackKind, u32), std::time::Instant>,
     pub tracks_pending: std::collections::HashSet<ss_net::mrms::TrackKind>,
+    /// ECMWF forecast maps: the newest run (unix s), the forecast hour
+    /// shown, rendered maps by (run, hour, field), the one being fetched,
+    /// and the last error.
+    pub model_run: Option<i64>,
+    pub model_step: u32,
+    pub model_maps: HashMap<
+        (i64, u32, ss_core::types::ModelField),
+        std::sync::Arc<crate::panels::model::ModelMap>,
+    >,
+    pub model_pending: Option<(i64, u32, ss_core::types::ModelField)>,
+    pub model_error: Option<String>,
     /// Loaded placefiles by URL.
     pub placefiles: HashMap<String, PlacefileState>,
     /// Icon sheets by URL (shared between placefiles, fetched once).
@@ -333,6 +344,11 @@ impl Shared {
             tracks_requested: HashMap::new(),
             tracks_pending: Default::default(),
             arrivals: Vec::new(),
+            model_run: None,
+            model_step: 0,
+            model_maps: HashMap::new(),
+            model_pending: None,
+            model_error: None,
             placefiles: HashMap::new(),
             placefile_sheets: HashMap::new(),
             xweather_status: None,

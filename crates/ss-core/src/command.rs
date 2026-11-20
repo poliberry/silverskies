@@ -183,6 +183,10 @@ pub enum Command {
     /// Save the radar loop as an animated GIF.
     ExportLoop,
     Archive(ArchiveCmd),
+    /// Show a forecast model field (None = back to the radar).
+    Model(Option<crate::types::ModelField>),
+    /// Move the model's forecast hour: to an hour, or by steps.
+    ModelStep(TiltArg),
     Site(Option<String>),
     Play,
     Pause,
@@ -366,6 +370,18 @@ static COMMANDS: &[CmdInfo] = &[
         &[],
         "tilt <n|up|down>",
         "Choose the Level II tilt (1 = lowest)",
+    ),
+    ci(
+        "model",
+        &["ecmwf", "forecast-map"],
+        "model <temp|precip|wind|gust|mslp|cape|cloud|z500|off>",
+        "Show an ECMWF forecast field on the map",
+    ),
+    ci(
+        "hour",
+        &["fh"],
+        "hour <+N|next|prev>",
+        "Move the forecast map to hour N, or a step",
     ),
     ci(
         "archive",
@@ -711,6 +727,28 @@ pub fn parse(line: &str) -> Result<Command, ParseError> {
                     .filter(|&n| n >= 1)
                     .map(|n| Command::Tilt(TiltArg::To(n - 1)))
                     .ok_or_else(|| bad(name, "tilt", a)),
+            }
+        }
+        "model" | "ecmwf" => {
+            let a = args.first().ok_or_else(|| missing(name, "field"))?;
+            if matches!(a.to_ascii_lowercase().as_str(), "off" | "none" | "radar") {
+                return Ok(Command::Model(None));
+            }
+            crate::types::ModelField::parse(a)
+                .map(|f| Command::Model(Some(f)))
+                .ok_or_else(|| bad(name, "field", a))
+        }
+        "hour" | "fh" => {
+            let a = args.first().ok_or_else(|| missing(name, "hour"))?;
+            match a.to_ascii_lowercase().as_str() {
+                "next" | "+" => Ok(Command::ModelStep(TiltArg::Step(1))),
+                "prev" | "-" => Ok(Command::ModelStep(TiltArg::Step(-1))),
+                h => h
+                    .trim_start_matches('+')
+                    .trim_end_matches('h')
+                    .parse::<usize>()
+                    .map(|n| Command::ModelStep(TiltArg::To(n)))
+                    .map_err(|_| bad(name, "hour", a)),
             }
         }
         "archive" | "replay" => {
@@ -1490,6 +1528,13 @@ mod tests {
             })
         );
         assert_eq!(p("scan next"), Command::Archive(ArchiveCmd::Step(1)));
+        assert_eq!(
+            p("model cape"),
+            Command::Model(Some(crate::types::ModelField::Cape))
+        );
+        assert_eq!(p("model off"), Command::Model(None));
+        assert_eq!(p("hour +24"), Command::ModelStep(TiltArg::To(24)));
+        assert_eq!(p("fh next"), Command::ModelStep(TiltArg::Step(1)));
         assert_eq!(p("archive off"), Command::Archive(ArchiveCmd::Off));
         assert!(parse("archive yesterday").is_err());
         assert_eq!(p("gif"), Command::ExportLoop);
@@ -1558,8 +1603,8 @@ mod tests {
 
     #[test]
     fn complete_command_names() {
-        assert_eq!(complete("mo"), ["move"]);
-        assert_eq!(complete("m"), ["move", "mute", "mv"]);
+        assert_eq!(complete("mo"), ["model", "move"]);
+        assert_eq!(complete("mov"), ["move"]);
         assert!(complete(":ra").contains(&":radar".to_string()));
         assert!(complete(":ra").contains(&":rad".to_string()));
         assert!(complete("").len() > 30);
@@ -1597,7 +1642,7 @@ mod tests {
             complete("radar nowcast o"),
             ["radar nowcast off", "radar nowcast on"]
         );
-        assert_eq!(complete("help mo"), ["help move"]);
+        assert_eq!(complete("help mov"), ["help move"]);
         assert_eq!(complete("demo fog"), ["demo fog/visibility/air"]);
         assert_eq!(complete("demo severe"), ["demo \"severe thunderstorm\""]);
         assert!(complete("goto xyz").is_empty());
