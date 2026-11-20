@@ -138,6 +138,12 @@ impl TileCache {
         }
     }
 
+    /// Keep up to `n` textures (default [`MAX_TEXTURES`]).
+    pub fn with_max_textures(mut self, n: usize) -> Self {
+        self.max_textures = n;
+        self
+    }
+
     /// Texture if ready; otherwise enqueue a fetch (deduplicated) and return `None`.
     /// Results are persisted on disk (if configured).
     pub fn request(&mut self, key: &TileKey, url: String) -> Option<&TextureHandle> {

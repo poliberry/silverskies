@@ -39,20 +39,23 @@ impl V3 {
     pub const fn new(x: f32, y: f32, z: f32) -> Self {
         Self { x, y, z }
     }
-    fn sub(self, o: V3) -> V3 {
+    pub fn sub(self, o: V3) -> V3 {
         V3::new(self.x - o.x, self.y - o.y, self.z - o.z)
     }
-    fn dot(self, o: V3) -> f32 {
+    pub fn len(self) -> f32 {
+        self.dot(self).sqrt()
+    }
+    pub fn dot(self, o: V3) -> f32 {
         self.x * o.x + self.y * o.y + self.z * o.z
     }
-    fn cross(self, o: V3) -> V3 {
+    pub fn cross(self, o: V3) -> V3 {
         V3::new(
             self.y * o.z - self.z * o.y,
             self.z * o.x - self.x * o.z,
             self.x * o.y - self.y * o.x,
         )
     }
-    fn norm(self) -> V3 {
+    pub fn norm(self) -> V3 {
         let l = self.dot(self).sqrt().max(1e-6);
         V3::new(self.x / l, self.y / l, self.z / l)
     }
@@ -123,7 +126,8 @@ impl View {
     pub fn project(&self, p: V3) -> Option<(Pos2, f32)> {
         let d = p.sub(self.eye);
         let z = d.dot(self.fwd);
-        if z < 1.0 {
+        // Near plane 20 m in front of the eye (close-up terrain).
+        if z < 0.02 {
             return None;
         }
         let x = d.dot(self.right) / z * self.focal;
@@ -133,7 +137,11 @@ impl View {
 
     /// Pixels per km at a depth.
     pub fn scale_at(&self, depth: f32) -> f32 {
-        self.focal / depth.max(1.0)
+        self.focal / depth.max(0.02)
+    }
+
+    pub fn eye(&self) -> V3 {
+        self.eye
     }
 }
 
@@ -173,7 +181,7 @@ pub fn dbz_color(dbz: f32) -> Color32 {
 }
 
 /// Terrain colour by height (m), lit by `shade` (0..1).
-fn terrain_color(h: f32, shade: f32, dark: bool) -> Color32 {
+pub fn terrain_color(h: f32, shade: f32, dark: bool) -> Color32 {
     let base: [f32; 3] = if h <= 0.5 {
         [0.10, 0.20, 0.32]
     } else if h < 300.0 {
@@ -373,6 +381,30 @@ pub struct Radar3dPanel {
     show_imagery: bool,
     /// The uploaded imagery and the scene it belongs to.
     imagery_tex: Option<(String, egui::TextureHandle)>,
+    /// Level-of-detail terrain and imagery, for zooming in close.
+    lod: Option<super::terrain_lod::Lod>,
+}
+
+impl Radar3dPanel {
+    /// The vertical exaggeration in use: the slider's value at the overview,
+    /// easing to true scale as you zoom in to the ground (like a map).
+    fn effective_exag(&self) -> f32 {
+        let t = ((self.cam.dist - 15.0) / (200.0 - 15.0)).clamp(0.0, 1.0);
+        let t = t * t * (3.0 - 2.0 * t);
+        1.0 + (self.exag - 1.0) * t
+    }
+
+    pub fn new(
+        client: reqwest::Client,
+        rt: tokio::runtime::Handle,
+        tile_dir: Option<std::path::PathBuf>,
+        ctx: egui::Context,
+    ) -> Self {
+        Self {
+            lod: Some(super::terrain_lod::Lod::new(client, rt, tile_dir, ctx)),
+            ..Self::default()
+        }
+    }
 }
 
 impl Default for Radar3dPanel {
@@ -389,6 +421,7 @@ impl Default for Radar3dPanel {
             sprite: None,
             show_imagery: true,
             imagery_tex: None,
+            lod: None,
         }
     }
 }
@@ -474,7 +507,9 @@ impl Radar3dPanel {
             .on_hover_text("Hide echoes weaker than this");
             ui.label(RichText::new("height ×").monospace().color(c32a(p.text3)));
             ui.add(egui::Slider::new(&mut self.exag, 1.0..=10.0).step_by(0.5))
-                .on_hover_text("Vertical exaggeration");
+                .on_hover_text(
+                    "Vertical exaggeration at the overview; it eases to true scale as you zoom in",
+                );
         });
         if let Some(s) = scene {
             let (text, warn) = match &s.source {
@@ -575,8 +610,35 @@ impl Panel for Radar3dPanel {
             }
         }
         sky(&painter, rect, dark);
+        // Orbit around the ground under the target (so close-ups over
+        // mountains don't put the camera inside them).
+        let (tx, ty) = (self.cam.target.x, self.cam.target.y);
+        let g = match self.lod.as_mut() {
+            Some(lod) => lod.ground(&scene, tx, ty),
+            None => scene
+                .terrain
+                .as_ref()
+                .map_or(0.0, |t| t.height_at(tx, ty) / 1000.0),
+        };
+        let ex = self.effective_exag();
+        self.cam.target.z = g * ex;
         let view = View::new(&self.cam, rect);
-        let marks = self.draw_scene(&painter, &view, &scene, cx, dark);
+        let mut lod_drawn = false;
+        if let (true, Some(lod)) = (self.show_terrain, self.lod.as_mut()) {
+            lod.poll(ui.ctx());
+            let base = self
+                .imagery_tex
+                .as_ref()
+                .filter(|_| scene.imagery.is_some())
+                .map(|(_, t)| t.id());
+            lod.draw(&painter, &view, &scene, ex, dark, self.show_imagery, base);
+            lod_drawn = true;
+            if lod.busy() {
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_millis(150));
+            }
+        }
+        let marks = self.draw_scene(&painter, &view, &scene, cx, dark, lod_drawn);
         self.overlay(&painter, rect, &view, &p);
         // Hover: the nearest marker.
         if let Some(pos) = resp.hover_pos() {
@@ -623,7 +685,7 @@ impl Radar3dPanel {
         if resp.hovered() {
             let scroll = ui.input(|i| i.smooth_scroll_delta.y);
             if scroll != 0.0 {
-                self.cam.dist = (self.cam.dist * (-scroll * 0.0015).exp()).clamp(40.0, 1400.0);
+                self.cam.dist = (self.cam.dist * (-scroll * 0.0015).exp()).clamp(0.3, 1400.0);
             }
         }
     }
@@ -636,15 +698,16 @@ impl Radar3dPanel {
         scene: &Scene,
         cx: &PanelCx,
         dark: bool,
+        terrain_drawn: bool,
     ) -> Vec<Mark> {
-        let ex = self.exag;
+        let ex = self.effective_exag();
         let ground = |x: f32, y: f32| -> f32 {
             scene
                 .terrain
                 .as_ref()
                 .map_or(0.0, |t| t.height_at(x, y) / 1000.0)
         };
-        if let (true, Some(t)) = (self.show_terrain, &scene.terrain) {
+        if let (true, false, Some(t)) = (self.show_terrain, terrain_drawn, &scene.terrain) {
             let photo = self
                 .imagery_tex
                 .as_ref()
@@ -732,7 +795,7 @@ impl Radar3dPanel {
         ground: &dyn Fn(f32, f32) -> f32,
         marks: &mut Vec<Mark>,
     ) {
-        let ex = self.exag;
+        let ex = self.effective_exag();
         let sh = &*cx.shared;
         let inside = |x: f32, y: f32| x.abs() <= scene.half_km && y.abs() <= scene.half_km;
         let mosaic_here = sh.mosaic_for.as_deref() == cx.location.as_ref().map(|l| l.id.as_str());

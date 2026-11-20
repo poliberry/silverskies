@@ -23,6 +23,7 @@ pub mod radar3d;
 pub mod radio;
 pub mod sounding;
 pub mod storms;
+pub mod terrain_lod;
 
 pub struct PanelCx<'a> {
     pub shared: &'a mut Shared,
@@ -93,7 +94,12 @@ impl PanelFactory {
             PanelKind::Radio => Box::new(radio::RadioPanel),
             PanelKind::Storms => Box::new(storms::StormsPanel),
             PanelKind::Sounding => Box::new(sounding::SoundingPanel::default()),
-            PanelKind::Radar3d => Box::new(radar3d::Radar3dPanel::default()),
+            PanelKind::Radar3d => Box::new(radar3d::Radar3dPanel::new(
+                self.client.clone(),
+                self.rt.clone(),
+                self.tile_dir.clone(),
+                self.ctx.clone(),
+            )),
         }
     }
 }

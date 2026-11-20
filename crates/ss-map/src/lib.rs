@@ -3,6 +3,7 @@
 //! Web Mercator viewport, async tile cache, and a stack of layers (raster tiles,
 //! WMS images, polygons, markers, wind barbs, range rings, selection) drawn by [`MapWidget`].
 
+pub mod heights;
 pub mod layers;
 pub mod legend;
 pub mod map;
