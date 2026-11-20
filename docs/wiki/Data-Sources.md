@@ -23,6 +23,7 @@ Everything the apps show comes from these services. None needs an account except
 | Storm cells (elsewhere) | Computed from the LibreWXR composite | No | Worldwide | Pro |
 | Hail swaths (MESH), rotation tracks | NOAA MRMS ([NOAA on AWS](https://registry.opendata.aws/noaa-mrms-pds/), `noaa-mrms-pds`) | No | US | Pro |
 | Lightning (Americas, Pacific) | NOAA GOES-19/18 Geostationary Lightning Mapper ([NOAA on AWS](https://registry.opendata.aws/noaa-goes/), `GLM-L2-LCFA`) | No | ~55°N–55°S, 165°E–15°W | Pro |
+| Lightning worldwide near your place (optional, your key, non-commercial) | [Xweather](https://www.xweather.com/docs/weather-api/endpoints/lightning) (Vaisala GLD360) | **Yes** | Worldwide | Pro (optional) |
 | Lightning (Europe, Africa) | [EUMETSAT](https://view.eumetsat.int) MTG Lightning Imager (EUMETView WMS, `mtg_fd:li_afa`) | No | Europe, Africa, Atlantic | Pro |
 | Tropical cyclones | [GDACS](https://www.gdacs.org) | No | Worldwide | Pro |
 | SPC outlook, mesoscale discussions | NOAA mapservices / api.weather.gov | No | US | Pro |

@@ -56,6 +56,7 @@ pub struct App {
     last_lightning: Option<Instant>,
     last_arrivals: Option<Instant>,
     last_sat: Option<(Instant, ss_core::types::SatProduct)>,
+    last_xweather: Option<Instant>,
     /// When the storm swath was last requested, for which place and period.
     last_swath: Option<(Instant, String, u32)>,
     /// (place id, cell key) → when a storm-arrival warning was given.
@@ -159,6 +160,7 @@ impl App {
             last_lightning: None,
             last_arrivals: None,
             last_sat: None,
+            last_xweather: None,
             last_swath: None,
             arrival_warned: HashMap::new(),
             last_mosaic: None,
@@ -443,6 +445,27 @@ impl App {
                 }
                 Err(e) => sh.log(LogLevel::Warn, format!("storm reports: {e}")),
             },
+            AppEvent::XweatherLightning(r) => {
+                let now = chrono::Local::now();
+                match r {
+                    Ok(flashes) => {
+                        tracing::info!("Xweather lightning: {} strikes", flashes.len());
+                        sh.xweather_status = Some((now, Ok(flashes.len())));
+                        for f in flashes {
+                            if !sh.lightning.contains(&f) {
+                                sh.lightning.push(f);
+                            }
+                        }
+                        let cutoff =
+                            chrono::Utc::now().timestamp() - crate::state::LIGHTNING_KEEP_S;
+                        sh.lightning.retain(|f| f.time >= cutoff);
+                    }
+                    Err(e) => {
+                        sh.log(LogLevel::Warn, format!("Xweather lightning: {e}"));
+                        sh.xweather_status = Some((now, Err(e)));
+                    }
+                }
+            }
             AppEvent::SatLatest { product, times } => {
                 if sh.sat_for != Some(product) {
                     sh.sat_latest.clear();
@@ -867,6 +890,7 @@ impl App {
         self.maybe_tracks();
         self.update_arrivals();
         self.maybe_satellite();
+        self.maybe_xweather();
         if self.last_spc.elapsed() >= Duration::from_secs(600) {
             self.last_spc = Instant::now();
             self.fetch_spc_if_enabled();
@@ -950,6 +974,28 @@ impl App {
         sh.tracks_pending.insert(TrackKind::Swath);
         self.tasks
             .swath(host, frames, loc.lat, loc.lon, (span as u32).min(minutes));
+    }
+
+    /// Xweather lightning for the tracked place, where the GOES mappers
+    /// don't see (or at once when asked from Settings), every
+    /// `xweather_minutes`.
+    fn maybe_xweather(&mut self) {
+        let mut sh = self.shared.write();
+        let Some((id, secret)) = sh.config.xweather() else {
+            sh.xweather_check_now = false;
+            return;
+        };
+        let Some(loc) = sh.active_location().cloned() else {
+            return;
+        };
+        let now = std::mem::take(&mut sh.xweather_check_now);
+        let wanted = sh.config.radar.lightning && !ss_net::glm::glm_covers(loc.lat, loc.lon);
+        let every = Duration::from_secs(u64::from(sh.config.xweather_minutes.max(5)) * 60);
+        let due = self.last_xweather.is_none_or(|t| t.elapsed() >= every);
+        if now || (wanted && due) {
+            self.last_xweather = Some(Instant::now());
+            self.tasks.xweather_lightning(id, secret, loc.lat, loc.lon);
+        }
     }
 
     /// Keep the newest satellite image times current (every 5 minutes, or

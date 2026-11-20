@@ -379,12 +379,17 @@ impl Net {
                 break;
             }
         }
-        let (store, keys) = found.ok_or(NetError::Missing(
-            "a recent scan from this radar (it may be offline)",
-        ))?;
+        let (store, keys) = found.ok_or_else(|| {
+            NetError::Service(
+                "no scan from this radar in the last 45 minutes (it may be offline or retired)"
+                    .into(),
+            )
+        })?;
         let scan = newest_scan(&keys);
         if scan.is_empty() {
-            return Err(NetError::Missing("a recent scan from this radar"));
+            return Err(NetError::Service(
+                "no usable scan from this radar recently".into(),
+            ));
         }
         let futs: Vec<_> = scan
             .iter()

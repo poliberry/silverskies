@@ -503,6 +503,21 @@ impl Default for RadarSettings {
 /// The periods MRMS publishes hail/rotation maxima for, minutes.
 pub const TRACK_PERIODS: [u32; 6] = [30, 60, 120, 240, 360, 1440];
 
+fn default_xweather_minutes() -> u32 {
+    30
+}
+
+impl Config {
+    /// Xweather credentials, when non-commercial sources are allowed and
+    /// both parts are set.
+    pub fn xweather(&self) -> Option<(String, String)> {
+        let id = self.xweather_client_id.as_deref()?.trim();
+        let secret = self.xweather_client_secret.as_deref()?.trim();
+        (self.noncommercial_sources && !id.is_empty() && !secret.is_empty())
+            .then(|| (id.to_string(), secret.to_string()))
+    }
+}
+
 fn default_track_minutes() -> u32 {
     120
 }
@@ -530,6 +545,19 @@ pub struct Config {
     pub accu_weather_api_key: Option<String>,
     pub willy_weather_api_key: Option<String>,
     pub open_weather_map_api_key: Option<String>,
+    /// Use sources whose free terms allow personal, non-commercial use
+    /// only (off by default).
+    #[serde(default)]
+    pub noncommercial_sources: bool,
+    /// Xweather (Vaisala) API credentials, for lightning worldwide.
+    #[serde(default)]
+    pub xweather_client_id: Option<String>,
+    #[serde(default)]
+    pub xweather_client_secret: Option<String>,
+    /// How often Xweather lightning is checked, minutes (each check costs
+    /// 10 of the free plan's monthly accesses).
+    #[serde(default = "default_xweather_minutes")]
+    pub xweather_minutes: u32,
     pub libre_wxr_host: String,
     pub units: UnitPref,
     pub time_format: TimeFormat,
@@ -583,6 +611,10 @@ impl Default for Config {
             accu_weather_api_key: None,
             willy_weather_api_key: None,
             open_weather_map_api_key: None,
+            noncommercial_sources: false,
+            xweather_client_id: None,
+            xweather_client_secret: None,
+            xweather_minutes: default_xweather_minutes(),
             libre_wxr_host: "https://api.librewxr.net".to_string(),
             units: UnitPref::F,
             time_format: TimeFormat::H12,

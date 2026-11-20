@@ -83,7 +83,67 @@ pub fn nearest(
         .map(|(d, f)| (d, ss_core::geo::bearing_deg(lat, lon, f.lat, f.lon), *f))
 }
 
+/// Roughly where the GOES lightning mappers see (the Americas, Atlantic,
+/// eastern Pacific).
+pub fn glm_covers(lat: f64, lon: f64) -> bool {
+    lat.abs() <= 54.0 && (-175.0..=-15.0).contains(&lon)
+}
+
+/// Flashes from an Xweather `/lightning/closest` response.
+pub fn parse_xweather(json: &str) -> Result<Vec<Flash>> {
+    let v: serde_json::Value =
+        serde_json::from_str(json).map_err(|e| NetError::Parse(format!("Xweather: {e}")))?;
+    if v.get("success").and_then(|s| s.as_bool()) == Some(false) {
+        let err = &v["error"];
+        // "No data" is a success with nothing nearby.
+        if err["code"].as_str() == Some("warn_no_data") {
+            return Ok(Vec::new());
+        }
+        let msg = err["description"]
+            .as_str()
+            .or_else(|| err["code"].as_str())
+            .unwrap_or("request refused");
+        return Err(NetError::Service(format!("Xweather: {msg}")));
+    }
+    Ok(v["response"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|r| {
+                    Some(Flash {
+                        lat: r["loc"]["lat"].as_f64()?,
+                        lon: r["loc"]["long"].as_f64()?,
+                        time: r["ob"]["timestamp"].as_i64()?,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
 impl Net {
+    /// Strikes within 100 km of a point in the last 5 minutes from Xweather
+    /// (Vaisala GLD360, worldwide). Each call costs 10 accesses.
+    pub async fn xweather_lightning(
+        &self,
+        client_id: &str,
+        client_secret: &str,
+        lat: f64,
+        lon: f64,
+    ) -> Result<Vec<Flash>> {
+        let enc = |s: &str| {
+            percent_encoding::utf8_percent_encode(s, percent_encoding::NON_ALPHANUMERIC).to_string()
+        };
+        let url = format!(
+            "https://data.api.xweather.com/lightning/closest?p={lat:.4},{lon:.4}&radius=100km&limit=1000&client_id={}&client_secret={}",
+            enc(client_id),
+            enc(client_secret)
+        );
+        // Errors come back as JSON with a 4xx status: read the body either way.
+        let body = self.get_text_any_status(&url).await?;
+        parse_xweather(&body)
+    }
+
     /// One GLM file's flashes.
     async fn glm_file(&self, bucket: &str, key: String, time: i64) -> (String, Result<Vec<Flash>>) {
         let url = format!("https://{bucket}.s3.amazonaws.com/{key}");
@@ -183,6 +243,31 @@ mod tests {
         assert_eq!(n, all[1]);
         assert!((d - 11.1).abs() < 0.3 && !(5.0..=355.0).contains(&b));
         assert!(nearest(&all, 0.0, 0.0, 50.0, 0).is_none());
+    }
+
+    #[test]
+    fn reads_xweather_strikes() {
+        let ok = r#"{"success":true,"error":null,"response":[
+            {"loc":{"lat":32.9001,"long":-87.3311},"ob":{"timestamp":1748359934,"dateTimeISO":"2025-05-27T15:32:14+00:00","pulse":{"type":"cg","peakamp":-7000}}},
+            {"loc":{"lat":33.1,"long":-87.0},"ob":{"timestamp":1748359940}}]}"#;
+        let f = parse_xweather(ok).unwrap();
+        assert_eq!(f.len(), 2);
+        assert_eq!(
+            f[0],
+            Flash {
+                lat: 32.9001,
+                lon: -87.3311,
+                time: 1748359934
+            }
+        );
+        let none = r#"{"success":true,"error":{"code":"warn_no_data","description":"No data"},"response":[]}"#;
+        assert!(parse_xweather(none).unwrap().is_empty());
+        let bad = r#"{"success":false,"error":{"code":"invalid_client","description":"The client provided is invalid."},"response":[]}"#;
+        assert!(parse_xweather(bad)
+            .unwrap_err()
+            .to_string()
+            .contains("client provided is invalid"));
+        assert!(glm_covers(35.0, -97.0) && !glm_covers(52.0, 5.0) && !glm_covers(-33.9, 151.2));
     }
 
     /// A real file: set `SS_GLM_SAMPLE=/path/to/OR_GLM-L2-LCFA_….nc`.

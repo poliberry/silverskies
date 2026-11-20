@@ -91,7 +91,9 @@ The **LTG** toggle (bolt icon, `:layer lightning`, Settings → Radar) shows lig
 
 When there has been a flash within 100 km of your place in the last 15 minutes, a badge at the top of the map reads, e.g., **LTG 12 km NW · 3 min**: the nearest flash's distance, direction and age (red within 16 km, about 10 miles: thunder range). The 3D radar draws recent flashes as bolts above the ground.
 
-Satellite lightning mappers see total lightning (in-cloud and cloud-to-ground) at about 8–10 km resolution, so a flash's position is approximate. There is no free real-time feed for East and South Asia or Australia yet.
+**Anywhere else (with your own key):** Settings → Data sources → *Non-commercial sources* takes a free [Xweather](https://signup.xweather.com/developer) developer key (client ID and secret). Its free plan is for non-commercial use, so it stays off until you allow such sources. Pro then checks Vaisala's worldwide lightning network (GLD360) for strikes within 100 km of your place, where the GOES satellites don't give individual flashes (Europe, Africa, Asia, Australia), every 30 minutes by default. Each check returns the last 5 minutes and costs 10 of the free plan's 15,000 monthly accesses: every 30 minutes uses about 14,400. The strikes join the map and the nearest-strike badge. *Check now* tests the key.
+
+Satellite lightning mappers see total lightning (in-cloud and cloud-to-ground) at about 8–10 km resolution, so a flash's position is approximate. Without a key there is no free real-time feed for East and South Asia or Australia. Blitzortung's community network isn't used: its terms forbid storm-warning use and require the project's permission.
 
 ## Pro: hail swaths and rotation tracks (US)
 

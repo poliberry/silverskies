@@ -26,6 +26,8 @@ pub enum AppEvent {
         site: String,
         result: Result<std::sync::Arc<ss_core::radar3d::SiteScan>, String>,
     },
+    /// Strikes near the tracked place from Xweather.
+    XweatherLightning(Result<Vec<ss_net::glm::Flash>, String>),
     /// Newest image time of each satellite of a product.
     SatLatest {
         product: ss_core::types::SatProduct,

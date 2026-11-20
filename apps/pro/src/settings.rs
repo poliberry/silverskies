@@ -113,6 +113,8 @@ pub struct SettingsState {
     show_willy: bool,
     show_owm: bool,
     show_ai_key: bool,
+    show_xw_id: bool,
+    show_xw_secret: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -447,7 +449,10 @@ pub fn settings_ui(
                     kit::page_header(ui, p, title, sub);
                     match st.tab {
                         Tab::General => general_tab(ui, &mut sh.config, p, st),
-                        Tab::Sources => sources_tab(ui, &mut sh.config, p, st),
+                        Tab::Sources => {
+                            sources_tab(ui, &mut sh.config, p, st);
+                            noncommercial_card(ui, sh, p, st);
+                        }
                         Tab::Radar => radar_tab(ui, sh, p, st),
                         Tab::Alerts => alerts_tab(ui, &mut sh.config, p, st),
                         Tab::Radio => radio_tab(ui, &mut sh.config, p),
@@ -714,6 +719,105 @@ fn sources_tab(ui: &mut Ui, cfg: &mut Config, p: &Palette, st: &mut SettingsStat
         p,
         "Keys are stored in your Silver Skies config file and only sent to their own service. \
          Storm cells, storm reports, tropical cyclones, soundings and terrain use free services that need no key.",
+    );
+}
+
+/// Sources whose free terms allow personal, non-commercial use only:
+/// off until the person turns them on, each with its own key.
+fn noncommercial_card(ui: &mut Ui, sh: &mut Shared, p: &Palette, st: &mut SettingsState) {
+    let status = sh.xweather_status.clone();
+    let mut check = false;
+    let cfg = &mut sh.config;
+    kit::card(ui, p, "Non-commercial sources", |ui| {
+        let mut rows = Rows::new();
+        toggle_row(
+            ui,
+            p,
+            &mut rows,
+            "Allow non-commercial sources",
+            Some("Services whose free plans are for personal, non-commercial use only. Turn on only if that's how you use Pro."),
+            &mut cfg.noncommercial_sources,
+        );
+        let on = cfg.noncommercial_sources;
+        ui.add_enabled_ui(on, |ui| {
+            rows.next(ui, p);
+            kit::row(
+                ui,
+                p,
+                "Xweather client ID",
+                Some("Lightning worldwide (Vaisala GLD360): free developer account at xweather.com"),
+                FIELD_W,
+                |ui| {
+                    kit::secret_field(
+                        ui,
+                        p,
+                        &mut cfg.xweather_client_id,
+                        &mut st.show_xw_id,
+                        "not set",
+                        FIELD_W,
+                    )
+                },
+            );
+            rows.next(ui, p);
+            kit::row(ui, p, "Xweather client secret", None, FIELD_W, |ui| {
+                kit::secret_field(
+                    ui,
+                    p,
+                    &mut cfg.xweather_client_secret,
+                    &mut st.show_xw_secret,
+                    "not set",
+                    FIELD_W,
+                )
+            });
+            rows.next(ui, p);
+            kit::row(
+                ui,
+                p,
+                "Check lightning every",
+                Some("Each check costs 10 of the free plan's 15,000 monthly accesses: every 30 minutes uses about 14,400 a month"),
+                FIELD_W,
+                |ui| {
+                    kit::slider(
+                        ui,
+                        p,
+                        egui::Slider::new(&mut cfg.xweather_minutes, 5..=120).suffix(" min"),
+                    )
+                },
+            );
+            rows.next(ui, p);
+            kit::row(
+                ui,
+                p,
+                "Test the key",
+                Some("One lightning check for your place now"),
+                FIELD_W,
+                |ui| {
+                    if kit::button(ui, p, "Check now").clicked() {
+                        check = true;
+                    }
+                },
+            );
+            let (c, text) = match &status {
+                None => (c32a(p.text3), "Not checked yet".to_string()),
+                Some((t, Ok(n))) => (
+                    c32(p.safe),
+                    format!("Last check {}: {n} strikes within 100 km", t.format("%H:%M")),
+                ),
+                Some((t, Err(e))) => (c32(p.danger), format!("Last check {}: {e}", t.format("%H:%M"))),
+            };
+            ui.add_space(4.0);
+            kit::status(ui, c, c32(p.text), &text);
+        });
+    });
+    if check {
+        sh.xweather_check_now = true;
+    }
+    note(
+        ui,
+        p,
+        "Xweather fills in lightning where the GOES satellites don't give individual flashes (Europe, Africa, Asia, Australia): \
+         strikes within 100 km of your place in the last 5 minutes, on the map and in the nearest-strike badge. \
+         Not available without a licence: Blitzortung (its terms forbid storm warnings and need the project's permission).",
     );
 }
 

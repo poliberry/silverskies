@@ -38,6 +38,8 @@ Keys are camelCase. The most useful:
 |---|---|---|
 | `provider` | `"open-meteo"` | Forecast source (`open-meteo` or `accu-weather`) |
 | `accuWeatherApiKey`, `willyWeatherApiKey`, `openWeatherMapApiKey` | `null` | Optional keys |
+| `noncommercialSources` | `false` | Allow sources whose free plans are for personal, non-commercial use only |
+| `xweatherClientId`, `xweatherClientSecret`, `xweatherMinutes` | `null`, `null`, `30` | Xweather lightning (needs `noncommercialSources`) and how often it's checked |
 | `libreWxrHost` | `"https://api.librewxr.net"` | Radar/alert server |
 | `units` | `"F"` | `F` or `C` |
 | `timeFormat` | `"12"` | `"12"` or `"24"` |

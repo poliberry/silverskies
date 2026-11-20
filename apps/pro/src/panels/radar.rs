@@ -2119,6 +2119,9 @@ impl RadarPanel {
         }
         if rs.lightning {
             attribution.push_str(" · Lightning: NOAA GOES GLM, EUMETSAT");
+            if sh.config.xweather().is_some() {
+                attribution.push_str(", Xweather (Vaisala)");
+            }
         }
         self.map.attribution = attribution;
         let now_s = chrono::Utc::now().timestamp();

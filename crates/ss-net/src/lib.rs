@@ -149,6 +149,21 @@ impl Net {
         Ok(resp)
     }
 
+    /// The body whatever the status (for APIs that explain errors in it).
+    /// The URL is never logged or put in errors: it may carry credentials.
+    pub async fn get_text_any_status(&self, url: &str) -> Result<String> {
+        let resp = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| NetError::Service(format!("network error: {}", e.without_url())))?;
+        tracing::debug!(status = resp.status().as_u16(), "GET (credentials hidden)");
+        resp.text()
+            .await
+            .map_err(|e| NetError::Service(format!("network error: {}", e.without_url())))
+    }
+
     pub async fn get_text(&self, url: &str, accept: Option<&str>) -> Result<String> {
         Ok(self.send(url, accept).await?.text().await?)
     }

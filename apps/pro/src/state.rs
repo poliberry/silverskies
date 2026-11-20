@@ -206,6 +206,10 @@ pub struct Shared {
     >,
     pub tracks_requested: HashMap<(ss_net::mrms::TrackKind, u32), std::time::Instant>,
     pub tracks_pending: std::collections::HashSet<ss_net::mrms::TrackKind>,
+    /// The last Xweather lightning check: when, and strikes found or the
+    /// error; and a request to check now (from Settings).
+    pub xweather_status: Option<(chrono::DateTime<chrono::Local>, Result<usize, String>)>,
+    pub xweather_check_now: bool,
     /// Newest image time (unix s) of each satellite source of `sat_for`.
     pub sat_latest: HashMap<&'static str, i64>,
     pub sat_for: Option<ss_core::types::SatProduct>,
@@ -309,6 +313,8 @@ impl Shared {
             tracks_requested: HashMap::new(),
             tracks_pending: Default::default(),
             arrivals: Vec::new(),
+            xweather_status: None,
+            xweather_check_now: false,
             sat_latest: HashMap::new(),
             sat_for: None,
             scene3d_pending: Default::default(),

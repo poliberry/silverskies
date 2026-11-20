@@ -252,6 +252,18 @@ impl Tasks {
         });
     }
 
+    /// Xweather strikes within 100 km of a point (last 5 minutes).
+    pub fn xweather_lightning(&self, id: String, secret: String, lat: f64, lon: f64) {
+        let (net, tx, ctx) = (self.net.clone(), self.tx.clone(), self.ctx.clone());
+        self.rt.spawn(async move {
+            let r = net
+                .xweather_lightning(&id, &secret, lat, lon)
+                .await
+                .map_err(|e| e.to_string());
+            Self::post(&tx, &ctx, AppEvent::XweatherLightning(r));
+        });
+    }
+
     /// When each satellite of `product` has its newest image.
     pub fn sat_latest(&self, product: ss_core::types::SatProduct) {
         let (net, tx, ctx) = (self.net.clone(), self.tx.clone(), self.ctx.clone());
