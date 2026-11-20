@@ -139,6 +139,8 @@ pub enum Command {
     /// What the satellite layer shows.
     Sat(crate::types::SatProduct),
     Placefile(PlacefileCmd),
+    /// Save the radar loop as an animated GIF.
+    ExportLoop,
     Site(Option<String>),
     Play,
     Pause,
@@ -322,6 +324,12 @@ static COMMANDS: &[CmdInfo] = &[
         &[],
         "tilt <n|up|down>",
         "Choose the Level II tilt (1 = lowest)",
+    ),
+    ci(
+        "export",
+        &["gif", "saveloop"],
+        "export [loop]",
+        "Save the radar loop as an animated GIF (in Pictures)",
     ),
     ci(
         "placefile",
@@ -651,6 +659,11 @@ pub fn parse(line: &str) -> Result<Command, ParseError> {
                     .ok_or_else(|| bad(name, "tilt", a)),
             }
         }
+        "export" | "gif" | "saveloop" => match args.first().map(|s| s.to_ascii_lowercase()) {
+            None => Ok(Command::ExportLoop),
+            Some(a) if a == "loop" || a == "gif" || a == "radar" => Ok(Command::ExportLoop),
+            Some(a) => Err(bad(name, "what", &a)),
+        },
         "placefile" => {
             let sub = args
                 .first()
@@ -1373,6 +1386,8 @@ mod tests {
             Command::Placefile(PlacefileCmd::Remove(2))
         );
         assert_eq!(p("placefile"), Command::Placefile(PlacefileCmd::List));
+        assert_eq!(p("export loop"), Command::ExportLoop);
+        assert_eq!(p("gif"), Command::ExportLoop);
         assert!(parse("placefile add ftp://x").is_err());
         assert_eq!(
             p("sat color"),

@@ -289,6 +289,8 @@ pub struct RadarPanel {
     sat_time: Option<i64>,
     /// The basemap's own credit line.
     base_attribution: String,
+    /// A loop export in progress.
+    export: Option<super::export::LoopExport>,
     /// Icon sheet textures by URL, and which placefiles the layer holds.
     pf_textures: std::collections::HashMap<String, (egui::TextureHandle, [usize; 2], bool)>,
     pf_sig: Vec<usize>,
@@ -454,6 +456,7 @@ impl RadarPanel {
             track_keys: Default::default(),
             sat_time: None,
             base_attribution: ss_map::attribution_for(ss_map::Basemap::Map).to_string(),
+            export: None,
             pf_textures: Default::default(),
             pf_sig: Vec::new(),
             last_wind_req: None,
@@ -895,6 +898,7 @@ impl Panel for RadarPanel {
             (ui.available_height() - below).max(64.0)
         };
         let r = ui.allocate_ui(vec2(w, map_h), |ui| self.map.show(ui)).inner;
+        self.run_export(ui, cx, &rs, &frames, r.rect);
         self.cross_section_window(ui.ctx(), ui.scope_id().with("xsect"), &rs, &cx.palette);
 
         if let Some(bar) = slot {
@@ -1212,6 +1216,94 @@ fn frame_time_label(time: i64, fmt: TimeFormat) -> String {
 }
 
 impl RadarPanel {
+    /// Start (on request) and drive a loop export: show each frame until
+    /// it's captured, stamp the time on the map, then report the file.
+    fn run_export(
+        &mut self,
+        ui: &mut Ui,
+        cx: &mut PanelCx,
+        rs: &RadarSettings,
+        frames: &[LoopFrame],
+        map: egui::Rect,
+    ) {
+        use super::export::{LoopExport, Step};
+        if std::mem::take(&mut cx.req.export_loop) && self.export.is_none() {
+            if rs.nexrad_site.is_some() {
+                cx.shared.log(
+                    LogLevel::Warn,
+                    "loop export works on the composite loop: :site to go back to it",
+                );
+            } else if frames.is_empty() {
+                cx.shared
+                    .log(LogLevel::Warn, "no radar frames to export yet");
+            } else {
+                cx.shared.log(
+                    LogLevel::Info,
+                    format!("exporting the radar loop ({} frames)…", frames.len()),
+                );
+                self.export = Some(LoopExport::new(frames.len()));
+                self.playback.set_playing(false);
+            }
+        }
+        let Some(ex) = self.export.as_mut() else {
+            return;
+        };
+        if let Some(rx) = &ex.done {
+            if let Ok(r) = rx.try_recv() {
+                match r {
+                    Ok(path) => cx.shared.log(
+                        LogLevel::Info,
+                        format!("radar loop saved: {}", path.display()),
+                    ),
+                    Err(e) => cx.shared.log(LogLevel::Error, format!("loop export: {e}")),
+                }
+                self.export = None;
+                self.playback.go_live(frames);
+                return;
+            }
+            ui.ctx().request_repaint_after(Duration::from_millis(100));
+            return;
+        }
+        let last = frames.len().saturating_sub(1);
+        let ready = self
+            .map
+            .layers
+            .get_mut::<RadarLoopLayer>("radar")
+            .map_or(1.0, |l| l.ready(ex.i.min(last)));
+        let ppp = ui.ctx().pixels_per_point();
+        if let Step::Show(i) = ex.step(ui.ctx(), ready, map, ppp) {
+            self.playback.tracking_live = false;
+            self.playback.playing = false;
+            self.playback.idx = i.min(last);
+        }
+        // The frame's time and place, in the picture.
+        if let Some(f) = frames.get(self.playback.idx) {
+            let when = chrono::DateTime::from_timestamp(f.time, 0)
+                .map(|d| d.with_timezone(&Local).format("%a %d %b %H:%M").to_string())
+                .unwrap_or_default();
+            let place = cx
+                .location
+                .as_ref()
+                .map(|l| l.label.clone())
+                .unwrap_or_default();
+            let text = if f.nowcast {
+                format!("{when} NOWCAST · {place}")
+            } else {
+                format!("{when} · {place}")
+            };
+            let painter = ui.painter_at(map);
+            let g = painter.layout_no_wrap(text, FontId::monospace(14.0), Color32::WHITE);
+            let at = egui::Rect::from_min_size(
+                map.left_bottom() + vec2(10.0, -g.size().y - 30.0),
+                g.size(),
+            )
+            .expand2(vec2(6.0, 3.0));
+            painter.rect_filled(at, 3.0, Color32::from_black_alpha(190));
+            painter.galley(at.min + vec2(6.0, 3.0), g, Color32::WHITE);
+        }
+        ui.ctx().request_repaint();
+    }
+
     /// Fetch the site's Level II scan and redraw the chosen tilt when
     /// anything changes.
     fn sync_level2(&mut self, cx: &mut PanelCx, rs: &RadarSettings, ctx: &egui::Context) {
@@ -1663,6 +1755,20 @@ impl RadarPanel {
             .unwrap_or_else(|| format!("{}", rs.color_scheme));
         let row = |ui: &mut Ui| {
             ui.horizontal(|ui| {
+                    // Save the loop as a GIF (composite loop only).
+                    if rs.nexrad_site.is_none() {
+                        let busy = self.export.is_some();
+                        let tip = if busy {
+                            "Saving the loop…"
+                        } else {
+                            "Save the radar loop as an animated GIF (in Pictures)"
+                        };
+                        if icon_button(ui, &p, ss_assets::symbols::GIF_BOX, Some(busy), tip).clicked()
+                            && !busy
+                        {
+                            cx.emit.push(Command::ExportLoop);
+                        }
+                    }
                     // Measure (and, with a Level II scan, cross section).
                     {
                         let armed = self.map.line_mode;

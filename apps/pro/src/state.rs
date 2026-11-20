@@ -93,6 +93,8 @@ pub struct PanelRequests {
     pub selected_alert_id: Option<String>,
     /// `:radar recenter` request (consumed by the radar panel).
     pub map_recenter: bool,
+    /// `:export loop` request (consumed by the radar panel).
+    pub export_loop: bool,
     /// `:zoom <level>` request (consumed by the radar panel).
     pub map_zoom: Option<f32>,
     /// `:alerts clear` also drops the radar selection rectangle.

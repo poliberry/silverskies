@@ -370,6 +370,7 @@ pub fn apply_view_cmd(req: &mut PanelRequests, cmd: &Command) {
     match cmd {
         Command::Zoom(z) => req.map_zoom = Some(*z),
         Command::Radar(RadarCmd::Recenter) => req.map_recenter = true,
+        Command::ExportLoop => req.export_loop = true,
         Command::Play => req.radar_play = Some(true),
         Command::Pause => req.radar_play = Some(false),
         Command::Frame(n) => req.radar_step = Some(*n),
@@ -969,6 +970,7 @@ fn run(app: &mut App, sh: &mut Shared, target: &WindowTarget, cmd: Command, fx: 
         Command::Assistant => app.chat.show_window(),
         Command::Zoom(_)
         | Command::Radar(RadarCmd::Recenter | RadarCmd::Live)
+        | Command::ExportLoop
         | Command::Play
         | Command::Pause
         | Command::Frame(_) => {
