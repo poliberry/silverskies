@@ -25,6 +25,7 @@ pub const DEVICE_THERMOSTAT: &str = "\u{e1ff}";
 pub const EXPAND_LESS: &str = "\u{e5ce}";
 pub const EXPAND_MORE: &str = "\u{e5cf}";
 pub const FAST_FORWARD: &str = "\u{e01f}";
+pub const GRID_VIEW: &str = "\u{e9b0}";
 pub const HUMIDITY_PERCENTAGE: &str = "\u{f87e}";
 pub const INFO: &str = "\u{e88e}";
 pub const LANDSCAPE: &str = "\u{e3f7}";
@@ -91,6 +92,7 @@ pub const ALL: &[&str] = &[
     EXPAND_LESS,
     EXPAND_MORE,
     FAST_FORWARD,
+    GRID_VIEW,
     HUMIDITY_PERCENTAGE,
     INFO,
     LANDSCAPE,

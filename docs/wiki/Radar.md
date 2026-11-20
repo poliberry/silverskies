@@ -106,6 +106,12 @@ Two layers from NOAA's Multi-Radar Multi-Sensor system (MRMS), which merges ever
 
 Choose how far back they reach in Settings → Radar → *Track period* or with `:period` (30 min, 1, 2, 4, 6 or 24 h; default 2 h). They refresh every few minutes. Hover the map for the value under the pointer, e.g. *hail up to 1.75 in (44 mm) · last 2 h*. Single isolated pixels (usually clutter) are left out. The values are radar estimates: compare with storm reports.
 
+## Pro: 4-panel
+
+The **4-PANEL** pane (grid icon in the tool strip, `:show 4panel`) shows one radar's scan four ways at once, the way storm chasers and forecasters read a storm: by default reflectivity, velocity, correlation coefficient and differential reflectivity, each with its own legend; pick another product for any map from its menu (storm-relative velocity, for example). All four use the same tilt (◀ ▶ in the pane, or `:tilt`), pan and zoom together, and mirror the pointer as a cross, so a hook in reflectivity, a couplet in velocity and a debris signature in CC line up.
+
+It uses the radar selected with `:site` (US NEXRAD or European OPERA), or else the nearest one within 230 km of your place that's working. Velocity, CC and ZDR are drawn only where the same tilt has at least 5 dBZ of reflectivity, hiding clear-air noise (the same applies to the radar pane's Level II view).
+
 ## Pro: placefiles
 
 Pro reads **placefiles**, the plain-text overlay format GRLevelX made popular and many feeds publish: spotter positions, local reports, warning tracks, station plots, storm attributes, your own annotations. Add one in Settings → Radar → *Placefiles* (paste its URL) or with `:placefile add URL`; `:placefile list`, `:placefile toggle N` and `:placefile remove N` manage them.

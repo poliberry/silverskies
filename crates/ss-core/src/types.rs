@@ -695,10 +695,13 @@ pub enum PanelKind {
     /// 3D radar volume and terrain.
     #[serde(rename = "radar-3d")]
     Radar3d,
+    /// Four linked maps of one radar's products.
+    #[serde(rename = "radar-4")]
+    Quad,
 }
 
 impl PanelKind {
-    pub const ALL: [PanelKind; 10] = [
+    pub const ALL: [PanelKind; 11] = [
         PanelKind::Locations,
         PanelKind::Radar,
         PanelKind::AuditLog,
@@ -709,6 +712,7 @@ impl PanelKind {
         PanelKind::Storms,
         PanelKind::Sounding,
         PanelKind::Radar3d,
+        PanelKind::Quad,
     ];
     pub fn id(self) -> &'static str {
         match self {
@@ -722,6 +726,7 @@ impl PanelKind {
             PanelKind::Storms => "storms",
             PanelKind::Sounding => "sounding",
             PanelKind::Radar3d => "radar-3d",
+            PanelKind::Quad => "radar-4",
         }
     }
     pub fn title(self) -> &'static str {
@@ -736,6 +741,7 @@ impl PanelKind {
             PanelKind::Storms => "STORMS",
             PanelKind::Sounding => "SOUNDING",
             PanelKind::Radar3d => "3D RADAR",
+            PanelKind::Quad => "4-PANEL",
         }
     }
     pub fn parse(s: &str) -> Option<Self> {

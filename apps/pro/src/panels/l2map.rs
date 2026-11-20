@@ -36,6 +36,10 @@ pub fn render(
     let data = p.moment(moment)?;
     let layer = p.width * AZIMUTHS;
     let lay = &data[k * layer..(k + 1) * layer];
+    // Other products are shown only where this tilt has an echo of at
+    // least 5 dBZ (hides clear-air noise), unless it has no reflectivity.
+    let refl = &p.data[k * layer..(k + 1) * layer];
+    let mask = moment != Moment::Ref && refl.iter().any(|&b| b != 0);
     let reach = sw.first_gate_km + sw.gate_km * sw.gates as f32;
     // The box around the radar, in degrees, rows evenly spaced in mercator.
     let deg_lat = f64::from(reach) / 111.19;
@@ -74,6 +78,13 @@ pub fn render(
             }
             let bin = ((az / 360.0 * AZIMUTHS as f32) as usize).min(AZIMUTHS - 1);
             let b = lay[bin * p.width + gate as usize];
+            if mask
+                && Moment::Ref
+                    .decode(refl[bin * p.width + gate as usize])
+                    .is_none_or(|r| r < 5.0)
+            {
+                continue;
+            }
             let Some(mut v) = moment.decode(b) else {
                 continue;
             };

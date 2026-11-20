@@ -415,6 +415,9 @@ fn parse_panel(s: &str) -> Option<PanelKind> {
         "3d" | "radar3d" | "3dradar" | "volume" | "terrain" | "topo" | "topography" => {
             Some(PanelKind::Radar3d)
         }
+        "4" | "4panel" | "4-panel" | "quad" | "four" | "fourpanel" | "panels" => {
+            Some(PanelKind::Quad)
+        }
         _ => None,
     }
 }
@@ -1447,9 +1450,12 @@ mod tests {
     fn complete_args() {
         assert_eq!(
             complete("move ra"),
-            ["move radar", "move radar-3d", "move radio"]
+            ["move radar", "move radar-3d", "move radar-4", "move radio"]
         );
-        assert_eq!(complete("move rada"), ["move radar", "move radar-3d"]);
+        assert_eq!(
+            complete("move rada"),
+            ["move radar", "move radar-3d", "move radar-4"]
+        );
         assert_eq!(
             complete(":move radar "),
             [

@@ -50,7 +50,7 @@ Press `:` to open the command line. Commands are case-insensitive; Tab completes
 ## Panes
 
 Accepted wherever a `<panel>` is expected (`:show`, `:hide`, `:move`, `:swap`, `:popout`):
-`locations` (`loc`), `radar`, `audit-log` (`log`, `alerts`), `conditions` (`cond`, `current`), `forecast` (`7day`, `daily`, `week`), `hourly` (`hours`), `radio` (`wx`), `storms` (`cells`, `lsr`, `severe`), `sounding` (`skewt`, `hodo`, `raob`), `radar-3d` (`3d`, `volume`, `terrain`, `topo`).
+`locations` (`loc`), `radar`, `audit-log` (`log`, `alerts`), `conditions` (`cond`, `current`), `forecast` (`7day`, `daily`, `week`), `hourly` (`hours`), `radio` (`wx`), `storms` (`cells`, `lsr`, `severe`), `sounding` (`skewt`, `hodo`, `raob`), `radar-3d` (`3d`, `volume`, `terrain`, `topo`), `radar-4` (`4panel`, `quad`, `four`).
 
 ## Map layers
 

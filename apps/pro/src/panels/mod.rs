@@ -20,6 +20,7 @@ pub mod gl3d;
 pub mod hourly;
 pub mod l2map;
 pub mod locations;
+pub mod quad;
 pub mod radar;
 pub mod radar3d;
 pub mod radio;
@@ -98,6 +99,12 @@ impl PanelFactory {
             PanelKind::Storms => Box::new(storms::StormsPanel),
             PanelKind::Sounding => Box::new(sounding::SoundingPanel::default()),
             PanelKind::Radar3d => Box::new(radar3d::Radar3dPanel::new(
+                self.client.clone(),
+                self.rt.clone(),
+                self.tile_dir.clone(),
+                self.ctx.clone(),
+            )),
+            PanelKind::Quad => Box::new(quad::QuadPanel::new(
                 self.client.clone(),
                 self.rt.clone(),
                 self.tile_dir.clone(),
