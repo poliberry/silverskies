@@ -507,6 +507,10 @@ pub struct Config {
     pub tts_severity_filter: TtsSeverityFilter,
     /// Play the SAME two-tone attention signal before each spoken alert.
     pub tts_attention_tone: bool,
+    /// Attention tone loudness, 0–1 (perceptual; 1 = the full SAME level).
+    pub tts_tone_volume: f32,
+    /// Attention tone length, seconds (1–8).
+    pub tts_tone_seconds: f32,
     /// Speech rate multiplier, 0.5–2.0.
     pub tts_rate: f32,
     /// Also announce alerts for every saved location, not just the active one.
@@ -551,6 +555,8 @@ impl Default for Config {
             tts_alerts_enabled: false,
             tts_severity_filter: TtsSeverityFilter::SevereAndUp,
             tts_attention_tone: true,
+            tts_tone_volume: 0.45,
+            tts_tone_seconds: 3.0,
             tts_rate: 0.95,
             tts_all_saved_locations: false,
             storm_polygons_enabled: true,

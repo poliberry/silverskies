@@ -16,6 +16,17 @@ pub const SPACE_HZ: f64 = 1562.5;
 pub const PREAMBLE_BYTE: u8 = 0xAB;
 pub const ATTENTION_SECONDS: f32 = 8.0;
 pub const ATTENTION_GAIN: f32 = 0.35;
+
+/// Output gain for a tone volume setting (0–1, squared so the slider feels
+/// even to the ear), capped at [`ATTENTION_GAIN`].
+pub fn tone_gain(volume: f32) -> f32 {
+    let v = if volume.is_finite() {
+        volume.clamp(0.0, 1.0)
+    } else {
+        0.45
+    };
+    ATTENTION_GAIN * v * v
+}
 const MAX_HEADER_CHARS: usize = 200;
 /// Consecutive preamble bytes needed to lock.
 const LOCK_BYTES: usize = 4;

@@ -294,7 +294,7 @@ fn run_radio(app: &mut App, sh: &mut Shared, cmd: RadioCmd) {
             sh.log(LogLevel::Info, "radio: retrying");
         }
         RadioCmd::Test => {
-            app.audio.test();
+            app.audio.test(&sh.config);
             sh.log(LogLevel::Info, "radio: test announcement");
         }
     }
@@ -842,7 +842,7 @@ fn run(app: &mut App, sh: &mut Shared, target: &WindowTarget, cmd: Command, fx: 
             match top {
                 Some(text) => {
                     let tone = sh.config.tts_attention_tone;
-                    app.audio.announce(text, tone);
+                    app.audio.announce(text, tone, &sh.config);
                     sh.log(LogLevel::Info, "reading the top alert");
                 }
                 None => sh.log(LogLevel::Info, "no active alerts to read"),
@@ -881,6 +881,7 @@ fn run(app: &mut App, sh: &mut Shared, target: &WindowTarget, cmd: Command, fx: 
                             600,
                         ),
                         tone,
+                        &sh.config,
                     );
                 }
             }

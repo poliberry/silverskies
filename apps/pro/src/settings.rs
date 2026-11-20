@@ -1167,6 +1167,38 @@ fn radio_tab(ui: &mut Ui, cfg: &mut Config, p: &Palette) {
                 Some("Play a tone before each alert"),
                 &mut cfg.tts_attention_tone,
             );
+            ui.add_enabled_ui(cfg.tts_attention_tone, |ui| {
+                rows.next(ui, p);
+                kit::row(ui, p, "Tone volume", None, CTRL_W, |ui| {
+                    let mut v = cfg.tts_tone_volume;
+                    if kit::slider(
+                        ui,
+                        p,
+                        egui::Slider::new(&mut v, 0.05..=1.0)
+                            .step_by(0.05)
+                            .custom_formatter(|v, _| format!("{:.0}%", v * 100.0)),
+                    )
+                    .changed()
+                    {
+                        cfg.tts_tone_volume = v.clamp(0.05, 1.0);
+                    }
+                });
+                rows.next(ui, p);
+                kit::row(ui, p, "Tone length", None, CTRL_W, |ui| {
+                    let mut v = cfg.tts_tone_seconds;
+                    if kit::slider(
+                        ui,
+                        p,
+                        egui::Slider::new(&mut v, 1.0..=8.0)
+                            .step_by(0.5)
+                            .custom_formatter(|v, _| format!("{v:.1} s")),
+                    )
+                    .changed()
+                    {
+                        cfg.tts_tone_seconds = v.clamp(1.0, 8.0);
+                    }
+                });
+            });
             toggle_row(
                 ui,
                 p,

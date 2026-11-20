@@ -30,84 +30,259 @@ pub fn map_rate(mult: f32, min: f32, normal: f32, max: f32) -> f32 {
     }
 }
 
-/// Thin wrapper over `tts::Tts`. May be `!Send` depending on the backend; use
-/// [`TtsHandle`] from multi-threaded code.
+/// Text-to-speech: the platform engine (WinRT/SAPI, AVFoundation) or, on
+/// Linux, the `espeak-ng` / `espeak` command, falling back to
+/// speech-dispatcher. May be `!Send` depending on the
+/// backend; use [`TtsHandle`] from multi-threaded code.
 pub struct Tts {
-    inner: tts::Tts,
+    backend: Backend,
+}
+
+enum Backend {
+    Native(tts::Tts),
+    Command(CommandTts),
 }
 
 impl Tts {
     pub fn new() -> Result<Tts, AudioError> {
-        let inner = tts::Tts::default().map_err(tts_err)?;
-        Ok(Tts { inner })
+        if !cfg!(target_os = "linux") {
+            let inner = tts::Tts::default().map_err(tts_err)?;
+            return Ok(Tts {
+                backend: Backend::Native(inner),
+            });
+        }
+        // Linux: speech-dispatcher is often missing, not running or without
+        // an output module, and then fails silently. The espeak-ng command
+        // just works when installed, so it comes first (`SS_TTS=speechd`
+        // prefers speech-dispatcher).
+        let prefer_speechd = std::env::var("SS_TTS").is_ok_and(|v| v == "speechd");
+        if !prefer_speechd {
+            if let Some(c) = CommandTts::find() {
+                return Ok(Tts {
+                    backend: Backend::Command(c),
+                });
+            }
+        }
+        match tts::Tts::default() {
+            Ok(t) if t.voices().is_ok_and(|v| !v.is_empty()) => {
+                return Ok(Tts {
+                    backend: Backend::Native(t),
+                })
+            }
+            Ok(_) => tracing::warn!("speech-dispatcher has no voices"),
+            Err(e) => tracing::warn!("speech-dispatcher unavailable: {e}"),
+        }
+        CommandTts::find()
+            .map(|c| Tts {
+                backend: Backend::Command(c),
+            })
+            .ok_or_else(|| AudioError::Tts("no speech engine found: install espeak-ng".into()))
     }
 
-    /// Speak `text`. Returns `None` for backends that do not report an id.
-    pub fn speak(
-        &mut self,
-        text: &str,
-        interrupt: bool,
-    ) -> Result<Option<tts::UtteranceId>, AudioError> {
-        self.inner.speak(text, interrupt).map_err(tts_err)
+    /// Which engine is speaking, for the log and settings.
+    pub fn engine(&self) -> &'static str {
+        match &self.backend {
+            Backend::Native(_) if cfg!(target_os = "linux") => "speech-dispatcher",
+            Backend::Native(_) => "system voice",
+            Backend::Command(c) => c.program,
+        }
+    }
+
+    /// Speak `text`.
+    pub fn speak(&mut self, text: &str, interrupt: bool) -> Result<(), AudioError> {
+        match &mut self.backend {
+            Backend::Native(t) => t.speak(text, interrupt).map(|_| ()).map_err(tts_err),
+            Backend::Command(c) => {
+                c.speak(text, interrupt);
+                Ok(())
+            }
+        }
     }
 
     pub fn stop(&mut self) -> Result<(), AudioError> {
-        self.inner.stop().map(|_| ()).map_err(tts_err)
+        match &mut self.backend {
+            Backend::Native(t) => t.stop().map(|_| ()).map_err(tts_err),
+            Backend::Command(c) => {
+                c.stop();
+                Ok(())
+            }
+        }
     }
 
-    pub fn is_speaking(&self) -> bool {
-        self.inner.is_speaking().unwrap_or(false)
+    pub fn is_speaking(&mut self) -> bool {
+        match &mut self.backend {
+            Backend::Native(t) => t.is_speaking().unwrap_or(false),
+            Backend::Command(c) => c.pump(),
+        }
     }
 
     /// `mult` in 0.5..=2.0, 1.0 = backend normal rate.
     pub fn set_rate(&mut self, mult: f32) -> Result<(), AudioError> {
-        if !self.inner.supported_features().rate {
-            return Ok(());
+        match &mut self.backend {
+            Backend::Native(t) => {
+                if !t.supported_features().rate {
+                    return Ok(());
+                }
+                let r = map_rate(mult, t.min_rate(), t.normal_rate(), t.max_rate());
+                t.set_rate(r).map(|_| ()).map_err(tts_err)
+            }
+            Backend::Command(c) => {
+                c.rate = map_rate(mult, 90.0, 170.0, 340.0);
+                Ok(())
+            }
         }
-        let r = map_rate(
-            mult,
-            self.inner.min_rate(),
-            self.inner.normal_rate(),
-            self.inner.max_rate(),
-        );
-        self.inner.set_rate(r).map(|_| ()).map_err(tts_err)
     }
 
     /// `mult` in 0.5..=2.0, 1.0 = backend normal pitch. No-op if unsupported.
     pub fn set_pitch(&mut self, mult: f32) -> Result<(), AudioError> {
-        if !self.inner.supported_features().pitch {
-            return Ok(());
+        match &mut self.backend {
+            Backend::Native(t) => {
+                if !t.supported_features().pitch {
+                    return Ok(());
+                }
+                let p = map_rate(mult, t.min_pitch(), t.normal_pitch(), t.max_pitch());
+                t.set_pitch(p).map(|_| ()).map_err(tts_err)
+            }
+            Backend::Command(c) => {
+                c.pitch = map_rate(mult, 20.0, 50.0, 90.0);
+                Ok(())
+            }
         }
-        let p = map_rate(
-            mult,
-            self.inner.min_pitch(),
-            self.inner.normal_pitch(),
-            self.inner.max_pitch(),
-        );
-        self.inner.set_pitch(p).map(|_| ()).map_err(tts_err)
     }
 
     pub fn voices(&self) -> Vec<String> {
-        self.inner
-            .voices()
-            .map(|v| v.iter().map(|v| v.name()).collect())
-            .unwrap_or_default()
+        match &self.backend {
+            Backend::Native(t) => t
+                .voices()
+                .map(|v| v.iter().map(|v| v.name()).collect())
+                .unwrap_or_default(),
+            Backend::Command(c) => c.voices(),
+        }
     }
 
     pub fn set_voice_by_name(&mut self, name: &str) -> Result<(), AudioError> {
-        let voices = self.inner.voices().map_err(tts_err)?;
-        let voice = voices
-            .iter()
-            .find(|v| v.name() == name)
-            .or_else(|| {
-                let lower = name.to_lowercase();
-                voices
+        match &mut self.backend {
+            Backend::Native(t) => {
+                let voices = t.voices().map_err(tts_err)?;
+                let voice = voices
                     .iter()
-                    .find(|v| v.name().to_lowercase().contains(&lower))
-            })
-            .ok_or_else(|| AudioError::Tts(format!("voice not found: {name}")))?;
-        self.inner.set_voice(voice).map_err(tts_err)
+                    .find(|v| v.name() == name)
+                    .or_else(|| {
+                        let lower = name.to_lowercase();
+                        voices
+                            .iter()
+                            .find(|v| v.name().to_lowercase().contains(&lower))
+                    })
+                    .ok_or_else(|| AudioError::Tts(format!("voice not found: {name}")))?;
+                t.set_voice(voice).map_err(tts_err)
+            }
+            Backend::Command(c) => {
+                c.voice = Some(name.to_string());
+                Ok(())
+            }
+        }
     }
+}
+
+/// Speech through the `espeak-ng` (or `espeak`) command: one process per
+/// utterance, queued.
+struct CommandTts {
+    program: &'static str,
+    rate: f32,
+    pitch: f32,
+    voice: Option<String>,
+    queue: std::collections::VecDeque<String>,
+    child: Option<std::process::Child>,
+}
+
+impl CommandTts {
+    fn find() -> Option<CommandTts> {
+        ["espeak-ng", "espeak"].into_iter().find_map(|program| {
+            let ok = std::process::Command::new(program)
+                .arg("--version")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success());
+            ok.then(|| CommandTts {
+                program,
+                rate: 170.0,
+                pitch: 50.0,
+                voice: None,
+                queue: Default::default(),
+                child: None,
+            })
+        })
+    }
+
+    fn speak(&mut self, text: &str, interrupt: bool) {
+        if interrupt {
+            self.stop();
+        }
+        self.queue.push_back(text.to_string());
+        self.pump();
+    }
+
+    fn stop(&mut self) {
+        self.queue.clear();
+        if let Some(mut c) = self.child.take() {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+    }
+
+    /// Start the next utterance when the last has finished. True while
+    /// anything is playing or queued.
+    fn pump(&mut self) -> bool {
+        if let Some(c) = &mut self.child {
+            match c.try_wait() {
+                Ok(None) => return true,
+                _ => self.child = None,
+            }
+        }
+        if let Some(text) = self.queue.pop_front() {
+            let mut cmd = std::process::Command::new(self.program);
+            cmd.arg("-s")
+                .arg(format!("{}", self.rate.round()))
+                .arg("-p")
+                .arg(format!("{}", self.pitch.round()));
+            if let Some(v) = &self.voice {
+                cmd.arg("-v").arg(v);
+            }
+            // `--` so text starting with '-' isn't read as an option.
+            cmd.arg("--")
+                .arg(text)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null());
+            match cmd.spawn() {
+                Ok(c) => self.child = Some(c),
+                Err(e) => tracing::warn!("{}: {e}", self.program),
+            }
+        }
+        self.child.is_some() || !self.queue.is_empty()
+    }
+
+    /// Voice names from `--voices` (the fourth column).
+    fn voices(&self) -> Vec<String> {
+        std::process::Command::new(self.program)
+            .arg("--voices")
+            .output()
+            .map(|o| parse_espeak_voices(&String::from_utf8_lossy(&o.stdout)))
+            .unwrap_or_default()
+    }
+}
+
+impl Drop for CommandTts {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+fn parse_espeak_voices(out: &str) -> Vec<String> {
+    out.lines()
+        .skip(1)
+        .filter_map(|l| l.split_whitespace().nth(3).map(str::to_string))
+        .collect()
 }
 
 /// Commands accepted by the TTS thread.
@@ -126,6 +301,7 @@ pub struct TtsHandle {
     tx: Sender<TtsCmd>,
     busy: Arc<AtomicBool>,
     voices: Arc<parking_lot::Mutex<Vec<String>>>,
+    engine: &'static str,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -133,7 +309,8 @@ impl TtsHandle {
     /// Spawn the TTS thread. Fails if the backend cannot be initialised.
     pub fn spawn() -> Result<TtsHandle, AudioError> {
         let (tx, rx) = crossbeam_channel::unbounded();
-        let (init_tx, init_rx) = crossbeam_channel::bounded::<Result<Vec<String>, AudioError>>(1);
+        let (init_tx, init_rx) =
+            crossbeam_channel::bounded::<Result<(&'static str, Vec<String>), AudioError>>(1);
         let busy = Arc::new(AtomicBool::new(false));
         let voices = Arc::new(parking_lot::Mutex::new(Vec::new()));
         let busy_t = busy.clone();
@@ -141,7 +318,8 @@ impl TtsHandle {
             .name("ss-tts".into())
             .spawn(move || match Tts::new() {
                 Ok(tts) => {
-                    let _ = init_tx.send(Ok(tts.voices()));
+                    tracing::info!("speech engine: {}", tts.engine());
+                    let _ = init_tx.send(Ok((tts.engine(), tts.voices())));
                     run_loop(tts, rx, busy_t);
                 }
                 Err(e) => {
@@ -149,15 +327,19 @@ impl TtsHandle {
                 }
             })
             .map_err(tts_err)?;
-        match init_rx.recv_timeout(Duration::from_secs(10)) {
-            Ok(Ok(v)) => *voices.lock() = v,
+        let engine = match init_rx.recv_timeout(Duration::from_secs(10)) {
+            Ok(Ok((e, v))) => {
+                *voices.lock() = v;
+                e
+            }
             Ok(Err(e)) => return Err(e),
             Err(_) => return Err(AudioError::Timeout),
-        }
+        };
         Ok(TtsHandle {
             tx,
             busy,
             voices,
+            engine,
             thread: Some(thread),
         })
     }
@@ -190,6 +372,11 @@ impl TtsHandle {
 
     pub fn set_voice(&self, name: &str) {
         self.send(TtsCmd::SetVoice(name.to_string()));
+    }
+
+    /// The engine in use (`espeak-ng`, `speech-dispatcher`, …).
+    pub fn engine(&self) -> &'static str {
+        self.engine
     }
 
     /// Voice names captured at startup.
@@ -340,6 +527,15 @@ pub fn alert_announcement(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_espeak_voices() {
+        let out = "Pty Language       Age/Gender VoiceName          File          Other Languages\n 5  af              --/M      Afrikaans          gmw/af\n 2  en-us           --/M      English_(America)  gmw/en-US\n";
+        assert_eq!(
+            parse_espeak_voices(out),
+            vec!["Afrikaans".to_string(), "English_(America)".to_string()]
+        );
+    }
 
     #[test]
     fn rate_mapping() {

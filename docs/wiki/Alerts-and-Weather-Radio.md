@@ -23,7 +23,8 @@ Every alert is classified (for example *Tornado Warning*, *Tornado Warning (PDS)
 
 ## Spoken alerts and weather radio (Pro)
 
-- **Spoken alerts (TTS):** new alerts are read aloud with your system's voice, filtered by severity (extreme only … all), at a chosen rate, optionally after the attention tone, and optionally for every saved place.
+- **Spoken alerts (TTS):** new alerts are read aloud with your system's voice, filtered by severity (extreme only … all), at a chosen rate, optionally after the attention tone (its volume and length are in Settings → Radio & speech), and optionally for every saved place.
+- **In the background:** Pro keeps refreshing, notifying and speaking while its window is minimised, hidden or not focused.
 - **Weather radio:**
   - **Live:** streams the nearest NOAA Weather Radio transmitter (from the [noaaweatherradio.org](https://noaaweatherradio.org) directory) or a stream URL you give.
   - **Simulated:** generates a NOAA-style broadcast for alerts: SAME header bursts (AFSK, 520.83 baud; mark 2083.3 Hz, space 1562.5 Hz), the 1050 Hz attention tone, the spoken message, and the end-of-message bursts.

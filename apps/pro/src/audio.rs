@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use ss_audio::{AudioEngine, SampleSink, SoundHandle, StreamPlayer, StreamStatus, TtsHandle};
-use ss_core::same::{DecodedMessage, SameDecoder, ATTENTION_GAIN, ATTENTION_SECONDS};
+use ss_core::same::{tone_gain, DecodedMessage, SameDecoder};
 use ss_core::{Alert, Config, LiveFeedMode, RadioMode};
 
 use crate::events::AppEvent;
@@ -17,7 +17,15 @@ use crate::state::{LogLevel, RadioStatus};
 
 const TICK_REPAINT: Duration = Duration::from_millis(200);
 const STATUS_POLL: Duration = Duration::from_millis(500);
-const TEST_TONE_SECS: f32 = 3.0;
+
+/// The attention tone's length from the settings.
+fn tone_secs(cfg: &Config) -> f32 {
+    if cfg.tts_tone_seconds.is_finite() {
+        cfg.tts_tone_seconds.clamp(1.0, 8.0)
+    } else {
+        3.0
+    }
+}
 const TEST_TEXT: &str = "Weather Radio Test. This is a test of the Silver Skies Pro weather radio.";
 const TTS_PITCH: f32 = 0.85;
 
@@ -43,6 +51,7 @@ pub struct Announcement {
     pub text: String,
     pub tone: bool,
     pub tone_secs: f32,
+    pub tone_gain: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -111,7 +120,7 @@ impl<B: Backend> Announcer<B> {
                         return;
                     };
                     if a.tone {
-                        self.backend.play_tone(a.tone_secs, ATTENTION_GAIN);
+                        self.backend.play_tone(a.tone_secs, a.tone_gain);
                         self.phase = Phase::Tone;
                     } else {
                         self.backend.speak(&a.text);
@@ -488,6 +497,11 @@ impl AudioState {
             .name("ss-tts-init".into())
             .spawn(move || match TtsHandle::spawn() {
                 Ok(h) => {
+                    post(
+                        &etx,
+                        &ectx,
+                        AppEvent::Log(LogLevel::Info, format!("text-to-speech: {}", h.engine())),
+                    );
                     let _ = ttx.send(Some(h));
                 }
                 Err(e) => {
@@ -522,12 +536,13 @@ impl AudioState {
         }
     }
 
-    /// Queue an announcement with the standard attention tone length.
-    pub fn announce(&mut self, text: String, tone: bool) {
+    /// Queue an announcement, with the attention tone set in `cfg`.
+    pub fn announce(&mut self, text: String, tone: bool, cfg: &Config) {
         self.announcer.enqueue(Announcement {
             text,
             tone,
-            tone_secs: ATTENTION_SECONDS,
+            tone_secs: tone_secs(cfg),
+            tone_gain: tone_gain(cfg.tts_tone_volume),
         });
     }
 
@@ -538,6 +553,7 @@ impl AudioState {
             text,
             tone: false,
             tone_secs: 0.0,
+            tone_gain: 0.0,
         });
     }
 
@@ -546,11 +562,12 @@ impl AudioState {
         self.announcer.clear();
     }
 
-    pub fn test(&mut self) {
+    pub fn test(&mut self, cfg: &Config) {
         self.announcer.enqueue(Announcement {
             text: TEST_TEXT.to_string(),
             tone: true,
-            tone_secs: TEST_TONE_SECS,
+            tone_secs: tone_secs(cfg),
+            tone_gain: tone_gain(cfg.tts_tone_volume),
         });
     }
 
@@ -701,6 +718,7 @@ mod tests {
             text: text.into(),
             tone,
             tone_secs: 8.0,
+            tone_gain: 0.1,
         }
     }
 

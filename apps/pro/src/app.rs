@@ -369,7 +369,7 @@ impl App {
                                 a.description.as_deref(),
                                 600,
                             );
-                            self.audio.announce(text, tone);
+                            self.audio.announce(text, tone, &sh.config);
                         }
                     }
                 }
@@ -1090,10 +1090,18 @@ fn notify(label: &str, a: &Alert) {
 }
 
 impl eframe::App for App {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        let ctx = ui.ctx().clone();
+    /// Runs before every frame *and* while the window is minimised, hidden
+    /// or in the background (when no frame is drawn), so refreshes, new-alert
+    /// notifications and spoken announcements keep happening then too.
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.drain_events();
         self.periodic();
+        // Keep ticking while hidden: the loop is otherwise driven by frames.
+        ctx.request_repaint_after(Duration::from_secs(1));
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
         self.update_palette(false);
         self.cmdbar.handle_global_keys(&ctx);
 

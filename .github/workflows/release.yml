@@ -205,6 +205,8 @@ jobs:
           Package: $APP_BIN
           Version: ${VERSION}-${SS_BUILD}
           Architecture: amd64
+          Depends: libspeechd2
+          Recommends: espeak-ng
           Maintainer: Silver Skies <e993372@staff.poliberry.com>
           Description: $DEB_DESC
            $APP_NAME, part of the Silver Skies suite of weather apps.

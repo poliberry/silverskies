@@ -19,7 +19,7 @@ Use a release build; raise the **≥ dBZ** threshold; turn off satellite imagery
 Check the alert type isn't hidden (Pro: Settings → Alerts). Australian warnings need a WillyWeather key.
 
 **Weather radio or spoken alerts are silent**
-They need an audio device and, on Linux, speech-dispatcher. The audit log reports "audio output unavailable" or "text-to-speech unavailable" at startup if not.
+They need an audio device and, on Linux, a speech engine: install `espeak-ng` (`sudo apt install espeak-ng`, `sudo dnf install espeak-ng`, `sudo pacman -S espeak-ng`). Pro uses it directly, falling back to speech-dispatcher; set `SS_TTS=speechd` to prefer speech-dispatcher. At startup the audit log says which engine it uses ("text-to-speech: espeak-ng"), or "text-to-speech unavailable" and why.
 
 **Updates: "This copy can't update itself"**
 You're running a portable zip or a build from source; download from the release page. A `.deb` install opens the package in your software installer instead.
