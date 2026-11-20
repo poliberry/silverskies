@@ -56,17 +56,6 @@ fn polyline(painter: &Painter, pts: Vec<Pos2>, stroke: Stroke) {
     }
 }
 
-/// Width of the wind-barb column to the right of the Skew-T.
-const BARB_COL: f32 = 56.0;
-/// Barb staff length.
-const BARB_LEN: f32 = 22.0;
-/// Length of a full feather (and pennant height).
-const FEATHER: f32 = 10.0;
-/// Minimum clear space between neighbouring barbs (thins dense low levels).
-const BARB_GAP: f32 = 4.0;
-/// And at least this far apart in height, so flat barbs don't crowd.
-const BARB_STEP: f32 = 12.0;
-
 /// Text with a dark halo so it stays legible over lines.
 fn halo_text(
     painter: &Painter,
@@ -88,45 +77,10 @@ fn halo_text(
     painter.text(pos, align, text, font, col);
 }
 
-/// Vertical extent of a barb drawn at height 0, as (top, bottom) offsets:
-/// the staff and the feathers at its far end.
-fn barb_extent(from_deg: f64) -> (f32, f32) {
-    let a = (from_deg as f32).to_radians();
-    let dir_y = -a.cos();
-    let perp_y = a.sin();
-    let tip = dir_y * BARB_LEN;
-    let feather = tip + perp_y * FEATHER + dir_y * FEATHER * 0.45;
-    let ys = [0.0, tip, feather];
-    (
-        ys.iter().copied().fold(f32::MAX, f32::min),
-        ys.iter().copied().fold(f32::MIN, f32::max),
-    )
-}
-
-/// Which barbs to draw: from the surface up, each level whose barb (its
-/// vertical `extents` around `ys`) clears the last one drawn by `gap` px.
-fn thinned(ys: &[f32], extents: &[(f32, f32)], gap: f32) -> Vec<usize> {
-    let mut out = Vec::new();
-    // (top of the last barb drawn, its level).
-    let mut last: Option<(f32, f32)> = None;
-    for (i, &y) in ys.iter().enumerate() {
-        let (top, bot) = (y + extents[i].0, y + extents[i].1);
-        // Levels go upward on screen: this barb must sit wholly above the last.
-        if last.is_none_or(|(ltop, ly)| bot + gap <= ltop && ly - y >= BARB_STEP) {
-            out.push(i);
-            last = Some((top, y));
-        }
-    }
-    out
-}
-
 /// The skew-T plot area inside `rect`: room for pressure labels on the
-/// left, temperature labels below and the barb column on the right.
+/// left and temperature labels below.
 fn plot_rect(rect: Rect) -> Rect {
-    Rect::from_min_max(
-        rect.min + vec2(34.0, 6.0),
-        rect.max - vec2(BARB_COL + 2.0, 18.0),
-    )
+    Rect::from_min_max(rect.min + vec2(34.0, 6.0), rect.max - vec2(8.0, 18.0))
 }
 
 fn skew_t(ui: &mut Ui, rect: Rect, s: &Sounding, ix: &Indices, p: &Palette) {
@@ -239,90 +193,12 @@ fn skew_t(ui: &mut Ui, rect: Rect, s: &Sounding, ix: &Indices, p: &Palette) {
             c32(p.bg),
         );
     }
-    // Wind barbs in their own column right of the plot, thinned so the
-    // closely spaced low levels don't pile up.
-    let col = Rect::from_min_max(
-        pos2(plot.right() + 2.0, plot.top()),
-        pos2(rect.right(), plot.bottom()),
-    );
-    let barbs = painter.with_clip_rect(col.expand2(vec2(0.0, 6.0)));
-    painter.vline(col.left(), plot.y_range(), Stroke::new(1.0, grid));
-    let levels: Vec<_> = s
-        .levels
-        .iter()
-        .filter(|l| l.pressure_hpa >= P_TOP && l.pressure_hpa <= sk.p_bot)
-        .collect();
-    let ys: Vec<f32> = levels.iter().map(|l| sk.y(l.pressure_hpa)).collect();
-    let extents: Vec<(f32, f32)> = levels
-        .iter()
-        .map(|l| {
-            if l.wind_kt < 2.5 {
-                (-4.0, 4.0)
-            } else {
-                barb_extent(l.wind_dir_deg)
-            }
-        })
-        .collect();
-    for i in thinned(&ys, &extents, BARB_GAP) {
-        let l = levels[i];
-        barb(
-            &barbs,
-            pos2(col.center().x, ys[i]),
-            l.wind_kt,
-            l.wind_dir_deg,
-            c32a(p.text2),
-        );
-    }
     painter.rect_stroke(
         plot,
         0.0,
         Stroke::new(1.0, c32a(p.border)),
         egui::StrokeKind::Inside,
     );
-}
-
-/// A standard wind barb: a staff from the level toward where the wind comes
-/// from, with feathers at the far end (pennant 50 kt, full 10 kt, half 5 kt)
-/// leaning toward the tip on the clockwise side, and a dot at the level.
-/// The barb is shifted sideways so it is centred on `at.x` whichever way it
-/// points; it stays on the level's height.
-fn barb(painter: &Painter, at: Pos2, kt: f64, from_deg: f64, col: Color32) {
-    let stroke = Stroke::new(1.4, col);
-    if kt < 2.5 {
-        // Calm: a circle.
-        painter.circle_stroke(at, 3.5, stroke);
-        return;
-    }
-    let a = (from_deg as f32).to_radians();
-    let dir = vec2(a.sin(), -a.cos()); // toward the source
-    let perp = vec2(-dir.y, dir.x);
-    let feather = perp * FEATHER + dir * (FEATHER * 0.45);
-    let at = pos2(at.x - (dir.x * BARB_LEN + feather.x) / 2.0, at.y);
-    let tip = at + dir * BARB_LEN;
-    painter.line_segment([at, tip], stroke);
-    painter.circle_filled(at, 1.8, col);
-    let (pennants, full, half) = ss_map::barb_components(kt as f32);
-    let mut pos = 0.0;
-    for _ in 0..pennants {
-        let b = tip - dir * pos;
-        let c = tip - dir * (pos + 5.5);
-        painter.add(Shape::convex_polygon(
-            vec![b, b + perp * FEATHER, c],
-            col,
-            Stroke::new(1.0, col),
-        ));
-        pos += 7.0;
-    }
-    for _ in 0..full {
-        let b = tip - dir * pos;
-        painter.line_segment([b, b + feather], stroke);
-        pos += 4.5;
-    }
-    for _ in 0..half {
-        // A lone half feather sits one step in from the tip, by convention.
-        let b = tip - dir * pos.max(4.5);
-        painter.line_segment([b, b + feather * 0.5], stroke);
-    }
 }
 
 fn hodograph(ui: &mut Ui, rect: Rect, s: &Sounding, ix: &Indices, p: &Palette) {
@@ -620,7 +496,7 @@ impl Panel for SoundingPanel {
             ui.allocate_rect(avail, Sense::hover());
             skew_t(ui, avail, s, &ix, &p);
             let inset = (avail.width().min(avail.height()) * 0.42).clamp(90.0, 220.0);
-            // Inside the plot, clear of the barb column.
+            // Inside the plot, top right.
             let plot = plot_rect(avail);
             let hodo_r = Rect::from_min_size(
                 pos2(plot.right() - 4.0 - inset, plot.top() + 4.0),
@@ -668,39 +544,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn barbs_never_overlap() {
-        // Levels 8 px apart near the surface, wider aloft: flat barbs are
-        // short, but levels stay at least 12 px apart, so every other one.
-        let ys = [300.0, 292.0, 284.0, 276.0, 250.0, 200.0];
-        let flat = vec![(-5.0, 0.0); ys.len()];
-        assert_eq!(thinned(&ys, &flat, 3.0), vec![0, 2, 4, 5]);
-        // Barbs standing upright (wind from the north) are much taller:
-        // fewer fit, and the ones drawn don't touch.
-        let tall = vec![barb_extent(0.0); ys.len()];
-        let drawn = thinned(&ys, &tall, 3.0);
-        assert_eq!(drawn, vec![0, 4, 5]);
-        for w in drawn.windows(2) {
-            let (a, b) = (w[0], w[1]);
-            assert!(ys[b] + tall[b].1 + 3.0 <= ys[a] + tall[a].0);
-        }
-    }
-
-    #[test]
-    fn barb_extent_follows_direction() {
-        // From the west: the staff is horizontal; feathers rise above it.
-        let (top, bot) = barb_extent(270.0);
-        assert!(top < -FEATHER + 0.1 && bot <= 0.5, "{top} {bot}");
-        // From the north: the staff points straight up.
-        let (top, _) = barb_extent(0.0);
-        assert!(top <= -BARB_LEN);
-    }
-
-    #[test]
-    fn plot_leaves_room_for_the_barb_column() {
+    fn plot_leaves_room_for_labels() {
         let r = Rect::from_min_size(pos2(0.0, 0.0), vec2(500.0, 300.0));
         let p = plot_rect(r);
-        assert!(r.right() - p.right() >= BARB_COL);
-        // A barb, centred, fits in the column whichever way it points.
-        const { assert!(BARB_LEN + FEATHER < BARB_COL) };
+        assert!(p.left() >= 30.0 && r.bottom() - p.bottom() >= 16.0);
+        assert!(p.width() > 440.0);
     }
 }

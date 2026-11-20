@@ -48,7 +48,6 @@ From [GDACS](https://www.gdacs.org) (the UN/EU disaster alert system, using JTWC
 The **Sounding** pane shows a forecast sounding for the place from [Open-Meteo](https://open-meteo.com)'s pressure-level data (temperature, dew point and wind at 1000–200 hPa), for any hour of the forecast (slider; **now** returns to the current hour).
 
 - **Skew-T log-p:** temperature (red), dew point (green), the surface parcel (dashed yellow), isobars, skewed isotherms (0 °C in blue) and dry adiabats, with the LCL marked.
-- **Wind barbs** in a column on the right (pennant = 50 kt, full feather = 10 kt, half = 5 kt), thinned so they never overlap.
 - **Hodograph:** the wind profile from the surface to 12 km, coloured by layer (0–3 km red, 3–6 green, 6–9 yellow, 9+ cyan), with the 1/3/6 km points and the Bunkers right-mover storm motion (RM). It scales to the winds shown.
 - **Indices:** surface-based CAPE and CIN, lifted index, LCL, LFC and EL heights, freezing level, 700–500 hPa lapse rate, precipitable water, 0–1 and 0–6 km shear, 0–1 and 0–3 km storm-relative helicity, supercell composite (SCP) and significant tornado parameter (STP). Values past common severe thresholds are highlighted.
 

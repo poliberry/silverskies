@@ -42,6 +42,8 @@ pub struct Frame {
     pub min_dbz: f32,
     pub terrain: bool,
     pub radar: bool,
+    /// Drape satellite imagery (each leaf carries its own).
+    pub photo: bool,
     pub leaves: Vec<Leaf>,
     /// The scene and an id for its radar data (changes with each scan).
     pub scene: Arc<Scene>,
@@ -128,10 +130,9 @@ impl Gl3d {
             rect,
             callback: Arc::new(egui_glow::CallbackFn::new(move |info, painter| {
                 let Ok(mut i) = inner.lock() else { return };
-                let gl = painter.gl();
                 // SAFETY: called by egui_glow on its GL thread with its
                 // context current; all objects used were made in it.
-                unsafe { i.paint(gl, &info, &frame) };
+                unsafe { i.paint(painter, &info, &frame) };
             })),
         }
     }
@@ -195,14 +196,17 @@ fn view_proj(f: &Frame, aspect: f32) -> [f32; 16] {
 const TERRAIN_VS: &str = r#"
 in vec3 a_pos;
 in vec3 a_extra;
+in vec2 a_uv;
 uniform mat4 u_vp;
 uniform float u_ex;
+out vec2 v_uv;
 out vec3 v_world;
 out vec3 v_normal;
 out float v_h;
 out float v_skirt;
 void main() {
     v_skirt = a_extra.z > 0.0 ? 1.0 : 0.0;
+    v_uv = a_uv;
     vec3 p = vec3(a_pos.xy, (a_pos.z - a_extra.z) * u_ex);
     v_world = p;
     v_h = a_pos.z;
@@ -216,9 +220,14 @@ in vec3 v_world;
 in vec3 v_normal;
 in float v_h;
 in float v_skirt;
+in vec2 v_uv;
 uniform vec3 u_eye;
 uniform vec3 u_haze;
 uniform float u_dark;
+uniform int u_photo;
+uniform vec4 u_uvrect;
+uniform sampler2D u_img;
+
 out vec4 frag;
 
 vec3 tint(float h) {
@@ -250,8 +259,13 @@ void main() {
     vec3 l = normalize(vec3(-0.5, 0.6, 0.65));
     float shade = 0.55 + 0.6 * max(dot(n, l), 0.0) - 0.15 * (1.0 - n.z);
     vec3 c = tint(v_h) * shade;
-    // Faint contours every 100 m (fading where they'd crowd).
-    if (v_h > 0.002) {
+    if (u_photo == 1) {
+        // The photo has its own light: only a gentle slope shading.
+        // egui textures hold display (sRGB) values as they are.
+        vec3 img = texture(u_img, u_uvrect.xy + v_uv * u_uvrect.zw).rgb;
+        c = img * clamp(0.75 + 0.35 * dot(n, l) / l.z - 0.25, 0.6, 1.08);
+    } else if (v_h > 0.002) {
+        // Faint contours every 100 m (fading where they'd crowd).
         float f = v_h * 10.0;
         float w = fwidth(f);
         float line = 1.0 - smoothstep(0.0, 1.5 * w, abs(fract(f + 0.5) - 0.5));
@@ -486,7 +500,13 @@ impl Inner {
         Ok(())
     }
 
-    unsafe fn paint(&mut self, gl: &glow::Context, info: &egui::PaintCallbackInfo, f: &Frame) {
+    unsafe fn paint(
+        &mut self,
+        painter: &egui_glow::Painter,
+        info: &egui::PaintCallbackInfo,
+        f: &Frame,
+    ) {
+        let gl: &glow::Context = painter.gl();
         self.frame += 1;
         if self.status.is_none() {
             let s = match unsafe { self.setup(gl) } {
@@ -516,7 +536,7 @@ impl Inner {
             gl.clear_depth_f32(1.0);
             gl.clear(glow::DEPTH_BUFFER_BIT);
             if f.terrain {
-                self.draw_terrain(gl, f, aspect);
+                self.draw_terrain(painter, f, aspect);
             }
             if f.radar {
                 self.draw_volume(
@@ -536,7 +556,8 @@ impl Inner {
         self.evict(gl);
     }
 
-    unsafe fn draw_terrain(&mut self, gl: &glow::Context, f: &Frame, aspect: f32) {
+    unsafe fn draw_terrain(&mut self, painter: &egui_glow::Painter, f: &Frame, aspect: f32) {
+        let gl: &glow::Context = painter.gl();
         let Some(p) = &self.progs else { return };
         let (prog, vao) = (p.terrain, p.vao);
         // Upload new leaves (a few per frame, so a fresh view fills in
@@ -606,21 +627,48 @@ impl Inner {
             );
             let a_pos = gl.get_attrib_location(prog, "a_pos").unwrap_or(0);
             let a_extra = gl.get_attrib_location(prog, "a_extra").unwrap_or(1);
+            let a_uv = gl.get_attrib_location(prog, "a_uv").unwrap_or(2);
+            let u_photo = gl.get_uniform_location(prog, "u_photo");
+            let u_uvrect = gl.get_uniform_location(prog, "u_uvrect");
+            gl.uniform_1_i32(gl.get_uniform_location(prog, "u_img").as_ref(), 0);
+            gl.active_texture(glow::TEXTURE0);
             for leaf in &f.leaves {
                 let Some(g) = self.leaves.get_mut(&leaf.key) else {
                     continue;
                 };
                 g.used = self.frame;
+                let img = leaf
+                    .img
+                    .filter(|_| f.photo)
+                    .and_then(|(id, r)| painter.texture(id).map(|t| (t, r)));
+                match img {
+                    Some((tex, r)) => {
+                        gl.bind_texture(glow::TEXTURE_2D, Some(tex));
+                        gl.uniform_1_i32(u_photo.as_ref(), 1);
+                        gl.uniform_4_f32(
+                            u_uvrect.as_ref(),
+                            r.min.x,
+                            r.min.y,
+                            r.width(),
+                            r.height(),
+                        );
+                    }
+                    None => gl.uniform_1_i32(u_photo.as_ref(), 0),
+                }
                 gl.bind_buffer(glow::ARRAY_BUFFER, Some(g.vbo));
                 gl.enable_vertex_attrib_array(a_pos);
-                gl.vertex_attrib_pointer_f32(a_pos, 3, glow::FLOAT, false, 24, 0);
+                gl.vertex_attrib_pointer_f32(a_pos, 3, glow::FLOAT, false, 32, 0);
                 gl.enable_vertex_attrib_array(a_extra);
-                gl.vertex_attrib_pointer_f32(a_extra, 3, glow::FLOAT, false, 24, 12);
+                gl.vertex_attrib_pointer_f32(a_extra, 3, glow::FLOAT, false, 32, 12);
+                gl.enable_vertex_attrib_array(a_uv);
+                gl.vertex_attrib_pointer_f32(a_uv, 2, glow::FLOAT, false, 32, 24);
                 gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(g.ibo));
                 gl.draw_elements(glow::TRIANGLES, g.count, glow::UNSIGNED_INT, 0);
             }
             gl.disable_vertex_attrib_array(a_pos);
             gl.disable_vertex_attrib_array(a_extra);
+            gl.disable_vertex_attrib_array(a_uv);
+            gl.bind_texture(glow::TEXTURE_2D, None);
         }
     }
 
@@ -905,7 +953,8 @@ unsafe fn upload_volume(gl: &glow::Context, scene: &Scene, id: &str) -> Option<V
 fn leaf_mesh(pts: &[[f32; 3]]) -> (Vec<f32>, Vec<u32>) {
     let n = LEAF_N;
     let at = |i: usize, j: usize| pts[j.min(n - 1) * n + i.min(n - 1)];
-    let mut v = Vec::with_capacity((n * n + 4 * n) * 6);
+    let mut v = Vec::with_capacity((n * n + 4 * n) * 8);
+    let last = (n - 1) as f32;
     for j in 0..n {
         for i in 0..n {
             let [x, y, h] = at(i, j);
@@ -913,7 +962,7 @@ fn leaf_mesh(pts: &[[f32; 3]]) -> (Vec<f32>, Vec<u32>) {
             let (u, d) = (at(i, j.saturating_sub(1)), at(i, j + 1));
             let gx = (r[2] - l[2]) / (r[0] - l[0]).abs().max(1e-4);
             let gy = (u[2] - d[2]) / (u[1] - d[1]).abs().max(1e-4);
-            v.extend_from_slice(&[x, y, h, gx, gy, 0.0]);
+            v.extend_from_slice(&[x, y, h, gx, gy, 0.0, i as f32 / last, j as f32 / last]);
         }
     }
     let mut idx = Vec::with_capacity((n - 1) * (n - 1) * 6 + 4 * (n - 1) * 6);
@@ -934,10 +983,10 @@ fn leaf_mesh(pts: &[[f32; 3]]) -> (Vec<f32>, Vec<u32>) {
         (0..n).map(|j| j * n + n - 1).collect(),
     ];
     for e in edges {
-        let base = (v.len() / 6) as u32;
+        let base = (v.len() / 8) as u32;
         for &k in &e {
-            let s = &v[k * 6..k * 6 + 6].to_vec();
-            v.extend_from_slice(&[s[0], s[1], s[2], s[3], s[4], drop]);
+            let s = v[k * 8..k * 8 + 8].to_vec();
+            v.extend_from_slice(&[s[0], s[1], s[2], s[3], s[4], drop, s[6], s[7]]);
         }
         for w in 0..e.len() - 1 {
             let (a, b) = (e[w] as u32, e[w + 1] as u32);
@@ -969,11 +1018,13 @@ mod tests {
             .map(|k| [(k % n) as f32, -((k / n) as f32), 0.1 * (k % n) as f32])
             .collect();
         let (v, idx) = leaf_mesh(&pts);
-        let verts = v.len() / 6;
+        let verts = v.len() / 8;
         assert_eq!(verts, n * n + 4 * n);
         assert!(idx.iter().all(|&i| (i as usize) < verts));
         // The slope: 0.1 km per km eastward.
-        assert!((v[6 * (n + 3) + 3] - 0.1).abs() < 1e-4);
+        assert!((v[8 * (n + 3) + 3] - 0.1).abs() < 1e-4);
+        // uv runs 0..1 across the leaf.
+        assert_eq!((v[8 * (n * n - 1) + 6], v[8 * (n * n - 1) + 7]), (1.0, 1.0));
     }
 
     #[test]
@@ -988,6 +1039,7 @@ mod tests {
             min_dbz: 10.0,
             terrain: true,
             radar: true,
+            photo: false,
             leaves: Vec::new(),
             scene: Arc::new(test_scene()),
             scene_id: String::new(),

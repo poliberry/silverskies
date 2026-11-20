@@ -5,19 +5,19 @@
 //! each is split into its four children while the camera is close to it
 //! compared with its size, down to level 18 (~150 m). Every leaf is a small
 //! mesh: heights from the deepest loaded Terrarium tile (to level 15, then
-//! interpolated), draped with the deepest loaded Esri imagery tile (to level
-//! 19, then enlarged). Until a tile's own data arrives it uses its nearest
-//! loaded ancestor, and before that the scene's base terrain and imagery, so
-//! detail sharpens in without holes.
+//! interpolated), optionally with Esri imagery (to level 16). Until a tile's
+//! own data arrives it uses its nearest loaded ancestor, and before that the
+//! scene's base terrain, so detail sharpens in without holes.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 
 use egui::epaint::{Mesh, Vertex, WHITE_UV};
-use egui::{Painter, Pos2, Shape};
+use egui::{pos2, Painter, Pos2, Rect, Shape, TextureId};
 use ss_core::geo::{lonlat_to_world, world_to_lonlat};
 use ss_core::radar3d::{local_km, Scene};
 use ss_map::heights::{HeightCache, MAX_LEVEL};
+use ss_map::tiles::{TileCache, TileKey};
 use ss_map::viewport::TileId;
 
 use super::radar3d::{terrain_color, View, V3};
@@ -31,6 +31,17 @@ const MAX_SPLIT: u8 = 18;
 const SPLIT: f32 = 3.0;
 /// Cap on leaves per frame.
 const MAX_LEAVES: usize = 420;
+/// Satellite imagery levels used (the view is kept high when it's shown,
+/// so nothing finer is needed).
+const IMAGERY_MAX: u8 = 16;
+const IMAGERY_MIN: u8 = 6;
+const IMAGERY_KEY: &str = "esri-imagery-3d";
+
+fn imagery_url(z: u8, x: u32, y: u32) -> String {
+    format!(
+        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}?blankTile=false"
+    )
+}
 
 /// A leaf's vertices: local east/north km and height km, plus which height
 /// level they came from (255 = the base scene).
@@ -40,6 +51,7 @@ struct Geom {
 }
 
 pub struct Lod {
+    imagery: TileCache,
     heights: HeightCache,
     geom: HashMap<(TileId, (i64, i64)), Geom>,
     pub leaves: usize,
@@ -58,13 +70,16 @@ impl Lod {
         ctx: egui::Context,
     ) -> Self {
         Self {
+            imagery: TileCache::new(client.clone(), rt.clone(), tile_dir.clone(), ctx.clone())
+                .with_max_textures(1200),
             heights: HeightCache::new(client, rt, tile_dir.map(|d| d.join("terrain")), ctx),
             geom: HashMap::new(),
             leaves: 0,
         }
     }
 
-    pub fn poll(&mut self) {
+    pub fn poll(&mut self, ctx: &egui::Context) {
+        self.imagery.poll(ctx);
         self.heights.poll();
         if self.geom.len() > 4000 {
             self.geom.clear();
@@ -73,7 +88,7 @@ impl Lod {
 
     /// Whether anything is still loading (to keep repainting).
     pub fn busy(&self) -> bool {
-        self.heights.loading() > 0
+        self.heights.loading() > 0 || self.imagery.stats().loading > 0
     }
 
     /// The tiles to draw for this camera.
@@ -214,6 +229,46 @@ impl Lod {
         &self.geom[&key]
     }
 
+    /// The imagery texture for tile `t` and the UV rect of `t` within it.
+    fn imagery_for(&mut self, t: TileId) -> Option<(TextureId, Rect)> {
+        if t.z < IMAGERY_MIN {
+            return None;
+        }
+        let zi = t.z.min(IMAGERY_MAX);
+        let up = t.z - zi;
+        let it = TileId {
+            z: zi,
+            x: t.x >> up,
+            y: t.y >> up,
+        };
+        // `t` within `it`.
+        let k = (1u32 << up) as f32;
+        let sub = Rect::from_min_size(
+            pos2(
+                (t.x - (it.x << up)) as f32 / k,
+                (t.y - (it.y << up)) as f32 / k,
+            ),
+            egui::vec2(1.0 / k, 1.0 / k),
+        );
+        let key = TileKey::new(IMAGERY_KEY, it.z, it.x, it.y);
+        let (tex, outer) = match self.imagery.request(&key, imagery_url(it.z, it.x, it.y)) {
+            Some(tex) => (tex.id(), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0))),
+            None => {
+                if self.imagery.is_failed(&key) && it.z > IMAGERY_MIN {
+                    let (pz, px, py) = (it.z - 1, it.x / 2, it.y / 2);
+                    let pk = TileKey::new(IMAGERY_KEY, pz, px, py);
+                    let _ = self.imagery.request(&pk, imagery_url(pz, px, py));
+                }
+                ss_map::ancestor(&mut self.imagery, IMAGERY_KEY, it, it.z - IMAGERY_MIN)?
+            }
+        };
+        let uv = Rect::from_min_size(
+            outer.min + sub.min.to_vec2() * outer.size(),
+            sub.size() * outer.size(),
+        );
+        Some((tex, uv))
+    }
+
     /// Draw the terrain on the CPU, coloured by height (when the GPU
     /// renderer isn't available).
     #[allow(clippy::too_many_arguments)]
@@ -336,16 +391,18 @@ impl Lod {
     /// The leaves to draw for this camera, with their vertices (local km,
     /// height km), for the GPU renderer. The key changes when a leaf's
     /// heights do.
-    pub fn leaves(&mut self, scene: &Scene, eye: V3, ex: f32) -> Vec<Leaf> {
+    pub fn leaves(&mut self, scene: &Scene, eye: V3, ex: f32, photo: bool) -> Vec<Leaf> {
         let tiles = self.select(scene, eye, ex);
         self.leaves = tiles.len();
         tiles
             .into_iter()
             .map(|t| {
+                let img = if photo { self.imagery_for(t) } else { None };
                 let g = self.geometry(scene, t);
                 Leaf {
                     key: (t, g.level, scene_key(scene)),
                     pts: g.pts.clone(),
+                    img,
                 }
             })
             .collect()
@@ -376,6 +433,8 @@ impl Lod {
 pub struct Leaf {
     pub key: LeafKey,
     pub pts: std::sync::Arc<Vec<[f32; 3]>>,
+    /// Satellite imagery for it: the texture and the leaf's part of it.
+    pub img: Option<(TextureId, Rect)>,
 }
 
 /// A leaf's tile, height level and scene.

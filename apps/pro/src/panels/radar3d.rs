@@ -25,6 +25,10 @@ use crate::theme::{c32, c32a, icon};
 
 /// New NEXRAD volumes arrive every ~5 minutes.
 const REFRESH: Duration = Duration::from_secs(5 * 60);
+/// With satellite imagery: the lowest camera angle (degrees above the
+/// horizon) and the closest zoom (km from the target).
+const SATELLITE_MIN_PITCH: f32 = 40.0;
+const SATELLITE_MIN_DIST: f32 = 30.0;
 const RETRY: Duration = Duration::from_secs(2 * 60);
 
 /// A point in scene space: km east, km north, km up (already exaggerated).
@@ -365,6 +369,8 @@ pub struct Radar3dPanel {
     lod: Option<super::terrain_lod::Lod>,
     /// The GPU renderer (terrain and the radar volume).
     gl: super::gl3d::Gl3d,
+    /// Satellite imagery on the terrain (the view is then kept high).
+    show_imagery: bool,
 }
 
 impl Radar3dPanel {
@@ -403,6 +409,7 @@ impl Default for Radar3dPanel {
             sprite: None,
             lod: None,
             gl: Default::default(),
+            show_imagery: false,
         }
     }
 }
@@ -439,6 +446,17 @@ impl Radar3dPanel {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
             Self::toggle(ui, p, &mut self.show_terrain, i::LANDSCAPE, "Terrain");
+            if !matches!(self.gl.status(), super::gl3d::Status::Failed(_)) {
+                Self::toggle(
+                    ui,
+                    p,
+                    &mut self.show_imagery,
+                    i::SATELLITE_ALT,
+                    "Satellite imagery on the terrain. The view then stays high and looks \
+                     down: free imagery is flat photos, which don't hold up close or seen \
+                     from the side.",
+                );
+            }
             Self::toggle(ui, p, &mut self.show_radar, i::RADAR, "Radar echoes");
             Self::toggle(
                 ui,
@@ -584,6 +602,7 @@ impl Panel for Radar3dPanel {
                 .as_ref()
                 .map_or(0.0, |t| t.height_at(tx, ty) / 1000.0),
         };
+        self.limit_camera();
         let ex = self.effective_exag();
         self.cam.target.z = g * ex;
         let view = View::new(&self.cam, rect);
@@ -592,7 +611,7 @@ impl Panel for Radar3dPanel {
         let gpu = !matches!(self.gl.status(), super::gl3d::Status::Failed(_));
         let mut terrain_drawn = false;
         if let Some(lod) = self.lod.as_mut() {
-            lod.poll();
+            lod.poll(ui.ctx());
             if lod.busy() {
                 ui.ctx()
                     .request_repaint_after(std::time::Duration::from_millis(150));
@@ -604,7 +623,7 @@ impl Panel for Radar3dPanel {
         }
         if gpu {
             let leaves = match (self.show_terrain, self.lod.as_mut()) {
-                (true, Some(lod)) => lod.leaves(&scene, view.eye(), ex),
+                (true, Some(lod)) => lod.leaves(&scene, view.eye(), ex, self.show_imagery),
                 _ => Vec::new(),
             };
             let (eye, right, up, fwd) = view.basis();
@@ -623,6 +642,7 @@ impl Panel for Radar3dPanel {
                 min_dbz: self.min_dbz,
                 terrain: self.show_terrain,
                 radar: self.show_radar,
+                photo: self.show_imagery,
                 leaves,
                 scene_id: format!("{}:{:?}:{}", loc.id, scene.source, scene.voxels.len()),
                 scene: scene.clone(),
@@ -650,6 +670,15 @@ impl Panel for Radar3dPanel {
 }
 
 impl Radar3dPanel {
+    /// With satellite imagery, keep the camera high and looking down: the
+    /// photos are flat, so close-ups and low angles would show it.
+    fn limit_camera(&mut self) {
+        if self.show_imagery {
+            self.cam.pitch = self.cam.pitch.max(SATELLITE_MIN_PITCH);
+            self.cam.dist = self.cam.dist.max(SATELLITE_MIN_DIST);
+        }
+    }
+
     fn interact(&mut self, ui: &Ui, resp: &egui::Response) {
         if self.spin {
             self.cam.yaw = (self.cam.yaw + ui.input(|i| i.stable_dt) * 6.0).rem_euclid(360.0);
@@ -937,7 +966,11 @@ impl Radar3dPanel {
                 );
             }
         }
-        let credit = "Terrain: AWS Terrain Tiles · ";
+        let credit = if self.show_imagery {
+            "Imagery: Esri, Maxar, Earthstar Geographics · Terrain: AWS Terrain Tiles · "
+        } else {
+            "Terrain: AWS Terrain Tiles · "
+        };
 
         painter.text(
             rect.right_bottom() + vec2(-8.0, -6.0),

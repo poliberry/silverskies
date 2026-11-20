@@ -9,6 +9,7 @@ Everything the apps show comes from these services. None needs an account except
 | Place search | Open-Meteo geocoding, with [Nominatim / OpenStreetMap](https://nominatim.org) as fallback | No | Worldwide | Both |
 | "Use my location" | [ipapi.co](https://ipapi.co) IP geolocation (approximate) | No | Worldwide | Both |
 | Radar composite, nowcast, IR satellite | [LibreWXR](https://librewxr.net) | No | Worldwide | Both |
+| Satellite imagery (3D, optional) | Esri World Imagery (Esri, Maxar, Earthstar Geographics) | No | Worldwide | Pro |
 | Alerts | NWS, ECCC, LibreWXR (WMO CAP) | No | US, Canada, worldwide | Both |
 | Australian warnings | [WillyWeather](https://www.willyweather.com.au) (BoM) | **Yes** | Australia | Both (optional) |
 | Basemap | Esri, HERE, Garmin, © OpenStreetMap contributors | No | Worldwide | Both |

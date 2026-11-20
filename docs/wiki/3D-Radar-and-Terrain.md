@@ -4,7 +4,8 @@ The **3D RADAR** pane shows the atmosphere around a place as a 3D volume above t
 
 ## What you see
 
-- **Terrain:** the real landscape and nothing else (no streets, buildings or photos): shaded by elevation (sea, lowland, hills, mountains, peaks), lit from the north-west, with faint contour lines every 100 m, fading into the sky with distance.
+- **Terrain:** the real landscape and nothing else (no streets or buildings): shaded by elevation (sea, lowland, hills, mountains, peaks), lit from the north-west, with faint contour lines every 100 m, fading into the sky with distance.
+- **Satellite** (toggle): Esri World Imagery draped on the terrain instead. Free imagery is flat photos, which fall apart up close or seen from the side, so while it's on the view stays at least 30 km away and at least 40° above the horizon.
 - **Zoom like a map:** scroll from the 400 km overview down to a few hundred metres. Close to the camera the app streams finer elevation (AWS Terrain Tiles, to level 15) tile by tile, spending detail where you're looking. Height exaggeration eases to true scale as you get close. Close up, the elevation data's lumps where cities and forests stand are smoothed away.
 - **Radar volume:** reflectivity rendered as a true volume on the GPU, coloured like the 2D radar (green → yellow → red → magenta/white for the most intense cores). Light rain is a thin veil; cores are nearly solid. Echoes behind hills are hidden by them.
 - **Storm cells:** a line from the ground to the echo top, coloured by threat (yellow strong, orange severe, magenta rotating, red tornadic).
@@ -23,7 +24,7 @@ How the echoes are placed depends on where you are, and the pane always says whi
 | Within 230 km of a US WSR-88D (NEXRAD) | The radar's newest **Level II volume scan** from NOAA's public archive on AWS | **Measured.** Every tilt the radar swept (0.5° up to 19.5°), each echo placed by beam geometry. |
 | Anywhere else | The global radar **composite** (2D) | **Estimated** from intensity: stronger echoes are drawn taller (about 2 km for light rain up to ~15 km for intense cores). Shows where storms are and how strong, not their real structure. |
 
-Terrain is worldwide everywhere.
+Terrain and imagery are worldwide everywhere.
 
 ### How a NEXRAD volume becomes 3D
 
@@ -43,7 +44,7 @@ Outside NEXRAD coverage the estimated columns are gridded (2 km × 0.5 km) and r
 | Shift+drag or right-drag | Pan |
 | Scroll | Zoom |
 | Double-click / ⟲ | Reset the view |
-| Terrain · Radar · Storms buttons | Show or hide each |
+| Terrain · Satellite · Radar · Storms buttons | Show or hide each |
 | Rotate button | Slow automatic spin |
 | ↻ | Load the newest scan now (it also refreshes every 5 minutes) |
 | **≥ dBZ** slider | Hide echoes weaker than this (default 20) |
