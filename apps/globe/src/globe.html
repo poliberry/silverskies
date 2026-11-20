@@ -3,355 +3,292 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>3D Globe</title>
-<script src="https://cdn.jsdelivr.net/npm/cesium@1.125.0/Build/Cesium/Cesium.js"></script>
-<link href="https://cdn.jsdelivr.net/npm/cesium@1.125.0/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+<title>3D Map</title>
+<script src="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<link href="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
 <style>
-  html, body, #globe { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #000; }
-  #hud {
-    position: absolute; left: 10px; top: 10px; z-index: 5;
-    font: 12px/1.4 ui-monospace, Menlo, Consolas, monospace; color: #ffb000;
-    background: rgba(0,0,0,.55); padding: 6px 9px; border-radius: 6px;
-    pointer-events: none; max-width: 60%;
+  html, body, #map { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #0e1320; }
+  .hud {
+    position: absolute; z-index: 5; font: 12px/1.4 ui-monospace, Menlo, Consolas, monospace;
+    color: #ffb000; background: rgba(8,12,20,.72); border-radius: 6px; padding: 6px 9px;
   }
-  #legend {
-    position: absolute; left: 10px; bottom: 34px; z-index: 5; display: flex; gap: 0;
-    font: 10px ui-monospace, Menlo, Consolas, monospace; color: #fff;
-    background: rgba(0,0,0,.55); padding: 5px 7px; border-radius: 6px; pointer-events: none;
-  }
+  #status { left: 10px; top: 10px; pointer-events: none; max-width: 55%; }
+  #legend { left: 10px; bottom: 30px; color: #dfe6f0; font-size: 10px; pointer-events: none; display: flex; align-items: center; }
   #legend span { display: inline-block; width: 18px; height: 8px; }
+  #style { right: 50px; top: 10px; padding: 3px; display: flex; gap: 2px; }
+  #style button {
+    font: 12px system-ui, sans-serif; color: #c9d3e0; background: transparent; border: 0;
+    padding: 5px 12px; border-radius: 4px; cursor: pointer;
+  }
+  #style button.on { background: #ffb000; color: #111; }
   #err { position: absolute; inset: 0; display: none; place-items: center; color: #ddd;
          font: 14px system-ui, sans-serif; text-align: center; padding: 2em; }
-  .cesium-viewer-bottom { opacity: .85; }
 </style>
 </head>
 <body>
-<div id="globe"></div>
-<div id="hud">Loading the globe…</div>
-<div id="legend"></div>
+<div id="map"></div>
+<div id="status" class="hud">Loading the map…</div>
+<div id="legend" class="hud"></div>
+<div id="style" class="hud"><button data-s="map" class="on">Map</button><button data-s="satellite">Satellite</button></div>
 <div id="err"></div>
-<script type="module">
-import Pbf from 'https://cdn.jsdelivr.net/npm/pbf@4.0.1/+esm';
-import { VectorTile } from 'https://cdn.jsdelivr.net/npm/@mapbox/vector-tile@2.0.3/+esm';
-
+<script>
+(async () => {
 const log = (m) => { try { window.ipc.postMessage(String(m)); } catch (_) {} };
 window.addEventListener('error', (e) => log('error ' + e.message));
 window.addEventListener('unhandledrejection', (e) => log('error ' + (e.reason && e.reason.message || e.reason)));
-
-const hud = document.getElementById('hud');
-const C = window.Cesium;
-if (!C) {
+const status = document.getElementById('status');
+const ML = window.maplibregl;
+if (!ML) {
   const err = document.getElementById('err');
   err.style.display = 'grid';
-  err.textContent = 'CesiumJS could not be loaded. The globe needs an internet connection.';
-  log('error CesiumJS failed to load');
-  throw new Error('no Cesium');
+  err.textContent = 'The map library could not be loaded. The 3D map needs an internet connection.';
+  log('error MapLibre failed to load');
+  return;
 }
 
-// No Cesium ion: every layer below is free and keyless.
-C.Ion.defaultAccessToken = '';
-
-// --- Imagery: Esri World Imagery, with place names on top -------------------
-// Cesium's Esri provider drops Esri's "no imagery here" tiles, so the
-// coarser photo shows instead of grey squares.
-const imagery = await C.ArcGisMapServerImageryProvider.fromUrl(
-  'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer',
-  { enablePickFeatures: false },
-).catch((e) => {
-  log('imagery service: ' + e);
-  return new C.UrlTemplateImageryProvider({
-    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-    maximumLevel: 19,
-    credit: new C.Credit('Imagery: Esri, Maxar, Earthstar Geographics'),
-  });
-});
-const labels = new C.UrlTemplateImageryProvider({
-  url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
-  maximumLevel: 19,
-  credit: new C.Credit('Labels: Esri'),
-});
-
-// --- Terrain: AWS Terrain Tiles (Terrarium PNGs), decoded here --------------
-const TERRARIUM = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium';
-const TMAX = 15;            // deepest published level
-const GRID = 65;            // heights per tile side handed to Cesium
-const tcache = new Map();   // "z/x/y" -> Promise<Float32Array(256*256)>
-
-function terrarium(z, x, y) {
-  const k = `${z}/${x}/${y}`;
-  let p = tcache.get(k);
-  if (!p) {
-    p = fetch(`${TERRARIUM}/${k}.png`)
-      .then((r) => { if (!r.ok) throw new Error(r.status); return r.blob(); })
-      .then((b) => createImageBitmap(b, { colorSpaceConversion: 'none', premultiplyAlpha: 'none' }))
-      .then((img) => {
-        const c = new OffscreenCanvas(img.width, img.height);
-        const g = c.getContext('2d', { willReadFrequently: true });
-        g.drawImage(img, 0, 0);
-        const d = g.getImageData(0, 0, img.width, img.height).data;
-        const h = new Float32Array(img.width * img.height);
-        for (let i = 0; i < h.length; i++) {
-          const v = d[i * 4] * 256 + d[i * 4 + 1] + d[i * 4 + 2] / 256 - 32768;
-          h[i] = v > 0 ? v : 0; // sea floor reads as sea level
-        }
-        return h;
-      });
-    tcache.set(k, p);
-    if (tcache.size > 600) tcache.delete(tcache.keys().next().value);
-    p.catch(() => tcache.delete(k));
+// --- Style: OpenFreeMap's dark style, recoloured toward a blue-grey streets
+// look, plus terrain, satellite imagery and 3D buildings. All free, no keys.
+const style = await (await fetch('https://tiles.openfreemap.org/styles/dark')).json();
+const P = {
+  background: '#1a2130', water: '#0e1a2e', waterway: '#13223a', park: '#1c2e2a', wood: '#1d302a',
+  residential: '#1e2636', building: '#2a3346', minor: '#343f55', major: '#4b5775',
+  majorCasing: '#151b27', motorway: '#9a7a45', rail: '#3a4459', label: '#aab6ca', boundary: '#5a6482',
+};
+const set = (l, k, v) => { l.paint = l.paint || {}; l.paint[k] = v; };
+for (const l of style.layers) {
+  const id = l.id;
+  if (id === 'background') set(l, 'background-color', P.background);
+  else if (id === 'water') set(l, 'fill-color', P.water);
+  else if (id === 'waterway') set(l, 'line-color', P.waterway);
+  else if (id === 'landuse_park') set(l, 'fill-color', P.park);
+  else if (id === 'landcover_wood') set(l, 'fill-color', P.wood);
+  else if (id === 'landuse_residential') { set(l, 'fill-color', P.residential); set(l, 'fill-opacity', 0.8); }
+  else if (id === 'building') { set(l, 'fill-color', P.building); set(l, 'fill-outline-color', '#2b3447'); }
+  else if (id === 'highway_minor' || id === 'highway_path') set(l, 'line-color', P.minor);
+  else if (id === 'highway_major_inner' || id === 'highway_major_subtle') set(l, 'line-color', P.major);
+  else if (id.endsWith('_casing')) set(l, 'line-color', P.majorCasing);
+  else if (id === 'highway_motorway_inner' || id === 'highway_motorway_subtle') set(l, 'line-color', P.motorway);
+  else if (id.startsWith('railway') && !id.endsWith('dashline')) set(l, 'line-color', P.rail);
+  else if (id.startsWith('boundary')) set(l, 'line-color', P.boundary);
+  if (l.type === 'symbol' && l.paint && 'text-color' in l.paint) {
+    set(l, 'text-color', P.label);
+    set(l, 'text-halo-color', 'rgba(10,14,22,0.9)');
   }
-  return p;
 }
-
-const terrain = new C.CustomHeightmapTerrainProvider({
-  width: GRID,
-  height: GRID,
-  tilingScheme: new C.WebMercatorTilingScheme(),
-  credit: new C.Credit('Terrain: AWS Terrain Tiles'),
-  callback: (x, y, level) => {
-    // Past the deepest level, sample the level-15 ancestor.
-    const z = Math.min(level, TMAX);
-    const d = level - z;
-    const k = 1 << d;
-    const px = x >> d, py = y >> d;
-    const ox = (x - px * k) / k, oy = (y - py * k) / k;
-    return terrarium(z, px, py).then((h) => {
-      const out = new Float32Array(GRID * GRID);
-      for (let j = 0; j < GRID; j++) {
-        const fy = (oy + j / (GRID - 1) / k) * 255;
-        const y0 = Math.floor(fy), y1 = Math.min(255, y0 + 1), ty = fy - y0;
-        for (let i = 0; i < GRID; i++) {
-          const fx = (ox + i / (GRID - 1) / k) * 255;
-          const x0 = Math.floor(fx), x1 = Math.min(255, x0 + 1), tx = fx - x0;
-          const a = h[y0 * 256 + x0] * (1 - tx) + h[y0 * 256 + x1] * tx;
-          const b = h[y1 * 256 + x0] * (1 - tx) + h[y1 * 256 + x1] * tx;
-          out[j * GRID + i] = a * (1 - ty) + b * ty;
-        }
-      }
-      return out;
-    }).catch(() => new Float32Array(GRID * GRID));
+const terrarium = {
+  type: 'raster-dem',
+  tiles: ['https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'],
+  encoding: 'terrarium', tileSize: 256, maxzoom: 15,
+  attribution: 'Terrain: <a href="https://registry.opendata.aws/terrain-tiles/">AWS Terrain Tiles</a>',
+};
+style.sources.terrain = terrarium;
+style.sources.hills = { ...terrarium };
+style.sources.satellite = {
+  type: 'raster', tileSize: 256, maxzoom: 19,
+  tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+  attribution: 'Imagery: Esri, Maxar, Earthstar Geographics',
+};
+// Satellite under everything (hidden in map mode); hillshade above the land.
+const firstAbove = style.layers.findIndex((l) => l.id === 'water');
+style.layers.splice(1, 0, { id: 'satellite', type: 'raster', source: 'satellite', layout: { visibility: 'none' } });
+style.layers.splice(firstAbove + 1, 0, {
+  id: 'hillshade', type: 'hillshade', source: 'hills',
+  paint: { 'hillshade-shadow-color': '#070b14', 'hillshade-highlight-color': '#3a4560', 'hillshade-exaggeration': 0.4 },
+});
+// 3D buildings: height from OpenStreetMap, lighter the taller.
+const symbolsAt = style.layers.findIndex((l) => l.type === 'symbol');
+style.layers.splice(symbolsAt, 0, {
+  id: 'buildings-3d', type: 'fill-extrusion', source: 'openmaptiles', 'source-layer': 'building',
+  minzoom: 13, filter: ['!=', ['get', 'hide_3d'], true],
+  paint: {
+    'fill-extrusion-color': ['interpolate', ['linear'], ['coalesce', ['get', 'render_height'], 0],
+      0, '#343e54', 40, '#414c66', 150, '#56638a', 300, '#6c79a0'],
+    'fill-extrusion-height': ['interpolate', ['linear'], ['zoom'], 13, 0, 14, ['coalesce', ['get', 'render_height'], 6]],
+    'fill-extrusion-base': ['coalesce', ['get', 'render_min_height'], 0],
+    'fill-extrusion-opacity': 0.92,
+    'fill-extrusion-vertical-gradient': true,
   },
 });
+style.terrain = { source: 'terrain', exaggeration: 1 };
+style.sky = {
+  'sky-color': '#0b1830', 'horizon-color': '#24324d', 'fog-color': '#141a26',
+  'sky-horizon-blend': 0.6, 'horizon-fog-blend': 0.6, 'fog-ground-blend': 0.4, 'atmosphere-blend': 0.6,
+};
 
-// --- The viewer --------------------------------------------------------------
-const viewer = new C.Viewer('globe', {
-  baseLayer: new C.ImageryLayer(imagery),
-  terrainProvider: terrain,
-  baseLayerPicker: false, geocoder: false, homeButton: false, sceneModePicker: false,
-  navigationHelpButton: false, animation: false, timeline: false, fullscreenButton: false,
-  infoBox: false, selectionIndicator: false, shadows: true,
-  msaaSamples: 4,
+const map = new ML.Map({
+  container: 'map', style, center: [0, 20], zoom: 2, pitch: 0, maxPitch: 85,
+  attributionControl: { compact: true }, antialias: true,
 });
-const scene = viewer.scene;
-viewer.imageryLayers.addImageryProvider(labels);
-scene.globe.enableLighting = true;           // the real sun for this moment
-scene.globe.depthTestAgainstTerrain = true;
-scene.globe.maximumScreenSpaceError = 1.5;   // sharper terrain and imagery
-scene.globe.tileCacheSize = 400;
-scene.globe.showGroundAtmosphere = true;
-scene.skyAtmosphere.show = true;
-scene.fog.enabled = true;
-scene.highDynamicRange = false;
-scene.postProcessStages.fxaa.enabled = true;
-viewer.shadowMap.softShadows = true;
-viewer.shadowMap.size = 2048;
-viewer.shadowMap.maximumDistance = 6000;
-viewer.clock.shouldAnimate = true;           // keep the sun moving
+map.addControl(new ML.NavigationControl({ visualizePitch: true }), 'top-right');
 
-// --- Buildings: OpenStreetMap via OpenFreeMap vector tiles --------------------
-const BLEVEL = 14;
-let tileUrl = null;
-const btiles = new Map(); // "x/y" -> { primitive | null, pending }
-
-fetch('https://tiles.openfreemap.org/planet')
-  .then((r) => r.json())
-  .then((j) => { tileUrl = j.tiles[0]; })
-  .catch((e) => log('buildings: ' + e));
-
-function lonlatToTile(lon, lat, z) {
-  const n = 2 ** z;
-  const x = Math.floor((lon + 180) / 360 * n);
-  const r = lat * Math.PI / 180;
-  const y = Math.floor((1 - Math.asinh(Math.tan(r)) / Math.PI) / 2 * n);
-  return [x, y];
-}
-
-const concrete = [
-  new C.Color(0.86, 0.85, 0.82, 1), new C.Color(0.80, 0.80, 0.78, 1),
-  new C.Color(0.90, 0.88, 0.84, 1), new C.Color(0.76, 0.78, 0.80, 1),
-];
-
-async function loadBuildings(x, y) {
-  const key = `${x}/${y}`;
-  if (btiles.has(key) || !tileUrl) return;
-  btiles.set(key, { primitive: null });
-  try {
-    const url = tileUrl.replace('{z}', BLEVEL).replace('{x}', x).replace('{y}', y);
-    const buf = await (await fetch(url)).arrayBuffer();
-    const vt = new VectorTile(new Pbf(buf));
-    const layer = vt.layers.building;
-    if (!layer) return;
-    const polys = [];
-    for (let i = 0; i < layer.length; i++) {
-      const f = layer.feature(i);
-      if (f.type !== 3 || f.properties.hide_3d) continue;
-      const gj = f.toGeoJSON(x, y, BLEVEL).geometry;
-      const parts = gj.type === 'Polygon' ? [gj.coordinates] : gj.coordinates;
-      const h = Number(f.properties.render_height) || 6;
-      const mh = Number(f.properties.render_min_height) || 0;
-      for (const rings of parts) {
-        const outer = rings[0];
-        if (!outer || outer.length < 4) continue;
-        // Keep a building in the tile its first corner is in (tiles overlap).
-        const [tx, ty] = lonlatToTile(outer[0][0], outer[0][1], BLEVEL);
-        if (tx !== x || ty !== y) continue;
-        let cx = 0, cy = 0;
-        for (const p of outer) { cx += p[0]; cy += p[1]; }
-        polys.push({ rings, h, mh, c: [cx / outer.length, cy / outer.length] });
-      }
-    }
-    if (!polys.length) return;
-    // Ground under each building (heights come from the same terrain).
-    const pts = polys.map((p) => C.Cartographic.fromDegrees(p.c[0], p.c[1]));
-    await C.sampleTerrainMostDetailed(terrain, pts).catch(() => {});
-    const instances = [];
-    polys.forEach((p, i) => {
-      const ground = pts[i].height || 0;
-      const toCart = (ring) => C.Cartesian3.fromDegreesArray(ring.flat());
-      const hierarchy = new C.PolygonHierarchy(
-        toCart(p.rings[0]),
-        p.rings.slice(1).map((r) => new C.PolygonHierarchy(toCart(r))),
-      );
-      instances.push(new C.GeometryInstance({
-        geometry: new C.PolygonGeometry({
-          polygonHierarchy: hierarchy,
-          height: ground + p.mh,
-          extrudedHeight: ground + p.h,
-          vertexFormat: C.PerInstanceColorAppearance.VERTEX_FORMAT,
-        }),
-        attributes: {
-          color: C.ColorGeometryInstanceAttribute.fromColor(concrete[i % concrete.length]),
-        },
-      }));
-    });
-    const prim = new C.Primitive({
-      geometryInstances: instances,
-      appearance: new C.PerInstanceColorAppearance({ translucent: false, closed: true }),
-      shadows: C.ShadowMode.ENABLED,
-      asynchronous: true,
-    });
-    scene.primitives.add(prim);
-    btiles.get(key).primitive = prim;
-  } catch (e) {
-    log('buildings ' + key + ': ' + e);
-    btiles.delete(key);
+// --- Map | Satellite ------------------------------------------------------------
+// Satellite: the photo on the terrain, place names, nothing else raised.
+const KEEP_ON_SATELLITE = new Set(['place', 'water_name']);
+let mode = 'map';
+try { mode = localStorage.getItem('ss-3d-style') || 'map'; } catch (_) {}
+function applyMode(m) {
+  mode = m;
+  try { localStorage.setItem('ss-3d-style', m); } catch (_) {}
+  for (const b of document.querySelectorAll('#style button')) b.classList.toggle('on', b.dataset.s === m);
+  const sat = m === 'satellite';
+  for (const l of map.getStyle().layers) {
+    let show;
+    if (l.id === 'satellite') show = sat;
+    else if (l.id === 'radar3d' || l.id === 'background') show = true;
+    else if (sat) show = l.type === 'symbol' && KEEP_ON_SATELLITE.has(l['source-layer']);
+    else show = true;
+    map.setLayoutProperty(l.id, 'visibility', show ? 'visible' : 'none');
   }
 }
+for (const b of document.querySelectorAll('#style button')) b.onclick = () => applyMode(b.dataset.s);
 
-// Load buildings around what the camera looks at, when it's low enough.
-function updateBuildings() {
-  const height = scene.camera.positionCartographic.height;
-  const show = height < 8000;
-  for (const t of btiles.values()) if (t.primitive) t.primitive.show = show;
-  if (!show) return;
-  const c = scene.camera.pickEllipsoid(
-    new C.Cartesian2(scene.canvas.clientWidth / 2, scene.canvas.clientHeight * 0.6));
-  if (!c) return;
-  const g = C.Cartographic.fromCartesian(c);
-  const [x, y] = lonlatToTile(C.Math.toDegrees(g.longitude), C.Math.toDegrees(g.latitude), BLEVEL);
-  const r = height < 2500 ? 1 : 2;
-  for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) loadBuildings(x + dx, y + dy);
-  // Forget far tiles.
-  if (btiles.size > 60) {
-    for (const [k, t] of btiles) {
-      const [kx, ky] = k.split('/').map(Number);
-      if (Math.abs(kx - x) > 4 || Math.abs(ky - y) > 4) {
-        if (t.primitive) scene.primitives.remove(t.primitive);
-        btiles.delete(k);
-      }
-    }
-  }
-}
-scene.camera.moveEnd.addEventListener(updateBuildings);
-
-// --- Radar: the 3D volume from Pro ----------------------------------------------
+// --- Radar: the volume from Pro, as soft points in a custom WebGL layer ---------
 const STOPS = [
   [10, [0x40, 0x9c, 0xd8]], [20, [0x2e, 0xb8, 0x4a]], [30, [0x1f, 0x8f, 0x2a]],
   [35, [0xd8, 0xd8, 0x20]], [40, [0xf0, 0xb4, 0x00]], [45, [0xf0, 0x78, 0x00]],
   [50, [0xe8, 0x14, 0x14]], [55, [0xb0, 0x00, 0x00]], [60, [0xe0, 0x20, 0xe0]],
   [68, [0xff, 0xff, 0xff]],
 ];
-function dbzColor(dbz) {
+function dbzRgba(dbz) {
   let c = STOPS[0][1];
   for (let i = 0; i + 1 < STOPS.length; i++) {
     const [a, ca] = STOPS[i], [b, cb] = STOPS[i + 1];
-    if (dbz >= a && dbz < b) {
-      const t = (dbz - a) / (b - a);
-      c = ca.map((v, k) => v + (cb[k] - v) * t);
-      break;
-    }
+    if (dbz >= a && dbz < b) { const t = (dbz - a) / (b - a); c = ca.map((v, k) => v + (cb[k] - v) * t); break; }
     if (dbz >= b) c = cb;
   }
-  const alpha = (70 + Math.min(50, Math.max(0, dbz - 10)) * 3.6) / 255;
-  return new C.Color(c[0] / 255, c[1] / 255, c[2] / 255, alpha);
+  return [c[0], c[1], c[2], 70 + Math.min(50, Math.max(0, dbz - 10)) * 3.6];
 }
 {
   const leg = document.getElementById('legend');
   for (let d = 10; d <= 65; d += 5) {
     const s = document.createElement('span');
-    s.style.background = dbzColor(d).withAlpha(1).toCssColorString();
-    s.title = d + ' dBZ';
+    const [r, g, b] = dbzRgba(d);
+    s.style.background = `rgb(${r},${g},${b})`;
     leg.appendChild(s);
   }
   leg.insertAdjacentHTML('beforeend', '&nbsp;10–65 dBZ');
 }
 
-let radarPoints = null;
+const radar = {
+  id: 'radar3d', type: 'custom', renderingMode: '3d',
+  count: 0, voxelM: 1000, pending: null,
+  onAdd(m, gl) {
+    const vs = `
+      attribute vec3 a_pos; attribute vec4 a_color;
+      uniform mat4 u_matrix; uniform float u_size;
+      varying vec4 v_color;
+      void main() {
+        gl_Position = u_matrix * vec4(a_pos, 1.0);
+        gl_PointSize = clamp(u_size / gl_Position.w, 1.5, 96.0);
+        v_color = a_color;
+      }`;
+    const fs = `
+      precision mediump float; varying vec4 v_color;
+      void main() {
+        vec2 d = gl_PointCoord - 0.5;
+        float r = dot(d, d) * 4.0;
+        if (r > 1.0) discard;
+        gl_FragColor = vec4(v_color.rgb, v_color.a * (1.0 - r * r));
+      }`;
+    const sh = (t, s) => { const o = gl.createShader(t); gl.shaderSource(o, s); gl.compileShader(o); return o; };
+    this.prog = gl.createProgram();
+    gl.attachShader(this.prog, sh(gl.VERTEX_SHADER, vs));
+    gl.attachShader(this.prog, sh(gl.FRAGMENT_SHADER, fs));
+    gl.linkProgram(this.prog);
+    this.aPos = gl.getAttribLocation(this.prog, 'a_pos');
+    this.aColor = gl.getAttribLocation(this.prog, 'a_color');
+    this.uMatrix = gl.getUniformLocation(this.prog, 'u_matrix');
+    this.uSize = gl.getUniformLocation(this.prog, 'u_size');
+    this.pos = gl.createBuffer();
+    this.col = gl.createBuffer();
+    this.gl = gl;
+    if (this.pending) this.upload(this.pending);
+  },
+  upload(r) {
+    const gl = this.gl;
+    if (!gl) { this.pending = r; return; }
+    this.pending = null;
+    const v = r.v, n = v.length / 4;
+    const pos = new Float32Array(n * 3), col = new Uint8Array(n * 4);
+    const kmLat = 1 / 111.19, kmLon = kmLat / Math.max(0.05, Math.cos(r.lat * Math.PI / 180));
+    for (let i = 0; i < n; i++) {
+      const lng = r.lon + v[i * 4] * kmLon, lat = r.lat + v[i * 4 + 1] * kmLat;
+      const mc = ML.MercatorCoordinate.fromLngLat([lng, lat], v[i * 4 + 2] * 1000);
+      pos.set([mc.x, mc.y, mc.z], i * 3);
+      col.set(dbzRgba(v[i * 4 + 3]), i * 4);
+    }
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.pos);
+    gl.bufferData(gl.ARRAY_BUFFER, pos, gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.col);
+    gl.bufferData(gl.ARRAY_BUFFER, col, gl.STATIC_DRAW);
+    this.count = n;
+    this.voxelM = (r.voxel_km || 1) * 1000;
+    this.lat = r.lat;
+    map.triggerRepaint();
+  },
+  render(gl, args) {
+    if (!this.count) return;
+    // MapLibre 4 passes the matrix itself; later versions an object.
+    const matrix = args && args.defaultProjectionData ? args.defaultProjectionData.mainMatrix : args;
+    // A voxel's size in pixels at the map centre, times its depth there.
+    const tr = map.transform;
+    const mpp = 40075016.7 * Math.cos((this.lat || 0) * Math.PI / 180) / (512 * Math.pow(2, map.getZoom()));
+    const size = (this.voxelM / mpp) * 1.6 * (tr.cameraToCenterDistance || 800);
+    gl.useProgram(this.prog);
+    gl.uniformMatrix4fv(this.uMatrix, false, matrix);
+    gl.uniform1f(this.uSize, size);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.pos);
+    gl.enableVertexAttribArray(this.aPos);
+    gl.vertexAttribPointer(this.aPos, 3, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.col);
+    gl.enableVertexAttribArray(this.aColor);
+    gl.vertexAttribPointer(this.aColor, 4, gl.UNSIGNED_BYTE, true, 0, 0);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthMask(false);
+    gl.drawArrays(gl.POINTS, 0, this.count);
+    gl.depthMask(true);
+  },
+};
+
 async function loadRadar() {
   const r = await (await fetch(new URL('radar.json', location.href))).json();
-  if (radarPoints) { scene.primitives.remove(radarPoints); radarPoints = null; }
   if (!r || !r.v) return;
-  const pts = new C.PointPrimitiveCollection({ blendOption: C.BlendOption.TRANSLUCENT });
-  const kmLat = 1 / 111.19, kmLon = kmLat / Math.max(0.05, Math.cos(r.lat * Math.PI / 180));
-  const px = Math.max(3, r.voxel_km * 4);
-  const v = r.v;
-  for (let i = 0; i + 3 < v.length; i += 4) {
-    pts.add({
-      position: C.Cartesian3.fromDegrees(r.lon + v[i] * kmLon, r.lat + v[i + 1] * kmLat, v[i + 2] * 1000),
-      color: dbzColor(v[i + 3]),
-      pixelSize: px,
-      scaleByDistance: new C.NearFarScalar(1e4, 2.2, 5e5, 0.35),
-    });
-  }
-  radarPoints = scene.primitives.add(pts);
-  hud.textContent = (r.label || 'Radar') + ` · ${v.length / 4} echoes`;
-  log(`radar: ${v.length / 4} echoes`);
+  radar.upload(r);
+  status.textContent = (r.label || 'Radar') + ` · ${r.v.length / 4} echoes`;
+  log(`radar: ${r.v.length / 4} echoes`);
 }
 
-// --- Messages from Pro ---------------------------------------------------------
-let flown = false;
-window.ss = (m) => {
-  if (!m || !m.type) return;
+// --- Messages from Pro -------------------------------------------------------------
+let loaded = false;
+const queue = [];
+function handle(m) {
+  if (!loaded) { queue.push(m); return; }
   if (m.type === 'scene') {
-    const view = {
-      destination: C.Cartesian3.fromDegrees(m.lon, m.lat - 0.55, 38000),
-      orientation: { heading: 0, pitch: C.Math.toRadians(-32), roll: 0 },
-    };
-    if (flown) scene.camera.flyTo({ ...view, duration: 2.5 });
-    else scene.camera.setView(view);
-    flown = true;
-    updateBuildings();
-    if (m.name) hud.textContent = m.name;
+    map.jumpTo({ center: [m.lon, m.lat], zoom: 10.2, pitch: 58, bearing: -15 });
+    if (m.name) status.textContent = m.name;
   } else if (m.type === 'radar') {
     loadRadar().catch((e) => log('radar: ' + e));
+  } else if (m.type === 'style') {
+    applyMode(m.style === 'satellite' ? 'satellite' : 'map');
   } else if (m.type === 'goto') {
-    scene.camera.flyTo({
-      destination: C.Cartesian3.fromDegrees(m.lon, m.lat, m.height || 1500),
-      orientation: { heading: 0, pitch: C.Math.toRadians(-35), roll: 0 },
-    });
+    map.flyTo({ center: [m.lon, m.lat], zoom: m.zoom || 15.5, pitch: 60, bearing: -20 });
   }
-};
-log('ready');
+}
+window.ss = handle;
+window.__map = map;
+
+map.on('load', () => {
+  map.addLayer(radar);
+  applyMode(mode);
+  if (status.textContent.startsWith('Loading')) status.textContent = '3D Map';
+  loaded = true;
+  for (const m of queue.splice(0)) handle(m);
+  log('ready');
+});
+map.on('error', (e) => log('map: ' + (e.error && e.error.message || e)));
+})();
 </script>
 </body>
 </html>

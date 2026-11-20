@@ -3,7 +3,7 @@ name = "silverskies-globe"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Silver Skies Pro's 3D globe: CesiumJS in a native web view, with free satellite imagery, terrain and buildings, and the radar volume."
+description = "Silver Skies Pro's 3D map: MapLibre GL in a native web view, with a dark street map and 3D buildings or satellite imagery on terrain, and the radar volume."
 
 [[bin]]
 name = "silverskies-globe"

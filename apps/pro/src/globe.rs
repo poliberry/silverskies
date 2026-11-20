@@ -1,4 +1,4 @@
-//! The 3D globe window: `silverskies-globe` (CesiumJS in the system web
+//! The 3D map window: `silverskies-globe` (MapLibre GL in the system web
 //! view), started on demand and fed the place and the radar volume over its
 //! stdin. It is a separate program so Pro never depends on a web view.
 
@@ -40,7 +40,7 @@ pub struct Globe {
 impl Globe {
     pub fn start() -> Result<Globe, String> {
         let path = helper_path().ok_or_else(|| {
-            "the 3D globe (silverskies-globe) isn't installed next to Silver Skies Pro".to_string()
+            "the 3D map (silverskies-globe) isn't installed next to Silver Skies Pro".to_string()
         })?;
         let mut cmd = Command::new(path);
         // Inside an AppImage, use the system's libraries (WebKitGTK), not
@@ -53,7 +53,7 @@ impl Globe {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
-            .map_err(|e| format!("starting the 3D globe: {e}"))?;
+            .map_err(|e| format!("starting the 3D map: {e}"))?;
         let stdin = child.stdin.take().ok_or("no stdin")?;
         let out = Arc::new(Mutex::new(Vec::new()));
         if let Some(stdout) = child.stdout.take() {
@@ -109,12 +109,12 @@ impl Globe {
     /// Why it may not have started, for the log.
     pub fn failure_hint() -> &'static str {
         if cfg!(target_os = "linux") {
-            "the 3D globe couldn't start: it needs WebKitGTK (e.g. sudo apt install libwebkit2gtk-4.1-0, \
+            "the 3D map couldn't start: it needs WebKitGTK (e.g. sudo apt install libwebkit2gtk-4.1-0, \
              sudo dnf install webkit2gtk4.1, sudo pacman -S webkit2gtk-4.1)"
         } else if cfg!(windows) {
-            "the 3D globe couldn't start: it needs the Microsoft Edge WebView2 runtime"
+            "the 3D map couldn't start: it needs the Microsoft Edge WebView2 runtime"
         } else {
-            "the 3D globe couldn't start"
+            "the 3D map couldn't start"
         }
     }
 
@@ -134,7 +134,7 @@ impl Globe {
                 "type": "scene", "lat": scene.lat, "lon": scene.lon, "name": name,
             }));
             self.send(&serde_json::json!({
-                "type": "title", "text": format!("3D Globe · {name} · Silver Skies Pro"),
+                "type": "title", "text": format!("3D Map · {name} · Silver Skies Pro"),
             }));
         }
         let label = match &scene.source {

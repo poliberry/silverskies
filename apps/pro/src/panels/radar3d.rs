@@ -402,7 +402,7 @@ impl Radar3dPanel {
             match crate::globe::Globe::start() {
                 Ok(g) => {
                     self.globe = Some(g);
-                    cx.shared.log(LogLevel::Info, "3D globe opened");
+                    cx.shared.log(LogLevel::Info, "3D map opened");
                 }
                 Err(e) => cx.shared.log(LogLevel::Error, e),
             }
@@ -412,7 +412,7 @@ impl Radar3dPanel {
         };
         for line in g.drain() {
             if let Some(e) = line.strip_prefix("error ") {
-                cx.shared.log(LogLevel::Error, format!("globe: {e}"));
+                cx.shared.log(LogLevel::Error, format!("3D map: {e}"));
                 continue;
             }
             let text = line.strip_prefix("log ").unwrap_or(&line);
@@ -422,14 +422,14 @@ impl Radar3dPanel {
                 } else {
                     LogLevel::Info
                 };
-                cx.shared.log(level, format!("globe: {text}"));
+                cx.shared.log(level, format!("3D map: {text}"));
             }
         }
         if !g.alive() {
             let started = g.started;
             self.globe = None;
             if started {
-                cx.shared.log(LogLevel::Info, "3D globe closed");
+                cx.shared.log(LogLevel::Info, "3D map closed");
             } else {
                 cx.shared
                     .log(LogLevel::Error, crate::globe::Globe::failure_hint());
@@ -561,9 +561,9 @@ impl Radar3dPanel {
                         .min_size(vec2(26.0, 22.0)),
                 )
                 .on_hover_text(if open {
-                    "Close the 3D globe"
+                    "Close the 3D map"
                 } else {
-                    "Open the 3D globe: satellite imagery on real terrain, buildings with sun and shadows, and this radar volume (CesiumJS, in its own window)"
+                    "Open the 3D map: a dark street map with 3D buildings (or satellite) on real terrain, with this radar volume, in its own window"
                 })
                 .clicked()
             {
@@ -710,15 +710,6 @@ impl Panel for Radar3dPanel {
                 .filter(|_| scene.imagery.is_some())
                 .map(|(_, t)| t.id());
             lod.draw(&painter, &view, &scene, ex, dark, self.show_imagery, base);
-            lod.draw_buildings(
-                &painter,
-                &view,
-                &scene,
-                ex,
-                (tx, ty),
-                dark,
-                self.show_imagery,
-            );
             lod_drawn = true;
             if lod.busy() {
                 ui.ctx()
@@ -1034,15 +1025,12 @@ impl Radar3dPanel {
                 );
             }
         }
-        let mut credit = if self.show_imagery && self.imagery_tex.is_some() {
+        let credit = if self.show_imagery && self.imagery_tex.is_some() {
             "Imagery: Esri, Maxar, Earthstar Geographics · Terrain: AWS Terrain Tiles · "
-                .to_string()
         } else {
-            "Terrain: AWS Terrain Tiles · ".to_string()
+            "Terrain: AWS Terrain Tiles · "
         };
-        if self.lod.as_ref().is_some_and(|l| l.buildings > 0) {
-            credit.push_str("Buildings: © OpenStreetMap, OpenFreeMap · ");
-        }
+
         painter.text(
             rect.right_bottom() + vec2(-8.0, -6.0),
             Align2::RIGHT_BOTTOM,

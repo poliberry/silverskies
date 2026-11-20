@@ -2,26 +2,23 @@
 
 The **3D RADAR** pane shows the atmosphere around a place as a 3D volume above the real landscape, with storms and tornado signatures marked. Open it from the tool strip (cube icon), with `:show 3d`, or in its own window with `:popout 3d` (recommended: it likes space).
 
-## The 3D globe (CesiumJS)
+## The 3D map
 
-The globe button in the 3D RADAR pane's toolbar opens a separate **3D Globe** window: [CesiumJS](https://cesium.com/platform/cesiumjs/) (open source) running in the system web view, fed only free, keyless data:
+The map button (globe icon) in the 3D RADAR pane's toolbar opens a separate **3D Map** window: an open-source [MapLibre GL](https://maplibre.org/) map in the system web view, on free, keyless data. Pro sends it the place and the radar volume, and updates it with each new scan.
 
-- **Imagery:** Esri World Imagery, with Esri place names on top.
-- **Terrain:** AWS Terrain Tiles (Terrarium), decoded in the page, worldwide.
-- **Buildings:** OpenStreetMap footprints and heights from OpenFreeMap's vector tiles, extruded and lit by the real sun for the current time, casting shadows on the ground and each other.
-- **Radar:** the same volume as the 3D RADAR pane, sent over by Pro and updated with each new scan; it follows the place you're viewing.
+- **Map** (the default): a dark street and transport map (OpenStreetMap data via [OpenFreeMap](https://openfreemap.org/)) with motorways, roads, rail and names, and **3D buildings** at their real heights, on real terrain with hillshading.
+- **Satellite:** Esri World Imagery on the terrain with place names. Only the ground has relief; buildings stay flat in the photo.
+- **Radar:** the 3D RADAR pane's volume, drawn in 3D over either map.
 
-Drag to move, Ctrl-drag or middle-drag to tilt and turn, scroll or right-drag to zoom. Closing Pro closes the globe.
+Switch with **Map | Satellite** at the top right (it's remembered). Drag to move, right-drag or Ctrl-drag to tilt and turn, scroll to zoom.
 
-It is a separate program, `silverskies-globe`, installed next to Pro. It needs an internet connection (CesiumJS itself loads from the jsDelivr CDN) and a web view: WebView2 on Windows (built into Windows 10 and 11), WebKit on macOS, and **WebKitGTK 4.1** on Linux (`sudo apt install libwebkit2gtk-4.1-0`, `sudo dnf install webkit2gtk4.1`, `sudo pacman -S webkit2gtk-4.1`). If it can't start, the audit log says why.
-
-Photographed 3D cities (real building shapes and facades) aren't part of it: those come only from Google's Photorealistic 3D Tiles, which need a Google Maps API key with billing.
+It is a separate program, `silverskies-globe`, installed next to Pro. It needs an internet connection (the map library loads from the jsDelivr CDN) and a web view: WebView2 on Windows (built into Windows 10 and 11), WebKit on macOS, and **WebKitGTK 4.1** on Linux (`sudo apt install libwebkit2gtk-4.1-0`, `sudo dnf install webkit2gtk4.1`, `sudo pacman -S webkit2gtk-4.1`). If it can't start, the audit log says why.
 
 ## What you see
 
 - **Terrain:** a 400 × 400 km elevation model of the area, draped with **satellite imagery** and lit by the sun, under a sky. The satellite button switches to colouring by height instead.
 - **Zoom like a map:** scroll from the 400 km overview right down to streets and buildings. Close to the camera the app streams finer elevation (AWS Terrain Tiles, to level 15) and satellite imagery (to level 19) tile by tile, spending detail where you're looking; farther away it stays coarse. Height exaggeration eases to true scale as you get close, so hills look real at street level.
-- **3D buildings:** below about 5 km, buildings rise out of the map from OpenStreetMap footprints and heights (OpenFreeMap vector tiles, worldwide, no key). Roofs show the satellite photo; walls show floors and windows, lit by the real sun for the place and time of day, and cast shadows on the ground (no shadows at night). Close up, the elevation data's lumps where cities and forests stand are smoothed away, so the photo isn't smeared over them.
+- **Close up**, the elevation data's lumps where cities and forests stand are smoothed away, so the photo lies flat on the ground instead of being smeared over them. Buildings are shown in 3D in the 3D Map window.
 - **Radar echoes:** reflectivity in 3D, coloured like the 2D radar (green → yellow → red → magenta/white for the most intense cores). Weak echoes are see-through; cores are solid.
 - **Storm cells:** a line from the ground to the echo top, coloured by threat (yellow strong, orange severe, magenta rotating, red tornadic).
 - **Tornado vortex signatures:** a red funnel from cloud base to the ground.
@@ -66,7 +63,7 @@ Terrain and imagery are worldwide everywhere.
 
 - Terrain: [AWS Terrain Tiles](https://registry.opendata.aws/terrain-tiles/) (Terrarium encoding: `height = R·256 + G + B/256 − 32768` m).
 - Imagery: Esri World Imagery — Esri, Maxar, Earthstar Geographics.
-- Buildings: © OpenStreetMap contributors, via OpenFreeMap.
+- 3D Map: © OpenStreetMap contributors, OpenMapTiles, via OpenFreeMap; MapLibre GL JS.
 - Radar volumes: [NOAA NEXRAD Level II on AWS](https://registry.opendata.aws/noaa-nexrad/) (`unidata-nexrad-level2`).
 - Composite: LibreWXR.
 

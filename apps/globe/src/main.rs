@@ -1,4 +1,4 @@
-//! Silver Skies Pro's 3D globe: a window with CesiumJS in the system web
+//! Silver Skies Pro's 3D map: a window with MapLibre GL in the system web
 //! view (WebView2, WKWebView or WebKitGTK), started by Pro.
 //!
 //! Pro writes one JSON message per line to stdin:
@@ -94,7 +94,7 @@ fn main() {
     }
 
     let window = match WindowBuilder::new()
-        .with_title("3D Globe · Silver Skies Pro")
+        .with_title("3D Map · Silver Skies Pro")
         .with_inner_size(LogicalSize::new(1280.0, 820.0))
         .build(&event_loop)
     {
