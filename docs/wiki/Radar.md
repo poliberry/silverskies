@@ -60,6 +60,7 @@ The radar bar, under the function keys in Pro's main window, has playback (back,
 | Storm reports | Iowa Environmental Mesonet (NWS LSRs) | US |
 | Tropical cyclones | GDACS | Worldwide |
 | Hail swaths, rotation tracks | NOAA MRMS | US |
+| Storm swaths (max composite echo) | Computed from the LibreWXR composite | Worldwide |
 | Lightning (flashes) | NOAA GOES GLM | The Americas, Atlantic and Pacific |
 | Lightning (density) | EUMETSAT MTG Lightning Imager | Europe, Africa |
 | Wind barbs | METAR observations (api.weather.gov) | Where stations exist |
@@ -85,6 +86,8 @@ Two layers from NOAA's Multi-Radar Multi-Sensor system (MRMS), which merges ever
 
 - **Hail swaths** (hail icon, `:layer hail`): the largest hail the radars estimated (MESH) at each point over the period, from 0.5 in: green 0.5″, lime 0.75″, yellow 1″, orange 1.5″, red 2″, maroon 2.75″, white 4″+.
 - **Rotation tracks** (cyclone icon, `:layer rotation`): the strongest low-level rotation (0–2 km azimuthal shear) over the period, from 0.008 s⁻¹: lavender, violet, purple, pink, rose, white for 0.03 s⁻¹ and up. A long, narrow, bright streak is the path of a rotating storm, often a tornado's.
+
+**Outside the US** (anywhere MRMS doesn't reach) the hail toggle shows **storm swaths** instead, worked out by the app from the worldwide composite around your place: the strongest echo at each point over the period (the composite keeps about two hours), from 50 dBZ: green 50, yellow 55, orange 60, red 65, purple 70+. Cores of 55 dBZ and more usually carry hail, so the swaths show where hail most likely fell; hover for the value (*strongest echo 58 dBZ (hail likely) · last 2 h*). It is an estimate from a composite, coarser than MRMS's hail sizes. Tracks and swaths have a dark outline so they stand out over the radar.
 
 Choose how far back they reach in Settings → Radar → *Track period* or with `:period` (30 min, 1, 2, 4, 6 or 24 h; default 2 h). They refresh every few minutes. Hover the map for the value under the pointer, e.g. *hail up to 1.75 in (44 mm) · last 2 h*. Single isolated pixels (usually clutter) are left out. The values are radar estimates: compare with storm reports.
 

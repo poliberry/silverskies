@@ -21,6 +21,7 @@ pub fn factor(kind: TrackKind) -> usize {
     match kind {
         TrackKind::Hail => 2,
         TrackKind::Rotation => 4,
+        TrackKind::Swath => 1,
     }
 }
 
@@ -30,6 +31,8 @@ pub fn threshold(kind: TrackKind) -> f32 {
     match kind {
         TrackKind::Hail => 12.7,
         TrackKind::Rotation => 8.0,
+        // Cores this strong usually carry hail.
+        TrackKind::Swath => 50.0,
     }
 }
 
@@ -52,10 +55,20 @@ const ROTATION_STOPS: [(f32, [u8; 3]); 6] = [
     (30.0, [255, 255, 255]),
 ];
 
+/// Storm swaths (max composite dBZ, worldwide), in the hail swath colours.
+const SWATH_STOPS: [(f32, [u8; 3]); 5] = [
+    (50.0, [0, 200, 80]),
+    (55.0, [255, 220, 0]),
+    (60.0, [255, 140, 0]),
+    (65.0, [240, 30, 0]),
+    (70.0, [200, 0, 200]),
+];
+
 pub fn stops(kind: TrackKind) -> &'static [(f32, [u8; 3])] {
     match kind {
         TrackKind::Hail => &HAIL_STOPS,
         TrackKind::Rotation => &ROTATION_STOPS,
+        TrackKind::Swath => &SWATH_STOPS,
     }
 }
 
@@ -104,6 +117,42 @@ pub fn describe(kind: TrackKind, v: f32) -> String {
     match kind {
         TrackKind::Hail => format!("hail up to {:.2} in ({v:.0} mm)", v / 25.4),
         TrackKind::Rotation => format!("rotation {:.3} s⁻¹", v / 1000.0),
+        TrackKind::Swath => {
+            let what = match v {
+                v if v >= 60.0 => "large hail possible",
+                v if v >= 55.0 => "hail likely",
+                _ => "intense core, hail possible",
+            };
+            format!("strongest echo {v:.0} dBZ ({what})")
+        }
+    }
+}
+
+/// A dark edge around the painted areas, so tracks stand out over the
+/// radar colours beneath.
+fn outline(image: &mut ColorImage) {
+    let [w, h] = image.size;
+    let edge = Color32::from_black_alpha(200);
+    let filled: Vec<bool> = image.pixels.iter().map(|c| c.a() > 0).collect();
+    for y in 0..h {
+        for x in 0..w {
+            if filled[y * w + x] {
+                continue;
+            }
+            let touches = [(0isize, 1isize), (0, -1), (1, 0), (-1, 0)]
+                .iter()
+                .any(|&(dx, dy)| {
+                    let (nx, ny) = (x as isize + dx, y as isize + dy);
+                    nx >= 0
+                        && ny >= 0
+                        && (nx as usize) < w
+                        && (ny as usize) < h
+                        && filled[ny as usize * w + nx as usize]
+                });
+            if touches {
+                image.pixels[y * w + x] = edge;
+            }
+        }
     }
 }
 
@@ -169,6 +218,7 @@ pub fn render(mut grid: Grid, kind: TrackKind, minutes: u32) -> Option<Track> {
             }
         }
     }
+    outline(&mut image);
     Some(Track {
         kind,
         minutes,

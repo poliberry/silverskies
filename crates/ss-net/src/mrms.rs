@@ -16,6 +16,14 @@ pub enum TrackKind {
     Hail,
     /// Rotation track: max low-level (0–2 km) azimuthal shear (s⁻¹).
     Rotation,
+    /// Worldwide stand-in for hail swaths, computed by the app (not MRMS):
+    /// the maximum composite reflectivity over the period (dBZ).
+    Swath,
+}
+
+/// Roughly where MRMS covers (the US and southern Canada).
+pub fn covers(lat: f64, lon: f64) -> bool {
+    (20.0..=55.0).contains(&lat) && (-130.0..=-60.0).contains(&lon)
 }
 
 impl TrackKind {
@@ -25,6 +33,7 @@ impl TrackKind {
         match self {
             TrackKind::Hail => format!("MESH_Max_{minutes}min_00.50"),
             TrackKind::Rotation => format!("RotationTrack{minutes}min_00.50"),
+            TrackKind::Swath => String::new(),
         }
     }
 }

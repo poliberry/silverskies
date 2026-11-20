@@ -252,6 +252,40 @@ impl Tasks {
         });
     }
 
+    /// A storm swath (strongest composite echo over `frames`) around a
+    /// place, drawn like the hail tracks.
+    pub fn swath(
+        &self,
+        host: String,
+        frames: Vec<ss_core::RadarFrame>,
+        lat: f64,
+        lon: f64,
+        minutes: u32,
+    ) {
+        use crate::panels::tracks;
+        use ss_net::mrms::TrackKind;
+        let (net, tx, ctx) = (self.net.clone(), self.tx.clone(), self.ctx.clone());
+        self.rt.spawn(async move {
+            let result = match net.mosaic_swath(&host, &frames, lat, lon, 0.02).await {
+                Ok(grid) => tokio::task::spawn_blocking(move || {
+                    tracks::render(grid, TrackKind::Swath, minutes).map(std::sync::Arc::new)
+                })
+                .await
+                .map_err(|e| e.to_string()),
+                Err(e) => Err(e.to_string()),
+            };
+            Self::post(
+                &tx,
+                &ctx,
+                AppEvent::Track {
+                    kind: TrackKind::Swath,
+                    minutes,
+                    result,
+                },
+            );
+        });
+    }
+
     /// The 3D scene for a location: terrain, plus the nearest NEXRAD
     /// volume or (elsewhere) the extruded radar mosaic.
     pub fn scene3d(

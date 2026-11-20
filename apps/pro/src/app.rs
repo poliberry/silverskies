@@ -55,6 +55,8 @@ pub struct App {
     last_tropical: Option<Instant>,
     last_lightning: Option<Instant>,
     last_arrivals: Option<Instant>,
+    /// When the storm swath was last requested, for which place and period.
+    last_swath: Option<(Instant, String, u32)>,
     /// (place id, cell key) → when a storm-arrival warning was given.
     arrival_warned: HashMap<(String, String), Instant>,
     /// Last mosaic-cell run: when, for which location.
@@ -155,6 +157,7 @@ impl App {
             last_tropical: None,
             last_lightning: None,
             last_arrivals: None,
+            last_swath: None,
             arrival_warned: HashMap::new(),
             last_mosaic: None,
             last_auto: Instant::now(),
@@ -446,6 +449,14 @@ impl App {
                 sh.tracks_pending.remove(&kind);
                 match result {
                     Ok(t) => {
+                        tracing::info!(
+                            "track {kind:?} ({minutes} min): {}",
+                            t.as_ref()
+                                .map_or("nothing to show".to_string(), |t| format!(
+                                    "{}×{} cells",
+                                    t.grid.nx, t.grid.ny
+                                ))
+                        );
                         sh.tracks.insert(kind, (minutes, t));
                     }
                     Err(e) => sh.log(LogLevel::Warn, format!("MRMS {kind:?} track: {e}")),
@@ -878,6 +889,50 @@ impl App {
                 self.tasks.track(kind, minutes);
             }
         }
+        // Outside MRMS coverage, the hail toggle shows storm swaths from the
+        // global composite around the tracked place instead.
+        let loc = sh.active_location().cloned();
+        let swath_wanted = sh.config.radar.hail_track
+            && loc
+                .as_ref()
+                .is_some_and(|l| !ss_net::mrms::covers(l.lat, l.lon));
+        if !swath_wanted {
+            sh.tracks.remove(&TrackKind::Swath);
+            self.last_swath = None;
+            return;
+        }
+        let (Some(loc), Some(maps)) = (loc, sh.weather_maps.as_ref()) else {
+            return;
+        };
+        if sh.tracks_pending.contains(&TrackKind::Swath) {
+            return;
+        }
+        let due = match &self.last_swath {
+            Some((t, id, m)) => {
+                id != &loc.id || *m != minutes || t.elapsed() >= Duration::from_secs(300)
+            }
+            None => true,
+        };
+        if !due {
+            return;
+        }
+        let since = chrono::Utc::now().timestamp() - i64::from(minutes) * 60;
+        let frames: Vec<_> = maps
+            .radar_past
+            .iter()
+            .filter(|f| f.time >= since)
+            .cloned()
+            .collect();
+        if frames.is_empty() {
+            return;
+        }
+        // The composite keeps about two hours: the swath covers what it has.
+        let span = (chrono::Utc::now().timestamp() - frames[0].time).max(60) / 60;
+        let host = maps.host.clone();
+        self.last_swath = Some((Instant::now(), loc.id.clone(), minutes));
+        sh.tracks_pending.insert(TrackKind::Swath);
+        self.tasks
+            .swath(host, frames, loc.lat, loc.lon, (span as u32).min(minutes));
     }
 
     /// Which storms are heading for the saved places; warn (log and desktop

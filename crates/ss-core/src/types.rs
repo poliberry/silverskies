@@ -508,7 +508,7 @@ pub fn track_period_label(minutes: u32) -> String {
     if minutes < 60 {
         format!("{minutes} min")
     } else {
-        format!("{} h", minutes / 60)
+        format!("{} h", (minutes + 30) / 60)
     }
 }
 

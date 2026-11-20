@@ -80,6 +80,73 @@ impl Net {
         self.dbz_grid(host, frame, ox, oy).await
     }
 
+    /// The strongest echo at each point around (`lat`, `lon`) over the
+    /// `frames` (a storm swath), on a regular lat/lon grid of `step_deg`
+    /// (for [`crate::mrms::Grid`]-based drawing); NaN where nothing fell.
+    pub async fn mosaic_swath(
+        &self,
+        host: &str,
+        frames: &[RadarFrame],
+        lat: f64,
+        lon: f64,
+        step_deg: f64,
+    ) -> Result<crate::mrms::Grid> {
+        let (ox, oy) = block_origin(lon, lat);
+        let grids: Vec<_> =
+            futures::future::join_all(frames.iter().map(|f| self.dbz_grid(host, f, ox, oy)))
+                .await
+                .into_iter()
+                .flatten()
+                .collect();
+        let Some(first) = grids.first() else {
+            return Err(NetError::Missing("radar frames"));
+        };
+        let mut max = vec![f32::NAN; first.w * first.h];
+        for g in &grids {
+            for (m, d) in max.iter_mut().zip(&g.dbz) {
+                if let Some(d) = d {
+                    if m.is_nan() || *m < *d {
+                        *m = *d;
+                    }
+                }
+            }
+        }
+        let (w, h, zoom) = (first.w, first.h, first.zoom);
+        let (x0, y0) = (first.x0, first.y0);
+        let (west, north) = ss_core::geo::world_to_lonlat(x0, y0, f64::from(zoom));
+        let (east, south) =
+            ss_core::geo::world_to_lonlat(x0 + w as f64, y0 + h as f64, f64::from(zoom));
+        let nx = ((east - west) / step_deg).floor() as usize;
+        let ny = ((north - south) / step_deg).floor() as usize;
+        let mut values = vec![f32::NAN; nx * ny];
+        for r in 0..ny {
+            let la = north - (r as f64 + 0.5) * step_deg;
+            let (_, wy) = ss_core::geo::lonlat_to_world(west, la, f64::from(zoom));
+            let py = (wy - y0) as usize;
+            if py >= h {
+                continue;
+            }
+            for c in 0..nx {
+                let lo = west + (c as f64 + 0.5) * step_deg;
+                let (wx, _) = ss_core::geo::lonlat_to_world(lo, la, f64::from(zoom));
+                let px = (wx - x0) as usize;
+                if px < w {
+                    values[r * nx + c] = max[py * w + px];
+                }
+            }
+        }
+        Ok(crate::mrms::Grid {
+            lat0: north - step_deg / 2.0,
+            lon0: west + step_deg / 2.0,
+            dlat: step_deg,
+            dlon: step_deg,
+            nx,
+            ny,
+            values,
+            time: frames.last().map_or(0, |f| f.time),
+        })
+    }
+
     /// Storm cells within roughly 700–1,000 km of (`lat`, `lon`) from the two
     /// newest observed mosaic frames.
     pub async fn mosaic_storm_cells(

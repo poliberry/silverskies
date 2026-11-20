@@ -385,7 +385,7 @@ impl RadarPanel {
         l.push(PolygonLayer::new("alerts"));
         l.push(WindBarbLayer::new("barbs", Color32::GRAY));
         // MRMS hail swaths and rotation tracks (US).
-        for name in ["hail-track", "rotation-track"] {
+        for name in ["swath-track", "hail-track", "rotation-track"] {
             let mut t = ss_map::GeoImageLayer::new(name);
             t.visible = false;
             l.push(t);
@@ -2021,6 +2021,7 @@ impl RadarPanel {
                 "rotation-track",
                 rs.rotation_track,
             ),
+            (ss_net::mrms::TrackKind::Swath, "swath-track", rs.hail_track),
         ] {
             let track = sh.tracks.get(&kind).and_then(|(_, t)| t.clone());
             let key = track.as_ref().map(|t| Arc::as_ptr(t) as usize);
