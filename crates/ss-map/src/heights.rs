@@ -48,7 +48,20 @@ impl HeightTile {
             return;
         }
         let eroded = filter(&self.h, self.size, radius, f32::min);
-        self.h = filter(&eroded, self.size, radius, f32::max);
+        let opened = filter(&eroded, self.size, radius, f32::max);
+        // Near the tile's edges the window is cut short and the opening
+        // would sink the ground (trenches along every tile border): fade it
+        // out toward them, so neighbouring tiles still meet.
+        let n = self.size;
+        let r = radius as f32;
+        for y in 0..n {
+            for x in 0..n {
+                let edge = x.min(y).min(n - 1 - x).min(n - 1 - y) as f32;
+                let w = ((edge - r) / r).clamp(0.0, 1.0);
+                let k = y * n + x;
+                self.h[k] += (opened[k] - self.h[k]) * w;
+            }
+        }
     }
 }
 

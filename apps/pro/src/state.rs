@@ -185,7 +185,7 @@ pub struct Shared {
     pub soundings: HashMap<String, Vec<ss_core::sounding::Sounding>>,
     pub soundings_pending: std::collections::HashSet<String>,
     /// 3D scenes (terrain + radar volume) by location id.
-    pub scenes3d: HashMap<String, ss_core::radar3d::Scene>,
+    pub scenes3d: HashMap<String, std::sync::Arc<ss_core::radar3d::Scene>>,
     pub scene3d_pending: std::collections::HashSet<String>,
     pub scene3d_errors: HashMap<String, String>,
     pub sounding_errors: HashMap<String, String>,

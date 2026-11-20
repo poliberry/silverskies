@@ -16,7 +16,6 @@ Everything the apps show comes from these services. None needs an account except
 | NEXRAD single site | NOAA NCEP GeoServer (WMS) | No | US | Pro |
 | NEXRAD Level II volumes (3D) | [NOAA on AWS](https://registry.opendata.aws/noaa-nexrad/) (`unidata-nexrad-level2`) | No | US | Pro |
 | Terrain elevation (3D) | [AWS Terrain Tiles](https://registry.opendata.aws/terrain-tiles/) | No | Worldwide | Pro |
-| Satellite imagery (3D) | Esri World Imagery (Esri, Maxar, Earthstar Geographics) | No | Worldwide | Pro |
 | Storm cells, storm reports | [Iowa Environmental Mesonet](https://mesonet.agron.iastate.edu) | No | US | Pro |
 | Storm cells (elsewhere) | Computed from the LibreWXR composite | No | Worldwide | Pro |
 | Tropical cyclones | [GDACS](https://www.gdacs.org) | No | Worldwide | Pro |

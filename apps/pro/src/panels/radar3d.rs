@@ -143,6 +143,11 @@ impl View {
     pub fn eye(&self) -> V3 {
         self.eye
     }
+
+    /// Eye, right, up and forward.
+    pub fn basis(&self) -> (V3, V3, V3, V3) {
+        (self.eye, self.right, self.up, self.fwd)
+    }
 }
 
 /// Reflectivity colours (NWS-like), with alpha growing with intensity so
@@ -247,13 +252,7 @@ pub fn soft_sprite(size: usize) -> egui::ColorImage {
 /// its own lighting, so shading is smooth), quads sorted far to near. With
 /// `imagery`, the satellite image is draped over it (lit by the relief);
 /// otherwise it is coloured by height.
-fn terrain_mesh(
-    t: &ss_core::radar3d::Terrain,
-    view: &View,
-    ex: f32,
-    dark: bool,
-    imagery: Option<egui::TextureId>,
-) -> Mesh {
+fn terrain_mesh(t: &ss_core::radar3d::Terrain, view: &View, ex: f32, dark: bool) -> Mesh {
     let n = t.n;
     let half = (n as f32 - 1.0) * t.cell_km / 2.0;
     let h = |c: usize, r: usize| t.heights_m[r.min(n - 1) * n + c.min(n - 1)] / 1000.0;
@@ -272,19 +271,7 @@ fn terrain_mesh(
             let dy = (h(c, r.saturating_sub(1)) - h(c, r + 1)) * ex * 0.6;
             let nrm = V3::new(-dx, -dy, 2.0 * t.cell_km).norm();
             let shade = nrm.dot(light).max(0.0);
-            let (col, uv) = match imagery {
-                // Daylight on the photo: flat ground at full brightness,
-                // slopes facing away from the sun darker.
-                Some(_) => {
-                    let k = (0.35 + 0.75 * shade / light.z).clamp(0.3, 1.0);
-                    let g = (k * 255.0) as u8;
-                    (
-                        Color32::from_rgb(g, g, g),
-                        pos2(c as f32 / (n - 1) as f32, r as f32 / (n - 1) as f32),
-                    )
-                }
-                None => (terrain_color(t.heights_m[r * n + c], shade, dark), WHITE_UV),
-            };
+            let (col, uv) = (terrain_color(t.heights_m[r * n + c], shade, dark), WHITE_UV);
             let (pos, d) = match view.project(p) {
                 Some((pos, d)) => (pos, d),
                 None => (Pos2::ZERO, f32::NAN),
@@ -296,9 +283,6 @@ fn terrain_mesh(
                 color: col,
             });
         }
-    }
-    if let Some(tex) = imagery {
-        mesh.texture_id = tex;
     }
     let mut quads: Vec<(f32, u32)> = Vec::with_capacity((n - 1) * (n - 1));
     for r in 0..n - 1 {
@@ -377,70 +361,13 @@ pub struct Radar3dPanel {
     requested: std::collections::HashMap<String, Instant>,
     /// Soft round sprite the echoes are drawn with.
     sprite: Option<egui::TextureHandle>,
-    /// Drape satellite imagery over the terrain (else colour by height).
-    show_imagery: bool,
-    /// The uploaded imagery and the scene it belongs to.
-    imagery_tex: Option<(String, egui::TextureHandle)>,
     /// Level-of-detail terrain and imagery, for zooming in close.
     lod: Option<super::terrain_lod::Lod>,
-    /// The CesiumJS globe window, when open.
-    globe: Option<crate::globe::Globe>,
-    /// Open the globe on the next frame (from the button).
-    open_globe: bool,
+    /// The GPU renderer (terrain and the radar volume).
+    gl: super::gl3d::Gl3d,
 }
 
 impl Radar3dPanel {
-    /// Start, feed and reap the globe window.
-    fn sync_globe(
-        &mut self,
-        cx: &mut PanelCx,
-        loc: &ss_core::SavedLocation,
-        scene: Option<&Scene>,
-    ) {
-        use crate::state::LogLevel;
-        if std::mem::take(&mut self.open_globe) {
-            match crate::globe::Globe::start() {
-                Ok(g) => {
-                    self.globe = Some(g);
-                    cx.shared.log(LogLevel::Info, "3D map opened");
-                }
-                Err(e) => cx.shared.log(LogLevel::Error, e),
-            }
-        }
-        let Some(g) = self.globe.as_mut() else {
-            return;
-        };
-        for line in g.drain() {
-            if let Some(e) = line.strip_prefix("error ") {
-                cx.shared.log(LogLevel::Error, format!("3D map: {e}"));
-                continue;
-            }
-            let text = line.strip_prefix("log ").unwrap_or(&line);
-            if text != "ready" {
-                let level = if text.starts_with("error") {
-                    LogLevel::Warn
-                } else {
-                    LogLevel::Info
-                };
-                cx.shared.log(level, format!("3D map: {text}"));
-            }
-        }
-        if !g.alive() {
-            let started = g.started;
-            self.globe = None;
-            if started {
-                cx.shared.log(LogLevel::Info, "3D map closed");
-            } else {
-                cx.shared
-                    .log(LogLevel::Error, crate::globe::Globe::failure_hint());
-            }
-            return;
-        }
-        if let Some(s) = scene {
-            g.show(&loc.id, &loc.label, s);
-        }
-    }
-
     /// The vertical exaggeration in use: the slider's value at the overview,
     /// easing to true scale as you zoom in to the ground (like a map).
     fn effective_exag(&self) -> f32 {
@@ -474,11 +401,8 @@ impl Default for Radar3dPanel {
             spin: false,
             requested: Default::default(),
             sprite: None,
-            show_imagery: true,
-            imagery_tex: None,
             lod: None,
-            globe: None,
-            open_globe: false,
+            gl: Default::default(),
         }
     }
 }
@@ -515,13 +439,6 @@ impl Radar3dPanel {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
             Self::toggle(ui, p, &mut self.show_terrain, i::LANDSCAPE, "Terrain");
-            Self::toggle(
-                ui,
-                p,
-                &mut self.show_imagery,
-                i::SATELLITE_ALT,
-                "Satellite imagery on the terrain (off: colour by height)",
-            );
             Self::toggle(ui, p, &mut self.show_radar, i::RADAR, "Radar echoes");
             Self::toggle(
                 ui,
@@ -551,26 +468,6 @@ impl Radar3dPanel {
             {
                 if let Some(l) = &cx.location {
                     self.requested.remove(&l.id);
-                }
-            }
-            let open = self.globe.is_some();
-            if ui
-                .add(
-                    egui::Button::new(RichText::new(i::PUBLIC).font(icon(16.0)))
-                        .selected(open)
-                        .min_size(vec2(26.0, 22.0)),
-                )
-                .on_hover_text(if open {
-                    "Close the 3D map"
-                } else {
-                    "Open the 3D map: a dark street map with 3D buildings (or satellite) on real terrain, with this radar volume, in its own window"
-                })
-                .clicked()
-            {
-                if open {
-                    self.globe = None;
-                } else {
-                    self.open_globe = true;
                 }
             }
             ui.add_space(6.0);
@@ -654,8 +551,7 @@ impl Panel for Radar3dPanel {
             );
         }
         let scene = cx.shared.scenes3d.get(&loc.id).cloned();
-        self.controls(ui, &p, scene.as_ref(), cx);
-        self.sync_globe(cx, &loc, scene.as_ref());
+        self.controls(ui, &p, scene.as_deref(), cx);
         let Some(scene) = scene else {
             if let Some(e) = cx.shared.scene3d_errors.get(&loc.id) {
                 error_text(ui, &p, &format!("3D view failed: {e}"));
@@ -677,16 +573,6 @@ impl Panel for Radar3dPanel {
                 egui::TextureOptions::LINEAR,
             ));
         }
-        if let Some(img) = &scene.imagery {
-            let key = format!("{}:{:?}:{}", loc.id, scene.source, img.rgb.len());
-            if self.imagery_tex.as_ref().is_none_or(|(k, _)| *k != key) {
-                let ci = egui::ColorImage::from_rgb([img.size, img.size], &img.rgb);
-                let tex =
-                    ui.ctx()
-                        .load_texture("radar3d-imagery", ci, egui::TextureOptions::LINEAR);
-                self.imagery_tex = Some((key, tex));
-            }
-        }
         sky(&painter, rect, dark);
         // Orbit around the ground under the target (so close-ups over
         // mountains don't put the camera inside them).
@@ -701,22 +587,51 @@ impl Panel for Radar3dPanel {
         let ex = self.effective_exag();
         self.cam.target.z = g * ex;
         let view = View::new(&self.cam, rect);
-        let mut lod_drawn = false;
-        if let (true, Some(lod)) = (self.show_terrain, self.lod.as_mut()) {
-            lod.poll(ui.ctx());
-            let base = self
-                .imagery_tex
-                .as_ref()
-                .filter(|_| scene.imagery.is_some())
-                .map(|(_, t)| t.id());
-            lod.draw(&painter, &view, &scene, ex, dark, self.show_imagery, base);
-            lod_drawn = true;
+        // The GPU draws the terrain and the radar volume; without it (old
+        // OpenGL) the CPU draws the terrain and the radar as soft points.
+        let gpu = !matches!(self.gl.status(), super::gl3d::Status::Failed(_));
+        let mut terrain_drawn = false;
+        if let Some(lod) = self.lod.as_mut() {
+            lod.poll();
             if lod.busy() {
                 ui.ctx()
                     .request_repaint_after(std::time::Duration::from_millis(150));
             }
+            if self.show_terrain && !gpu {
+                lod.draw(&painter, &view, &scene, ex, dark);
+                terrain_drawn = true;
+            }
         }
-        let marks = self.draw_scene(&painter, &view, &scene, cx, dark, lod_drawn);
+        if gpu {
+            let leaves = match (self.show_terrain, self.lod.as_mut()) {
+                (true, Some(lod)) => lod.leaves(&scene, view.eye(), ex),
+                _ => Vec::new(),
+            };
+            let (eye, right, up, fwd) = view.basis();
+            let haze = if dark {
+                [0.23, 0.32, 0.44]
+            } else {
+                [0.77, 0.84, 0.91]
+            };
+            let frame = super::gl3d::Frame {
+                eye,
+                right,
+                up,
+                fwd,
+                ex,
+                dark,
+                min_dbz: self.min_dbz,
+                terrain: self.show_terrain,
+                radar: self.show_radar,
+                leaves,
+                scene_id: format!("{}:{:?}:{}", loc.id, scene.source, scene.voxels.len()),
+                scene: scene.clone(),
+                haze,
+            };
+            painter.add(self.gl.callback(rect, frame));
+            terrain_drawn = true;
+        }
+        let marks = self.draw_scene(&painter, &view, &scene, cx, dark, terrain_drawn, gpu);
         self.overlay(&painter, rect, &view, &p);
         // Hover: the nearest marker.
         if let Some(pos) = resp.hover_pos() {
@@ -769,6 +684,7 @@ impl Radar3dPanel {
     }
 
     /// Draw terrain and radar, then storm markers. Returns hover targets.
+    #[allow(clippy::too_many_arguments)]
     fn draw_scene(
         &self,
         painter: &egui::Painter,
@@ -777,6 +693,7 @@ impl Radar3dPanel {
         cx: &PanelCx,
         dark: bool,
         terrain_drawn: bool,
+        radar_drawn: bool,
     ) -> Vec<Mark> {
         let ex = self.effective_exag();
         let ground = |x: f32, y: f32| -> f32 {
@@ -786,14 +703,9 @@ impl Radar3dPanel {
                 .map_or(0.0, |t| t.height_at(x, y) / 1000.0)
         };
         if let (true, false, Some(t)) = (self.show_terrain, terrain_drawn, &scene.terrain) {
-            let photo = self
-                .imagery_tex
-                .as_ref()
-                .filter(|_| self.show_imagery && scene.imagery.is_some())
-                .map(|(_, tex)| tex.id());
-            painter.add(Shape::mesh(terrain_mesh(t, view, ex, dark, photo)));
+            painter.add(Shape::mesh(terrain_mesh(t, view, ex, dark)));
         }
-        if let (true, Some(sprite)) = (self.show_radar, &self.sprite) {
+        if let (true, false, Some(sprite)) = (self.show_radar, radar_drawn, &self.sprite) {
             painter.add(Shape::mesh(voxel_mesh(
                 scene,
                 view,
@@ -1025,11 +937,7 @@ impl Radar3dPanel {
                 );
             }
         }
-        let credit = if self.show_imagery && self.imagery_tex.is_some() {
-            "Imagery: Esri, Maxar, Earthstar Geographics · Terrain: AWS Terrain Tiles · "
-        } else {
-            "Terrain: AWS Terrain Tiles · "
-        };
+        let credit = "Terrain: AWS Terrain Tiles · ";
 
         painter.text(
             rect.right_bottom() + vec2(-8.0, -6.0),

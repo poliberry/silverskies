@@ -109,52 +109,6 @@ impl Terrain {
     }
 }
 
-/// Satellite imagery draped over the terrain: a square RGB image covering
-/// the scene (north up), `size` pixels a side.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Imagery {
-    pub size: usize,
-    pub rgb: Vec<u8>,
-    /// Credit to show with it.
-    pub attribution: String,
-}
-
-/// Resample web-mercator imagery onto the scene square. `pixel(wx, wy)`
-/// returns the RGB at a world pixel of zoom `zoom` (`None` where missing:
-/// left dark grey).
-pub fn imagery_from_tiles(
-    lat0: f64,
-    lon0: f64,
-    half_km: f32,
-    size: usize,
-    zoom: u8,
-    attribution: &str,
-    pixel: impl Fn(f64, f64) -> Option<[u8; 3]>,
-) -> Imagery {
-    let mut rgb = vec![40u8; size * size * 3];
-    let deg_lat = 1.0 / EARTH_KM.to_radians();
-    let deg_lon = deg_lat / lat0.to_radians().cos().max(0.05);
-    let step = 2.0 * f64::from(half_km) / size as f64;
-    for r in 0..size {
-        let y = f64::from(half_km) - (r as f64 + 0.5) * step;
-        let lat = lat0 + y * deg_lat;
-        for c in 0..size {
-            let x = -f64::from(half_km) + (c as f64 + 0.5) * step;
-            let lon = lon0 + x * deg_lon;
-            let (wx, wy) = lonlat_to_world(lon, lat, f64::from(zoom));
-            if let Some(px) = pixel(wx, wy) {
-                let i = (r * size + c) * 3;
-                rgb[i..i + 3].copy_from_slice(&px);
-            }
-        }
-    }
-    Imagery {
-        size,
-        rgb,
-        attribution: attribution.to_string(),
-    }
-}
-
 /// Everything the 3D view draws.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Scene {
@@ -163,9 +117,6 @@ pub struct Scene {
     /// Half the width of the scene, km.
     pub half_km: f32,
     pub terrain: Option<Terrain>,
-    /// Satellite imagery for the terrain (when it loaded).
-    #[serde(default)]
-    pub imagery: Option<Imagery>,
     pub voxels: Vec<Voxel>,
     /// Voxel size: horizontal and vertical, km.
     pub voxel_km: f32,
@@ -173,6 +124,128 @@ pub struct Scene {
     pub source: Option<RadarSource>,
     /// Where the radar is, local km (NEXRAD only).
     pub radar_xy: Option<(f32, f32)>,
+    /// The measured scan itself, for volume rendering (NEXRAD only).
+    #[serde(skip)]
+    pub polar: Option<PolarVolume>,
+}
+
+/// Azimuth bins per sweep in a [`PolarVolume`] (0.5° each).
+pub const AZIMUTHS: usize = 720;
+/// Range kept from the radar, km.
+pub const POLAR_RANGE_KM: f32 = 300.0;
+/// At most this many tilts.
+pub const MAX_SWEEPS: usize = 24;
+
+/// One tilt of a [`PolarVolume`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PolarSweep {
+    pub elevation_deg: f32,
+    pub first_gate_km: f32,
+    pub gate_km: f32,
+    pub gates: usize,
+}
+
+/// A Level II reflectivity scan laid out to be sampled directly, in the
+/// radar's own coordinates, by a volume renderer: one layer per tilt (lowest
+/// first), [`AZIMUTHS`] rows (clockwise from north, 0.5° each) of `width`
+/// gates.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct PolarVolume {
+    /// The antenna: east and north of the scene centre (km), height above sea
+    /// level (km).
+    pub radar: [f32; 3],
+    pub width: usize,
+    pub sweeps: Vec<PolarSweep>,
+    /// `width × AZIMUTHS` bytes per tilt, tilt after tilt: 0 = no echo,
+    /// otherwise `(dBZ + 32) × 2`.
+    pub data: Vec<u8>,
+}
+
+/// dBZ from a [`PolarVolume`] byte (`None` for no echo).
+pub fn polar_dbz(b: u8) -> Option<f32> {
+    (b > 0).then(|| f32::from(b) / 2.0 - 32.0)
+}
+
+/// Lay out `vol` for volume rendering in the scene around (`lat0`, `lon0`).
+/// Repeated tilts (SAILS/MESO re-scans of the lowest angles) keep the one
+/// with the most radials.
+pub fn polar_volume(vol: &Volume, lat0: f64, lon0: f64) -> PolarVolume {
+    let mut sweeps: Vec<&Sweep> = vol
+        .sweeps
+        .iter()
+        .filter(|s| !s.radials.is_empty())
+        .collect();
+    sweeps.sort_by(|a, b| a.elevation_deg.total_cmp(&b.elevation_deg));
+    let mut kept: Vec<&Sweep> = Vec::new();
+    for s in sweeps {
+        match kept.last_mut() {
+            Some(last) if (s.elevation_deg - last.elevation_deg).abs() < 0.15 => {
+                if s.radials.len() > last.radials.len() {
+                    *last = s;
+                }
+            }
+            _ => kept.push(s),
+        }
+    }
+    kept.truncate(MAX_SWEEPS);
+    let meta: Vec<PolarSweep> = kept
+        .iter()
+        .map(|s| {
+            let r = &s.radials[0];
+            let gate = r.gate_km.max(0.05);
+            let most = s.radials.iter().map(|r| r.dbz.len()).max().unwrap_or(0);
+            let reach = ((POLAR_RANGE_KM - r.first_gate_km) / gate).ceil().max(1.0) as usize;
+            PolarSweep {
+                elevation_deg: s.elevation_deg,
+                first_gate_km: r.first_gate_km,
+                gate_km: gate,
+                gates: most.min(reach).max(1),
+            }
+        })
+        .collect();
+    let width = meta.iter().map(|m| m.gates).max().unwrap_or(1);
+    let mut data = vec![0u8; width * AZIMUTHS * kept.len()];
+    for (k, s) in kept.iter().enumerate() {
+        let mut radials: Vec<&Radial> = s.radials.iter().collect();
+        radials.sort_by(|a, b| a.azimuth_deg.total_cmp(&b.azimuth_deg));
+        let az: Vec<f32> = radials
+            .iter()
+            .map(|r| r.azimuth_deg.rem_euclid(360.0))
+            .collect();
+        let layer = &mut data[k * width * AZIMUTHS..(k + 1) * width * AZIMUTHS];
+        for bin in 0..AZIMUTHS {
+            let centre = (bin as f32 + 0.5) * 360.0 / AZIMUTHS as f32;
+            // The nearest radial, around the circle.
+            let i = az.partition_point(|&a| a < centre);
+            let cand = [i % az.len(), (i + az.len() - 1) % az.len()];
+            let diff = |j: usize| {
+                let d = (az[j] - centre).abs();
+                d.min(360.0 - d)
+            };
+            let j = if diff(cand[0]) <= diff(cand[1]) {
+                cand[0]
+            } else {
+                cand[1]
+            };
+            if diff(j) > 1.5 {
+                continue;
+            }
+            let r = radials[j];
+            let row = &mut layer[bin * width..(bin + 1) * width];
+            for (g, &d) in r.dbz.iter().take(meta[k].gates).enumerate() {
+                if !d.is_nan() {
+                    row[g] = ((d + 32.0) * 2.0).round().clamp(1.0, 255.0) as u8;
+                }
+            }
+        }
+    }
+    let (rx, ry) = local_km(lat0, lon0, vol.lat, vol.lon);
+    PolarVolume {
+        radar: [rx, ry, (vol.height_m / 1000.0) as f32],
+        width,
+        sweeps: meta,
+        data,
+    }
 }
 
 /// Local east/north km of (`lat`, `lon`) from the centre (equirectangular;
@@ -433,16 +506,44 @@ mod tests {
     }
 
     #[test]
-    fn imagery_is_resampled_north_up() {
-        // Red in the northern half of the world tile, blue in the south.
-        let (_, cy) = lonlat_to_world(10.0, 45.0, 9.0);
-        let img = imagery_from_tiles(45.0, 10.0, 20.0, 8, 9, "test", |_, wy| {
-            Some(if wy < cy { [255, 0, 0] } else { [0, 0, 255] })
-        });
-        assert_eq!(img.rgb.len(), 8 * 8 * 3);
-        assert_eq!(&img.rgb[0..3], &[255, 0, 0], "top row is north");
-        let last = (8 * 8 - 1) * 3;
-        assert_eq!(&img.rgb[last..last + 3], &[0, 0, 255]);
+    fn lays_out_a_polar_volume() {
+        let radial = |az: f32, elev: f32, v: f32| Radial {
+            azimuth_deg: az,
+            elevation_deg: elev,
+            first_gate_km: 2.0,
+            gate_km: 0.25,
+            dbz: vec![f32::NAN, v, v],
+        };
+        let sweep = |elev: f32, v: f32, step: f32| Sweep {
+            elevation_deg: elev,
+            radials: (0..(360.0 / step) as usize)
+                .map(|i| radial(i as f32 * step, elev, v))
+                .collect(),
+        };
+        let vol = Volume {
+            site: "KTST".into(),
+            lat: 35.0,
+            lon: -97.0,
+            height_m: 400.0,
+            time: String::new(),
+            // A repeated low tilt: the finer one is kept. Out of order on purpose.
+            sweeps: vec![
+                sweep(1.5, 40.0, 1.0),
+                sweep(0.5, 20.0, 1.0),
+                sweep(0.48, 30.0, 0.5),
+            ],
+        };
+        let p = polar_volume(&vol, 35.0, -97.0);
+        assert_eq!(p.sweeps.len(), 2);
+        assert!((p.sweeps[0].elevation_deg - 0.48).abs() < 1e-6);
+        assert_eq!(p.width, 3);
+        assert_eq!(p.data.len(), 3 * AZIMUTHS * 2);
+        assert_eq!(p.data[0], 0, "no echo stays empty");
+        assert_eq!(polar_dbz(p.data[1]), Some(30.0));
+        // Second tilt, bin 400 (200°).
+        let at = AZIMUTHS * 3 + 400 * 3 + 2;
+        assert_eq!(polar_dbz(p.data[at]), Some(40.0));
+        assert!(p.radar[0].abs() < 1e-3 && (p.radar[2] - 0.4).abs() < 1e-6);
     }
 
     #[test]

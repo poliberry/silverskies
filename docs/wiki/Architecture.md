@@ -45,7 +45,7 @@ tools/
 
 ## Rendering notes
 
-- Pro's 3D view projects on the CPU and draws depth-sorted meshes (terrain with a satellite texture, echoes as soft sprites), so it needs nothing beyond egui's renderer.
+- Pro's 3D view renders with OpenGL inside egui (a paint callback; the window has a depth buffer): level-of-detail terrain meshes, depth-tested and shaded by elevation, and the radar ray-marched as a volume in a fragment shader (NEXRAD tilts as a 2D texture array sampled in polar coordinates, the mosaic as a 3D texture). Without OpenGL 3 it falls back to CPU-projected, depth-sorted meshes and soft sprites.
 - Text uses baseline-aligned helpers (`ss_assets::text`) so mixed fonts line up.
 - Pro uses Saira (OFL; digits remapped to tabular), DejaVu for symbols and a Material Symbols subset for icons; Silver Skies uses Google Sans.
 

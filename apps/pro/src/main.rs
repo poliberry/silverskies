@@ -4,7 +4,6 @@ mod chrome;
 mod cmdbar;
 mod commands;
 mod events;
-mod globe;
 mod header;
 mod icons;
 mod kit;
@@ -58,6 +57,8 @@ fn main() -> anyhow::Result<()> {
     }
     let options = eframe::NativeOptions {
         viewport,
+        // The 3D RADAR pane draws depth-tested terrain.
+        depth_buffer: 24,
         ..Default::default()
     };
     eframe::run_native(

@@ -14,11 +14,10 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use egui::epaint::{Mesh, Vertex, WHITE_UV};
-use egui::{pos2, Color32, Painter, Pos2, Rect, Shape, TextureId};
+use egui::{Painter, Pos2, Shape};
 use ss_core::geo::{lonlat_to_world, world_to_lonlat};
 use ss_core::radar3d::{local_km, Scene};
 use ss_map::heights::{HeightCache, MAX_LEVEL};
-use ss_map::tiles::{TileCache, TileKey};
 use ss_map::viewport::TileId;
 
 use super::radar3d::{terrain_color, View, V3};
@@ -32,27 +31,15 @@ const MAX_SPLIT: u8 = 18;
 const SPLIT: f32 = 3.0;
 /// Cap on leaves per frame.
 const MAX_LEAVES: usize = 420;
-/// Deepest imagery level requested.
-const IMAGERY_MAX: u8 = 19;
-/// Leaves coarser than this use the scene's base imagery (sharper there).
-const IMAGERY_MIN: u8 = 10;
-const IMAGERY_KEY: &str = "esri-imagery-3d";
-
-fn imagery_url(z: u8, x: u32, y: u32) -> String {
-    format!(
-        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}?blankTile=false"
-    )
-}
 
 /// A leaf's vertices: local east/north km and height km, plus which height
 /// level they came from (255 = the base scene).
 struct Geom {
-    pts: Vec<[f32; 3]>,
+    pts: std::sync::Arc<Vec<[f32; 3]>>,
     level: u8,
 }
 
 pub struct Lod {
-    imagery: TileCache,
     heights: HeightCache,
     geom: HashMap<(TileId, (i64, i64)), Geom>,
     pub leaves: usize,
@@ -71,18 +58,13 @@ impl Lod {
         ctx: egui::Context,
     ) -> Self {
         Self {
-            // Hundreds of leaves (and their ancestors) are on screen at once
-            // up close: keep enough textures that they don't churn.
-            imagery: TileCache::new(client.clone(), rt.clone(), tile_dir.clone(), ctx.clone())
-                .with_max_textures(2000),
             heights: HeightCache::new(client, rt, tile_dir.map(|d| d.join("terrain")), ctx),
             geom: HashMap::new(),
             leaves: 0,
         }
     }
 
-    pub fn poll(&mut self, ctx: &egui::Context) {
-        self.imagery.poll(ctx);
+    pub fn poll(&mut self) {
         self.heights.poll();
         if self.geom.len() > 4000 {
             self.geom.clear();
@@ -91,7 +73,7 @@ impl Lod {
 
     /// Whether anything is still loading (to keep repainting).
     pub fn busy(&self) -> bool {
-        self.heights.loading() > 0 || self.imagery.stats().loading > 0
+        self.heights.loading() > 0
     }
 
     /// The tiles to draw for this camera.
@@ -209,80 +191,39 @@ impl Lod {
                     let (x, y) = local_km(scene.lat, scene.lon, lat, lon);
                     let h_m = match &src {
                         Some((l, tile)) => {
+                            // Position within the height tile itself: a leaf's
+                            // far edge is u = 1 of the same tile, not 0 of the
+                            // next.
                             let k = f64::from(1u32 << (t.z - l));
-                            let (ax, ay) = (fx / k, fy / k);
-                            tile.sample(ax - ax.floor(), ay - ay.floor())
+                            let (hx, hy) = (t.x >> (t.z - l), t.y >> (t.z - l));
+                            tile.sample(fx / k - f64::from(hx), fy / k - f64::from(hy))
                         }
                         None => scene.terrain.as_ref().map_or(0.0, |b| b.height_at(x, y)),
                     };
                     pts.push([x, y, h_m / 1000.0]);
                 }
             }
-            self.geom.insert(key, Geom { pts, level: want });
+            self.geom.insert(
+                key,
+                Geom {
+                    pts: std::sync::Arc::new(pts),
+                    level: want,
+                },
+            );
         }
         &self.geom[&key]
     }
 
-    /// The imagery texture for tile `t` and the UV rect of `t` within it.
-    fn imagery_for(&mut self, t: TileId) -> Option<(TextureId, Rect)> {
-        if t.z < IMAGERY_MIN {
-            return None;
-        }
-        let zi = t.z.min(IMAGERY_MAX);
-        let up = t.z - zi;
-        let it = TileId {
-            z: zi,
-            x: t.x >> up,
-            y: t.y >> up,
-        };
-        // `t` within `it`.
-        let k = (1u32 << up) as f32;
-        let sub = Rect::from_min_size(
-            pos2(
-                (t.x - (it.x << up)) as f32 / k,
-                (t.y - (it.y << up)) as f32 / k,
-            ),
-            egui::vec2(1.0 / k, 1.0 / k),
-        );
-        let key = TileKey::new(IMAGERY_KEY, it.z, it.x, it.y);
-        let (tex, outer) = match self.imagery.request(&key, imagery_url(it.z, it.x, it.y)) {
-            Some(tex) => (tex.id(), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0))),
-            None => {
-                if self.imagery.is_failed(&key) && it.z > IMAGERY_MIN {
-                    let (pz, px, py) = (it.z - 1, it.x / 2, it.y / 2);
-                    let pk = TileKey::new(IMAGERY_KEY, pz, px, py);
-                    let _ = self.imagery.request(&pk, imagery_url(pz, px, py));
-                }
-                ss_map::ancestor(&mut self.imagery, IMAGERY_KEY, it, it.z - IMAGERY_MIN)?
-            }
-        };
-        let uv = Rect::from_min_size(
-            outer.min + sub.min.to_vec2() * outer.size(),
-            sub.size() * outer.size(),
-        );
-        Some((tex, uv))
-    }
-
-    /// Draw the terrain. `base` is the scene's own imagery texture (used
-    /// where no tile imagery is loaded yet); `photo` false = height colours.
+    /// Draw the terrain on the CPU, coloured by height (when the GPU
+    /// renderer isn't available).
     #[allow(clippy::too_many_arguments)]
-    pub fn draw(
-        &mut self,
-        painter: &Painter,
-        view: &View,
-        scene: &Scene,
-        ex: f32,
-        dark: bool,
-        photo: bool,
-        base: Option<TextureId>,
-    ) {
+    pub fn draw(&mut self, painter: &Painter, view: &View, scene: &Scene, ex: f32, dark: bool) {
         let leaves = self.select(scene, view.eye(), ex);
         self.leaves = leaves.len();
         let half = scene.half_km;
         let light = V3::new(-0.5, 0.6, 0.62).norm();
         let mut meshes: Vec<(f32, Mesh)> = Vec::with_capacity(leaves.len());
         for t in leaves {
-            let tile_img = if photo { self.imagery_for(t) } else { None };
             let g = self.geometry(scene, t);
             let p = |i: usize, j: usize| g.pts[j.min(N - 1) * N + i.min(N - 1)];
             let mut mesh = Mesh::default();
@@ -305,34 +246,13 @@ impl Lod {
                         sum += d;
                         cnt += 1.0;
                     }
-                    let (uv, color) = match (photo, tile_img, base) {
-                        (true, Some((_, r)), _) => (
-                            pos2(
-                                r.min.x + r.width() * i as f32 / (N - 1) as f32,
-                                r.min.y + r.height() * j as f32 / (N - 1) as f32,
-                            ),
-                            lit(shade, light),
-                        ),
-                        (true, None, Some(_)) => (
-                            pos2(
-                                ((x + half) / (2.0 * half)).clamp(0.0, 1.0),
-                                ((half - y) / (2.0 * half)).clamp(0.0, 1.0),
-                            ),
-                            lit(shade, light),
-                        ),
-                        _ => (WHITE_UV, terrain_color(h * 1000.0, shade, dark)),
-                    };
+                    let (uv, color) = (WHITE_UV, terrain_color(h * 1000.0, shade, dark));
                     mesh.vertices.push(Vertex { pos, uv, color });
                 }
             }
             if cnt == 0.0 {
                 continue;
             }
-            mesh.texture_id = match (photo, tile_img, base) {
-                (true, Some((tex, _)), _) => tex,
-                (true, None, Some(tex)) => tex,
-                _ => TextureId::default(),
-            };
             // Quads far to near, skipping those wholly outside the scene.
             let mut prims: Vec<(f32, Prim)> = Vec::with_capacity((N - 1) * (N - 1) + 4 * N);
             for j in 0..N - 1 {
@@ -413,6 +333,24 @@ impl Lod {
         }
     }
 
+    /// The leaves to draw for this camera, with their vertices (local km,
+    /// height km), for the GPU renderer. The key changes when a leaf's
+    /// heights do.
+    pub fn leaves(&mut self, scene: &Scene, eye: V3, ex: f32) -> Vec<Leaf> {
+        let tiles = self.select(scene, eye, ex);
+        self.leaves = tiles.len();
+        tiles
+            .into_iter()
+            .map(|t| {
+                let g = self.geometry(scene, t);
+                Leaf {
+                    key: (t, g.level, scene_key(scene)),
+                    pts: g.pts.clone(),
+                }
+            })
+            .collect()
+    }
+
     /// The best-known ground height (km) at local (`x`, `y`): the deepest
     /// loaded height tile, else the base scene.
     pub fn ground(&mut self, scene: &Scene, x: f32, y: f32) -> f32 {
@@ -434,21 +372,24 @@ impl Lod {
     }
 }
 
+/// A leaf for the GPU: `N × N` vertices, row 0 = north.
+pub struct Leaf {
+    pub key: LeafKey,
+    pub pts: std::sync::Arc<Vec<[f32; 3]>>,
+}
+
+/// A leaf's tile, height level and scene.
+pub type LeafKey = (TileId, u8, (i64, i64));
+
+/// Vertices per leaf side.
+pub const LEAF_N: usize = N;
+
 /// What a leaf mesh draws, in depth order.
 enum Prim {
     /// The quad whose top-left vertex is this index.
     Quad(u32),
     /// An edge (two surface vertices) and its two lowered copies.
     Skirt(u32, u32, u32),
-}
-
-/// Daylight on the photo: flat ground at full brightness, slopes facing
-/// away from the sun darker.
-fn lit(shade: f32, light: V3) -> Color32 {
-    // Gentle: the photo already has its own shading.
-    let k = (0.6 + 0.45 * shade / light.z).clamp(0.55, 1.0);
-    let g = (k * 255.0) as u8;
-    Color32::from_rgb(g, g, g)
 }
 
 /// A tile in the split queue, ordered by how much it wants splitting.

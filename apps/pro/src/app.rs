@@ -448,7 +448,7 @@ impl App {
                             LogLevel::Info,
                             format!("3D scene: {what}, {} echoes", s.voxels.len()),
                         );
-                        sh.scenes3d.insert(location_id, *s);
+                        sh.scenes3d.insert(location_id, std::sync::Arc::new(*s));
                     }
                     Err(e) => {
                         sh.log(LogLevel::Warn, format!("3D scene: {e}"));

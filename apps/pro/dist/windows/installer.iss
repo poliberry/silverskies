@@ -25,7 +25,6 @@ CloseApplications=force
 
 [Files]
 Source: "..\..\..\..\stage\silverskies-pro.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\..\..\..\stage\silverskies-globe.exe"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "..\..\..\..\stage\README.md"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]

@@ -16,6 +16,7 @@ use crate::theme::{c32, c32a};
 pub mod auditlog;
 pub mod conditions;
 pub mod forecast;
+pub mod gl3d;
 pub mod hourly;
 pub mod locations;
 pub mod radar;
