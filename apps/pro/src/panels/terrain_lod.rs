@@ -17,6 +17,7 @@ use egui::epaint::{Mesh, Vertex, WHITE_UV};
 use egui::{pos2, Color32, Painter, Pos2, Rect, Shape, TextureId};
 use ss_core::geo::{lonlat_to_world, world_to_lonlat};
 use ss_core::radar3d::{local_km, Scene};
+use ss_map::buildings::{self, Building, BuildingCache};
 use ss_map::heights::{HeightCache, MAX_LEVEL};
 use ss_map::tiles::{TileCache, TileKey};
 use ss_map::viewport::TileId;
@@ -56,6 +57,174 @@ pub struct Lod {
     heights: HeightCache,
     geom: HashMap<(TileId, (i64, i64)), Geom>,
     pub leaves: usize,
+    blds: BuildingCache,
+    /// Buildings of a tile in scene coordinates.
+    local: HashMap<LocalKey, LocalTile>,
+    /// Buildings drawn last frame.
+    pub buildings: usize,
+    /// One window bay (a window and its frame, one floor high), tiled
+    /// across walls.
+    facade: Option<egui::TextureHandle>,
+}
+
+/// A window bay is this wide and a floor this tall (metres).
+const BAY_M: f32 = 3.0;
+const FLOOR_M: f32 = 3.4;
+
+/// The facade texture: glass with a lighter frame and floor slab, white
+/// where the wall colour should show, so vertex colours tint it.
+fn facade_image() -> egui::ColorImage {
+    let n = 32;
+    let mut px = Vec::with_capacity(n * n);
+    for y in 0..n {
+        for x in 0..n {
+            let glass = (4..28).contains(&x) && (7..27).contains(&y);
+            let c = if glass {
+                // Darker toward the bottom of each pane, a faint sky sheen on top.
+                let t = (y - 7) as f32 / 20.0;
+                let g = 0.42 + 0.16 * (1.0 - t);
+                [g * 0.86, g * 0.94, g * 1.08]
+            } else if y < 3 {
+                // The floor slab.
+                [0.82, 0.82, 0.82]
+            } else {
+                [1.0, 1.0, 1.0]
+            };
+            let b = |v: f32| (v.min(1.0) * 255.0) as u8;
+            px.push(Color32::from_rgb(b(c[0]), b(c[1]), b(c[2])));
+        }
+    }
+    egui::ColorImage::new([n, n], px)
+}
+
+/// The sun's direction (east, north, up) at a place and time, from the
+/// standard low-precision solar position formulas; `None` below ~6°.
+pub fn sun_direction(lat: f64, lon: f64, t: chrono::DateTime<chrono::Utc>) -> Option<V3> {
+    use chrono::{Datelike, Timelike};
+    let day = f64::from(t.ordinal()) - 1.0;
+    let hour = f64::from(t.hour()) + f64::from(t.minute()) / 60.0;
+    let g = 2.0 * std::f64::consts::PI / 365.0 * (day + (hour - 12.0) / 24.0);
+    let eqtime = 229.18
+        * (0.000075 + 0.001868 * g.cos()
+            - 0.032077 * g.sin()
+            - 0.014615 * (2.0 * g).cos()
+            - 0.040849 * (2.0 * g).sin());
+    let decl = 0.006918 - 0.399912 * g.cos() + 0.070257 * g.sin() - 0.006758 * (2.0 * g).cos()
+        + 0.000907 * (2.0 * g).sin()
+        - 0.002697 * (3.0 * g).cos()
+        + 0.00148 * (3.0 * g).sin();
+    let tst = hour * 60.0 + eqtime + 4.0 * lon;
+    let ha = (tst / 4.0 - 180.0).to_radians();
+    let phi = lat.to_radians();
+    let cos_zen = phi.sin() * decl.sin() + phi.cos() * decl.cos() * ha.cos();
+    let el = cos_zen.clamp(-1.0, 1.0).asin();
+    if el < 6f64.to_radians() {
+        return None;
+    }
+    // Azimuth clockwise from north.
+    let az = (ha.sin()).atan2(ha.cos() * phi.sin() - decl.tan() * phi.cos()) + std::f64::consts::PI;
+    Some(V3::new(
+        (az.sin() * el.cos()) as f32,
+        (az.cos() * el.cos()) as f32,
+        el.sin() as f32,
+    ))
+}
+
+/// Convex hull (counter-clockwise), for shadow outlines.
+fn hull(mut p: Vec<[f32; 2]>) -> Vec<[f32; 2]> {
+    p.sort_by(|a, b| a[0].total_cmp(&b[0]).then(a[1].total_cmp(&b[1])));
+    p.dedup();
+    if p.len() < 3 {
+        return p;
+    }
+    let cross = |o: [f32; 2], a: [f32; 2], b: [f32; 2]| {
+        (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+    };
+    let mut h: Vec<[f32; 2]> = Vec::with_capacity(p.len() * 2);
+    for pass in 0..2 {
+        let start = h.len();
+        let it: Box<dyn Iterator<Item = &[f32; 2]>> = if pass == 0 {
+            Box::new(p.iter())
+        } else {
+            Box::new(p.iter().rev())
+        };
+        for &q in it {
+            while h.len() >= start + 2 && cross(h[h.len() - 2], h[h.len() - 1], q) <= 0.0 {
+                h.pop();
+            }
+            h.push(q);
+        }
+        h.pop();
+    }
+    h
+}
+
+/// Buildings are drawn when the camera is lower than this (km).
+const BUILDINGS_BELOW_KM: f32 = 5.0;
+/// Cap on buildings per frame (nearest first).
+const MAX_BUILDINGS: usize = 6000;
+/// Imagery level used for roofs.
+const ROOF_LEVEL: u8 = 17;
+
+/// A building tile in scene coordinates.
+type LocalTile = std::sync::Arc<Vec<Local>>;
+/// (level-14 tile, scene).
+type LocalKey = ((u32, u32), (i64, i64));
+
+/// A building in scene coordinates.
+struct Local {
+    /// Outline, east/north km, counter-clockwise.
+    pts: Vec<[f32; 2]>,
+    /// The same points in `ROOF_LEVEL` tile units (for the roof photo).
+    world: Vec<[f64; 2]>,
+    centre: [f32; 2],
+    /// Half the outline's extent, km.
+    radius: f32,
+    top_km: f32,
+    bottom_km: f32,
+    roof: Vec<[u32; 3]>,
+}
+
+fn to_local(scene: &Scene, b: &Building) -> Option<Local> {
+    let z = f64::from(ROOF_LEVEL);
+    let mut pts: Vec<[f32; 2]> = Vec::with_capacity(b.ring.len());
+    let mut world = Vec::with_capacity(b.ring.len());
+    for &[lon, lat] in &b.ring {
+        let (x, y) = local_km(scene.lat, scene.lon, lat, lon);
+        pts.push([x, y]);
+        let (wx, wy) = lonlat_to_world(lon, lat, z);
+        world.push([wx / 256.0, wy / 256.0]);
+    }
+    let area: f32 = (0..pts.len())
+        .map(|k| {
+            let (p, q) = (pts[k], pts[(k + 1) % pts.len()]);
+            p[0] * q[1] - q[0] * p[1]
+        })
+        .sum();
+    if area.abs() < 1e-9 {
+        return None;
+    }
+    if area < 0.0 {
+        pts.reverse();
+        world.reverse();
+    }
+    let n = pts.len() as f32;
+    let centre = pts
+        .iter()
+        .fold([0.0, 0.0], |a, p| [a[0] + p[0] / n, a[1] + p[1] / n]);
+    let radius = pts
+        .iter()
+        .map(|p| (p[0] - centre[0]).hypot(p[1] - centre[1]))
+        .fold(0.0, f32::max);
+    Some(Local {
+        roof: buildings::triangulate(&pts),
+        pts,
+        world,
+        centre,
+        radius,
+        top_km: b.height / 1000.0,
+        bottom_km: b.min_height / 1000.0,
+    })
 }
 
 /// Scene identity for cached geometry (its centre, to ~1 m).
@@ -70,6 +239,12 @@ impl Lod {
         tile_dir: Option<PathBuf>,
         ctx: egui::Context,
     ) -> Self {
+        let blds = BuildingCache::new(
+            client.clone(),
+            rt.clone(),
+            tile_dir.as_ref().map(|d| d.join("buildings")),
+            ctx.clone(),
+        );
         Self {
             // Hundreds of leaves (and their ancestors) are on screen at once
             // up close: keep enough textures that they don't churn.
@@ -78,20 +253,28 @@ impl Lod {
             heights: HeightCache::new(client, rt, tile_dir.map(|d| d.join("terrain")), ctx),
             geom: HashMap::new(),
             leaves: 0,
+            blds,
+            local: HashMap::new(),
+            buildings: 0,
+            facade: None,
         }
     }
 
     pub fn poll(&mut self, ctx: &egui::Context) {
         self.imagery.poll(ctx);
         self.heights.poll();
+        self.blds.poll();
         if self.geom.len() > 4000 {
             self.geom.clear();
+        }
+        if self.local.len() > 200 {
+            self.local.clear();
         }
     }
 
     /// Whether anything is still loading (to keep repainting).
     pub fn busy(&self) -> bool {
-        self.heights.loading() > 0 || self.imagery.stats().loading > 0
+        self.heights.loading() > 0 || self.imagery.stats().loading > 0 || self.blds.loading() > 0
     }
 
     /// The tiles to draw for this camera.
@@ -413,6 +596,266 @@ impl Lod {
         }
     }
 
+    /// 3D buildings (OpenStreetMap) around `focus` when the camera is low:
+    /// walls lit by the sun, roofs from the satellite photo.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_buildings(
+        &mut self,
+        painter: &Painter,
+        view: &View,
+        scene: &Scene,
+        ex: f32,
+        focus: (f32, f32),
+        dark: bool,
+        photo: bool,
+    ) {
+        self.buildings = 0;
+        let eye = view.eye();
+        let alt = eye.z - self.ground(scene, eye.x, eye.y) * ex;
+        if alt > BUILDINGS_BELOW_KM {
+            return;
+        }
+        let radius = (alt * 2.5).clamp(0.8, 3.0);
+        // Level-14 tiles around the focus.
+        let deg_lat = 1.0 / 111.19;
+        let deg_lon = deg_lat / scene.lat.to_radians().cos().max(0.05);
+        let lat = |y: f32| scene.lat + f64::from(y) * deg_lat;
+        let lon = |x: f32| scene.lon + f64::from(x) * deg_lon;
+        let z = f64::from(buildings::LEVEL);
+        let (x0, y0) = lonlat_to_world(lon(focus.0 - radius), lat(focus.1 + radius), z);
+        let (x1, y1) = lonlat_to_world(lon(focus.0 + radius), lat(focus.1 - radius), z);
+        let skey = scene_key(scene);
+        let mut tiles = Vec::new();
+        for ty in (y0 / 256.0) as u32..=(y1 / 256.0) as u32 {
+            for tx in (x0 / 256.0) as u32..=(x1 / 256.0) as u32 {
+                let key = ((tx, ty), skey);
+                if let Some(l) = self.local.get(&key) {
+                    self.blds.request(tx, ty);
+                    tiles.push(l.clone());
+                } else if let Some(b) = self.blds.request(tx, ty) {
+                    let l: std::sync::Arc<Vec<Local>> =
+                        std::sync::Arc::new(b.iter().filter_map(|b| to_local(scene, b)).collect());
+                    self.local.insert(key, l.clone());
+                    tiles.push(l);
+                }
+            }
+        }
+        // Nearest first, within the radius.
+        let mut near: Vec<(f32, &Local)> = tiles
+            .iter()
+            .flat_map(|t| t.iter())
+            .filter(|b| (b.centre[0] - focus.0).hypot(b.centre[1] - focus.1) < radius)
+            .map(|b| ((b.centre[0] - eye.x).hypot(b.centre[1] - eye.y), b))
+            .collect();
+        near.sort_by(|a, b| a.0.total_cmp(&b.0));
+        near.truncate(MAX_BUILDINGS);
+        let clip = painter.clip_rect().expand(40.0);
+        // The real sun for this place and time; a soft afternoon light (and no
+        // cast shadows) when it's down.
+        let sun = sun_direction(scene.lat, scene.lon, chrono::Utc::now());
+        let light = sun.unwrap_or_else(|| V3::new(-0.5, 0.6, 0.62).norm());
+        let facade = self
+            .facade
+            .get_or_insert_with(|| {
+                painter.ctx().load_texture(
+                    "building-facade",
+                    facade_image(),
+                    egui::TextureOptions {
+                        magnification: egui::TextureFilter::Linear,
+                        minification: egui::TextureFilter::Linear,
+                        wrap_mode: egui::TextureWrapMode::Repeat,
+                        mipmap_mode: Some(egui::TextureFilter::Linear),
+                    },
+                )
+            })
+            .id();
+        let mut shadows = Mesh::default();
+        let mut meshes: Vec<(f32, [Mesh; 2])> = Vec::with_capacity(near.len());
+        for (dist, b) in near {
+            // Too small to see?
+            if b.radius / dist.max(1e-3) * view.scale_at(1.0) < 1.5 {
+                continue;
+            }
+            let ground = self.ground(scene, b.centre[0], b.centre[1]);
+            let (z0, z1) = ((ground + b.bottom_km) * ex, (ground + b.top_km) * ex);
+            let mut low = Vec::with_capacity(b.pts.len());
+            let mut high = Vec::with_capacity(b.pts.len());
+            let mut ok = true;
+            for p in &b.pts {
+                match (
+                    view.project(V3::new(p[0], p[1], z0)),
+                    view.project(V3::new(p[0], p[1], z1)),
+                ) {
+                    (Some(l), Some(h)) => {
+                        low.push(l);
+                        high.push(h);
+                    }
+                    _ => {
+                        ok = false;
+                        break;
+                    }
+                }
+            }
+            if !ok || !high.iter().chain(&low).any(|(p, _)| clip.contains(*p)) {
+                continue;
+            }
+            // Its shadow on the ground: the outline and its copy cast along
+            // the sun, wrapped.
+            if let Some(s) = sun {
+                let reach = ((b.top_km - b.bottom_km) * ex / s.z).min(1.5);
+                let (dx, dy) = (-s.x * reach, -s.y * reach);
+                let mut pts = b.pts.clone();
+                pts.extend(b.pts.iter().map(|p| [p[0] + dx, p[1] + dy]));
+                let outline: Option<Vec<Pos2>> = hull(pts)
+                    .iter()
+                    .map(|p| {
+                        view.project(V3::new(p[0], p[1], ground * ex + 0.0005))
+                            .map(|(q, _)| q)
+                    })
+                    .collect();
+                if let Some(o) = outline.filter(|o| o.len() >= 3) {
+                    let v = shadows.vertices.len() as u32;
+                    for pos in o.iter().copied() {
+                        shadows.vertices.push(Vertex {
+                            pos,
+                            uv: WHITE_UV,
+                            color: Color32::from_black_alpha(70),
+                        });
+                    }
+                    for k in 1..o.len() as u32 - 1 {
+                        shadows.indices.extend_from_slice(&[v, v + k, v + k + 1]);
+                    }
+                }
+            }
+            // The roof photo: the deepest imagery tile holding the whole roof
+            // (a roof across two tiles would smear).
+            let (mut lo, mut hi) = ([f64::MAX; 2], [f64::MIN; 2]);
+            for w in &b.world {
+                lo = [lo[0].min(w[0]), lo[1].min(w[1])];
+                hi = [hi[0].max(w[0]), hi[1].max(w[1])];
+            }
+            let mut t = TileId {
+                z: ROOF_LEVEL,
+                x: lo[0] as u32,
+                y: lo[1] as u32,
+            };
+            let mut scale = 1.0;
+            let fits = |t: TileId, scale: f64| {
+                (hi[0] / scale) as u32 == t.x && (hi[1] / scale) as u32 == t.y
+            };
+            while t.z > ROOF_LEVEL - 2 && !fits(t, scale) {
+                scale *= 2.0;
+                t = TileId {
+                    z: t.z - 1,
+                    x: (lo[0] / scale) as u32,
+                    y: (lo[1] / scale) as u32,
+                };
+            }
+            // A roof wider than that gets a plain one rather than a blur.
+            let img = if photo && fits(t, scale) {
+                self.imagery_for(t)
+            } else {
+                None
+            };
+            let uv_at = |w: [f64; 2]| match img {
+                Some((_, r)) => pos2(
+                    r.min.x + r.width() * ((w[0] / scale - f64::from(t.x)) as f32).clamp(0.0, 1.0),
+                    r.min.y + r.height() * ((w[1] / scale - f64::from(t.y)) as f32).clamp(0.0, 1.0),
+                ),
+                None => WHITE_UV,
+            };
+            // Concrete and glass, a little different per building.
+            let vary =
+                0.94 + 0.12 * ((b.centre[0] * 9973.0 + b.centre[1] * 7919.0).sin() * 0.5 + 0.5);
+            let tint = |k: f32| {
+                let base: [f32; 3] = if dark {
+                    [0.70, 0.72, 0.76]
+                } else {
+                    [0.86, 0.86, 0.84]
+                };
+                let c = |v: f32| (v * k * vary * 255.0).clamp(0.0, 255.0) as u8;
+                Color32::from_rgb(c(base[0]), c(base[1]), c(base[2]))
+            };
+            let mut mesh = Mesh::with_texture(facade);
+            let tall_m = (b.top_km - b.bottom_km) * 1000.0;
+            let floors = (tall_m / FLOOR_M).max(1.0).round();
+            // Walls facing the eye, far to near.
+            let n = b.pts.len();
+            let mut walls: Vec<(f32, usize)> = (0..n)
+                .filter_map(|i| {
+                    let (p, q) = (b.pts[i], b.pts[(i + 1) % n]);
+                    let (nx, ny) = (q[1] - p[1], p[0] - q[0]); // outward
+                    let (mx, my) = ((p[0] + q[0]) / 2.0, (p[1] + q[1]) / 2.0);
+                    let facing = nx * (eye.x - mx) + ny * (eye.y - my);
+                    (facing > 0.0).then(|| ((eye.x - mx).hypot(eye.y - my), i))
+                })
+                .collect();
+            walls.sort_by(|a, b| b.0.total_cmp(&a.0));
+            for (_, i) in walls {
+                let j = (i + 1) % n;
+                let (p, q) = (b.pts[i], b.pts[j]);
+                let len = (q[0] - p[0]).hypot(q[1] - p[1]).max(1e-6);
+                let (nx, ny) = ((q[1] - p[1]) / len, (p[0] - q[0]) / len);
+                let lit = (nx * light.x + ny * light.y).max(0.0);
+                let k = if sun.is_some() {
+                    0.5 + 0.55 * lit
+                } else {
+                    0.62 + 0.38 * lit
+                };
+                let (top, bottom) = (tint(k), tint(k * 0.82));
+                // Whole bays and floors, so windows line up at the corners.
+                let bays = (len * 1000.0 / BAY_M).max(1.0).round();
+                let v = mesh.vertices.len() as u32;
+                for (pos, uv, color) in [
+                    (low[i].0, pos2(0.0, floors), bottom),
+                    (low[j].0, pos2(bays, floors), bottom),
+                    (high[j].0, pos2(bays, 0.0), top),
+                    (high[i].0, pos2(0.0, 0.0), top),
+                ] {
+                    mesh.vertices.push(Vertex { pos, uv, color });
+                }
+                mesh.indices
+                    .extend_from_slice(&[v, v + 1, v + 2, v, v + 2, v + 3]);
+            }
+            // The roof, when seen from above: the photo, or plain.
+            let mut roof_mesh = Mesh::with_texture(img.map_or(TextureId::default(), |(t, _)| t));
+            if eye.z > z1 {
+                let v = roof_mesh.vertices.len() as u32;
+                let roof = if img.is_some() {
+                    Color32::WHITE
+                } else {
+                    tint(0.74)
+                };
+                for (h, w) in high.iter().zip(&b.world) {
+                    roof_mesh.vertices.push(Vertex {
+                        pos: h.0,
+                        uv: uv_at(*w),
+                        color: roof,
+                    });
+                }
+                for tri in &b.roof {
+                    roof_mesh
+                        .indices
+                        .extend_from_slice(&[v + tri[0], v + tri[1], v + tri[2]]);
+                }
+            }
+            let depth = high.iter().map(|h| h.1).sum::<f32>() / high.len() as f32;
+            meshes.push((depth, [mesh, roof_mesh]));
+        }
+        meshes.sort_by(|a, b| b.0.total_cmp(&a.0));
+        self.buildings = meshes.len();
+        if !shadows.indices.is_empty() {
+            painter.add(Shape::mesh(shadows));
+        }
+        for (_, ms) in meshes {
+            for m in ms {
+                if !m.indices.is_empty() {
+                    painter.add(Shape::mesh(m));
+                }
+            }
+        }
+    }
+
     /// The best-known ground height (km) at local (`x`, `y`): the deepest
     /// loaded height tile, else the base scene.
     pub fn ground(&mut self, scene: &Scene, x: f32, y: f32) -> f32 {
@@ -468,5 +911,37 @@ impl PartialOrd for Want {
 impl Ord for Want {
     fn cmp(&self, o: &Self) -> std::cmp::Ordering {
         self.0.total_cmp(&o.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sun_is_high_at_noon_and_down_at_night() {
+        let t = |s: &str| chrono::DateTime::parse_from_rfc3339(s).unwrap().to_utc();
+        // Melbourne, mid-summer: ~2 pm local is 03:00 UTC; the sun is high
+        // and to the north.
+        let s = sun_direction(-37.81, 144.96, t("2026-01-15T03:00:00Z")).unwrap();
+        assert!(s.z > 0.85, "{s:?}");
+        assert!(s.y > 0.0, "{s:?}");
+        // Midnight local.
+        assert!(sun_direction(-37.81, 144.96, t("2026-01-15T14:00:00Z")).is_none());
+        // Morning sun is in the east.
+        let m = sun_direction(-37.81, 144.96, t("2026-01-14T22:00:00Z")).unwrap();
+        assert!(m.x > 0.5, "{m:?}");
+    }
+
+    #[test]
+    fn hull_wraps_points() {
+        let h = hull(vec![
+            [0.0, 0.0],
+            [1.0, 0.0],
+            [1.0, 1.0],
+            [0.0, 1.0],
+            [0.5, 0.5],
+        ]);
+        assert_eq!(h.len(), 4);
     }
 }

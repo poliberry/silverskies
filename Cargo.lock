@@ -4064,6 +4064,7 @@ dependencies = [
  "image",
  "parking_lot 0.12.5",
  "reqwest",
+ "serde_json",
  "sha2",
  "ss-core",
  "thiserror 2.0.21",

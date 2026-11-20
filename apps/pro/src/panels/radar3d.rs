@@ -632,6 +632,15 @@ impl Panel for Radar3dPanel {
                 .filter(|_| scene.imagery.is_some())
                 .map(|(_, t)| t.id());
             lod.draw(&painter, &view, &scene, ex, dark, self.show_imagery, base);
+            lod.draw_buildings(
+                &painter,
+                &view,
+                &scene,
+                ex,
+                (tx, ty),
+                dark,
+                self.show_imagery,
+            );
             lod_drawn = true;
             if lod.busy() {
                 ui.ctx()
@@ -947,11 +956,15 @@ impl Radar3dPanel {
                 );
             }
         }
-        let credit = if self.show_imagery && self.imagery_tex.is_some() {
+        let mut credit = if self.show_imagery && self.imagery_tex.is_some() {
             "Imagery: Esri, Maxar, Earthstar Geographics · Terrain: AWS Terrain Tiles · "
+                .to_string()
         } else {
-            "Terrain: AWS Terrain Tiles · "
+            "Terrain: AWS Terrain Tiles · ".to_string()
         };
+        if self.lod.as_ref().is_some_and(|l| l.buildings > 0) {
+            credit.push_str("Buildings: © OpenStreetMap, OpenFreeMap · ");
+        }
         painter.text(
             rect.right_bottom() + vec2(-8.0, -6.0),
             Align2::RIGHT_BOTTOM,

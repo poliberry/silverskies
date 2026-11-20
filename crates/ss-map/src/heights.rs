@@ -38,6 +38,52 @@ impl HeightTile {
         let b = h(x0, y1) * (1.0 - tx) + h(x1, y1) * tx;
         a * (1.0 - ty) + b * ty
     }
+
+    /// Flatten anything narrower than `2·radius + 1` samples that stands
+    /// above its surroundings (a grey-scale opening: min filter, then max).
+    /// Close up, the elevation data is a surface model: city blocks and
+    /// tree stands show as lumps the photo gets smeared over.
+    pub fn open(&mut self, radius: usize) {
+        if radius == 0 || self.size == 0 {
+            return;
+        }
+        let eroded = filter(&self.h, self.size, radius, f32::min);
+        self.h = filter(&eroded, self.size, radius, f32::max);
+    }
+}
+
+/// Separable square min/max filter, clamped at the edges.
+fn filter(src: &[f32], n: usize, r: usize, f: fn(f32, f32) -> f32) -> Vec<f32> {
+    let pass = |src: &[f32], horizontal: bool| {
+        let mut out = vec![0.0; n * n];
+        for a in 0..n {
+            for b in 0..n {
+                let lo = b.saturating_sub(r);
+                let hi = (b + r).min(n - 1);
+                let mut v = src[if horizontal { a * n + lo } else { lo * n + a }];
+                for c in lo + 1..=hi {
+                    v = f(v, src[if horizontal { a * n + c } else { c * n + a }]);
+                }
+                out[if horizontal { a * n + b } else { b * n + a }] = v;
+            }
+        }
+        out
+    };
+    pass(&pass(src, true), false)
+}
+
+/// The opening radius (samples) for a tile: features under ~200 m across are
+/// flattened at levels 13 and deeper; coarser tiles are left alone.
+pub fn spike_radius(z: u8, y: u32, size: usize) -> usize {
+    if z < 13 || size == 0 {
+        return 0;
+    }
+    let n = f64::from(1u32 << z);
+    let lat = (std::f64::consts::PI * (1.0 - 2.0 * (f64::from(y) + 0.5) / n))
+        .sinh()
+        .atan();
+    let m_per_px = 40_075_016.7 * lat.cos() / (size as f64 * n);
+    ((100.0 / m_per_px).ceil() as usize).min(32)
 }
 
 /// Decode a Terrarium PNG: `height = R·256 + G + B/256 − 32768` m (the sea
@@ -167,7 +213,12 @@ impl HeightCache {
                     Ok(b) => {
                         let decoded = tokio::task::spawn_blocking({
                             let b = b.clone();
-                            move || decode_terrarium(&b)
+                            move || {
+                                decode_terrarium(&b).map(|mut t| {
+                                    t.open(spike_radius(z, y, t.size));
+                                    t
+                                })
+                            }
                         })
                         .await
                         .unwrap_or_else(|e| Err(e.to_string()));
@@ -254,5 +305,28 @@ mod tests {
         assert!((t.h[2] - 0.5).abs() < 0.01);
         // Halfway between 1000 and 0 along the top row.
         assert!((t.sample(0.5, 0.0) - 500.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn opening_flattens_lumps_but_keeps_slopes() {
+        let n = 32;
+        // A gentle slope with a 3-sample "building" on it.
+        let mut h: Vec<f32> = (0..n * n).map(|i| (i % n) as f32).collect();
+        for y in 10..13 {
+            for x in 10..13 {
+                h[y * n + x] += 50.0;
+            }
+        }
+        let mut t = HeightTile { size: n, h };
+        t.open(3);
+        assert!(
+            (t.h[11 * n + 11] - 11.0).abs() < 4.0,
+            "{}",
+            t.h[11 * n + 11]
+        );
+        // The slope away from the lump is untouched.
+        assert_eq!(t.h[25 * n + 20], 20.0);
+        assert_eq!(spike_radius(12, 0, 256), 0);
+        assert!(spike_radius(15, 1 << 14, 256) >= 10);
     }
 }

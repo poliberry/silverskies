@@ -6,6 +6,7 @@ The **3D RADAR** pane shows the atmosphere around a place as a 3D volume above t
 
 - **Terrain:** a 400 × 400 km elevation model of the area, draped with **satellite imagery** and lit by the sun, under a sky. The satellite button switches to colouring by height instead.
 - **Zoom like a map:** scroll from the 400 km overview right down to streets and buildings. Close to the camera the app streams finer elevation (AWS Terrain Tiles, to level 15) and satellite imagery (to level 19) tile by tile, spending detail where you're looking; farther away it stays coarse. Height exaggeration eases to true scale as you get close, so hills look real at street level.
+- **3D buildings:** below about 5 km, buildings rise out of the map from OpenStreetMap footprints and heights (OpenFreeMap vector tiles, worldwide, no key). Roofs show the satellite photo; walls show floors and windows, lit by the real sun for the place and time of day, and cast shadows on the ground (no shadows at night). Close up, the elevation data's lumps where cities and forests stand are smoothed away, so the photo isn't smeared over them.
 - **Radar echoes:** reflectivity in 3D, coloured like the 2D radar (green → yellow → red → magenta/white for the most intense cores). Weak echoes are see-through; cores are solid.
 - **Storm cells:** a line from the ground to the echo top, coloured by threat (yellow strong, orange severe, magenta rotating, red tornadic).
 - **Tornado vortex signatures:** a red funnel from cloud base to the ground.
@@ -50,6 +51,7 @@ Terrain and imagery are worldwide everywhere.
 
 - Terrain: [AWS Terrain Tiles](https://registry.opendata.aws/terrain-tiles/) (Terrarium encoding: `height = R·256 + G + B/256 − 32768` m).
 - Imagery: Esri World Imagery — Esri, Maxar, Earthstar Geographics.
+- Buildings: © OpenStreetMap contributors, via OpenFreeMap.
 - Radar volumes: [NOAA NEXRAD Level II on AWS](https://registry.opendata.aws/noaa-nexrad/) (`unidata-nexrad-level2`).
 - Composite: LibreWXR.
 
