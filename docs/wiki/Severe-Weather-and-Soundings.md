@@ -30,6 +30,16 @@ Where no NEXRAD is within 250 km of the place, Pro finds storm cells itself, eve
 
 These cells have intensity, core area and motion but no rotation or hail estimates (the composite has no velocity data), and they are labelled as mosaic cells.
 
+## Storms heading for your places
+
+Every 10 seconds Pro projects each storm cell (NEXRAD in the US, mosaic cells elsewhere) along its current motion and checks it against **all your saved places**. A cell counts as *arriving* when its centre will pass within 10 km in the next hour, or is already within 10 km. Only cells worth knowing about count: strong or worse, or at least 45 dBZ. A storm seen by several radars is listed once, with its most severe reading.
+
+- **Storms pane → ARRIVING:** every arrival, grouped by place: when (*~20 min*, *now*), the cell, how close it passes (*passes overhead*, *passes 4 km away*) and what it carries (hail, rotation, dBZ, top).
+- **Radar badge:** for the place the window tracks, the most threatening arrival, e.g. *SEVERE STORM ~20 min · passes overhead*, coloured by threat (above the lightning badge).
+- **Warnings:** when a severe NEXRAD cell (mesocyclone, tornado signature, ≥ 1" hail or POSH ≥ 50%) is due at a saved place within 45 minutes, Pro logs a warning in the audit log and, with notifications on, shows a desktop notification, once per storm and place.
+
+These are straight-line projections of the storm's centre: storms turn, grow and die, and their rain and hail reach well beyond the centre. Use them as a heads-up, not a forecast; official warnings come from your weather service.
+
 ## Storm reports (US)
 
 Local storm reports from the NWS (spotters, emergency managers, the public) for the last 24 hours, via IEM: tornado, funnel cloud, hail (with size), wind damage/gusts, flood, snow/ice. Lettered markers on the map; the newest nearby ones in the Storms pane.

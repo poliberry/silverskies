@@ -30,6 +30,8 @@ use crate::theme;
 use crate::windows::{self, WindowManager};
 
 const STATIC_REFRESH: Duration = Duration::from_secs(30 * 60);
+/// Severe storms due at a saved place within this many minutes are announced.
+const ARRIVAL_WARN_MINUTES: f64 = 45.0;
 /// Places within this distance of a NEXRAD radar use its storm cells.
 const NEXRAD_RANGE_KM: f64 = 250.0;
 /// Minimum gap between session writes while windows are being dragged.
@@ -52,6 +54,9 @@ pub struct App {
     last_storms: Option<Instant>,
     last_tropical: Option<Instant>,
     last_lightning: Option<Instant>,
+    last_arrivals: Option<Instant>,
+    /// (place id, cell key) → when a storm-arrival warning was given.
+    arrival_warned: HashMap<(String, String), Instant>,
     /// Last mosaic-cell run: when, for which location.
     last_mosaic: Option<(Instant, String)>,
     last_auto: Instant,
@@ -149,6 +154,8 @@ impl App {
             last_storms: None,
             last_tropical: None,
             last_lightning: None,
+            last_arrivals: None,
+            arrival_warned: HashMap::new(),
             last_mosaic: None,
             last_auto: Instant::now(),
             last_session_save: Instant::now(),
@@ -829,6 +836,7 @@ impl App {
         self.maybe_mosaic_cells();
         self.maybe_lightning();
         self.maybe_tracks();
+        self.update_arrivals();
         if self.last_spc.elapsed() >= Duration::from_secs(600) {
             self.last_spc = Instant::now();
             self.fetch_spc_if_enabled();
@@ -868,6 +876,67 @@ impl App {
                 self.tasks.track(kind, minutes);
             }
         }
+    }
+
+    /// Which storms are heading for the saved places; warn (log and desktop
+    /// notification) once when a severe NEXRAD cell is due within
+    /// [`ARRIVAL_WARN_MINUTES`].
+    fn update_arrivals(&mut self) {
+        if self
+            .last_arrivals
+            .is_some_and(|t| t.elapsed() < Duration::from_secs(10))
+        {
+            return;
+        }
+        self.last_arrivals = Some(Instant::now());
+        let mut sh = self.shared.write();
+        let cells: Vec<_> = sh
+            .storm_cells
+            .iter()
+            .chain(sh.mosaic_cells.iter())
+            .cloned()
+            .collect();
+        let arrivals = ss_core::storms::arrivals(&sh.locations.saved_locations, &cells);
+        self.arrival_warned
+            .retain(|_, t| t.elapsed() < Duration::from_secs(3600));
+        for a in &arrivals {
+            let severe = a.cell.source == ss_core::storms::CellSource::Nexrad
+                && a.cell.threat() >= 2
+                && a.minutes <= ARRIVAL_WARN_MINUTES;
+            let key = (a.place_id.clone(), a.cell.key());
+            if !severe || self.arrival_warned.contains_key(&key) {
+                continue;
+            }
+            self.arrival_warned.insert(key, Instant::now());
+            let msg = if a.minutes < 2.0 {
+                format!(
+                    "storm {} over {} now ({})",
+                    a.cell.key(),
+                    a.place,
+                    a.cell.summary()
+                )
+            } else {
+                format!(
+                    "storm {} reaching {} in {} ({}), {}",
+                    a.cell.key(),
+                    a.place,
+                    ss_core::storms::eta_label(a.minutes).trim_start_matches('~'),
+                    a.cell.summary(),
+                    ss_core::storms::miss_label(a.miss_km)
+                )
+            };
+            sh.log(LogLevel::Warn, msg.clone());
+            if sh.config.notifications_enabled {
+                let summary = format!("Storm approaching {}", a.place);
+                std::thread::spawn(move || {
+                    let _ = notify_rust::Notification::new()
+                        .summary(&summary)
+                        .body(&msg)
+                        .show();
+                });
+            }
+        }
+        sh.arrivals = arrivals;
     }
 
     /// Fetch new lightning about once a minute while the layer is on.

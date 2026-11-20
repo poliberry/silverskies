@@ -206,6 +206,8 @@ pub struct Shared {
     >,
     pub tracks_requested: HashMap<(ss_net::mrms::TrackKind, u32), std::time::Instant>,
     pub tracks_pending: std::collections::HashSet<ss_net::mrms::TrackKind>,
+    /// Storms heading for the saved places (refreshed every few seconds).
+    pub arrivals: Vec<ss_core::storms::Arrival>,
     pub scene3d_pending: std::collections::HashSet<String>,
     pub scene3d_errors: HashMap<String, String>,
     pub sounding_errors: HashMap<String, String>,
@@ -303,6 +305,7 @@ impl Shared {
             tracks: HashMap::new(),
             tracks_requested: HashMap::new(),
             tracks_pending: Default::default(),
+            arrivals: Vec::new(),
             scene3d_pending: Default::default(),
             scene3d_errors: HashMap::new(),
             sounding_errors: HashMap::new(),

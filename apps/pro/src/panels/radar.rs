@@ -960,8 +960,27 @@ impl Panel for RadarPanel {
             };
             overlay_text(&painter, aqi_pos, aqi_align, &text, c32(p.a0));
         }
-        if rs.lightning {
-            if let Some(loc) = cx.location.as_ref() {
+        // Badges for the tracked place: the nearest storm heading there,
+        // and the nearest lightning.
+        let mut badges: Vec<(String, Color32)> = Vec::new();
+        if let Some(loc) = cx.location.as_ref() {
+            if let Some(a) = cx.shared.arrivals.iter().find(|a| a.place_id == loc.id) {
+                let t = a.cell.threat();
+                let what = match t {
+                    4 => "TORNADIC STORM",
+                    3 => "ROTATING STORM",
+                    2 => "SEVERE STORM",
+                    _ => "STORM",
+                };
+                let when = ss_core::storms::eta_label(a.minutes);
+                let text = if a.minutes < 2.0 {
+                    format!("{what} OVERHEAD · {}", a.cell.key())
+                } else {
+                    format!("{what} {when} · {}", ss_core::storms::miss_label(a.miss_km))
+                };
+                badges.push((text, c32(super::storms::threat_color(t))));
+            }
+            if rs.lightning {
                 let now_s = chrono::Utc::now().timestamp();
                 let near = ss_net::glm::nearest(
                     &cx.shared.lightning,
@@ -977,22 +996,26 @@ impl Panel for RadarPanel {
                         ss_core::weather::units::compass_8(b),
                         (now_s - f.time).max(0) / 60
                     );
-                    let dy = if rs.aqi_badge { 18.0 } else { 0.0 };
-                    let (pos, align) = if overlay {
-                        (
-                            r.rect.center_top() + vec2(0.0, 24.0 + dy),
-                            Align2::CENTER_TOP,
-                        )
-                    } else {
-                        (r.rect.right_top() + vec2(-8.0, 6.0 + dy), Align2::RIGHT_TOP)
-                    };
                     let c = if d < 16.0 { c32(p.danger) } else { c32(p.a0) };
-                    let g = painter.layout_no_wrap(text, FontId::monospace(11.0), c);
-                    let at = align.anchor_size(pos, g.size()).expand2(vec2(5.0, 2.0));
-                    painter.rect_filled(at, 3.0, Color32::from_black_alpha(170));
-                    painter.galley(at.min + vec2(5.0, 2.0), g, c);
+                    badges.push((text, c));
                 }
             }
+        }
+        let mut dy = if rs.aqi_badge { 18.0 } else { 0.0 };
+        for (text, c) in badges {
+            let (pos, align) = if overlay {
+                (
+                    r.rect.center_top() + vec2(0.0, 24.0 + dy),
+                    Align2::CENTER_TOP,
+                )
+            } else {
+                (r.rect.right_top() + vec2(-8.0, 6.0 + dy), Align2::RIGHT_TOP)
+            };
+            let g = painter.layout_no_wrap(text, FontId::monospace(11.0), c);
+            let at = align.anchor_size(pos, g.size()).expand2(vec2(5.0, 2.0));
+            painter.rect_filled(at, 3.0, Color32::from_black_alpha(170));
+            painter.galley(at.min + vec2(5.0, 2.0), g, c);
+            dy += at.height() + 3.0;
         }
         self.map.layers.set_visible(
             "radar-sites",
@@ -1173,8 +1196,6 @@ impl RadarPanel {
             self.l2.clear();
             self.xs.clear();
             self.xs_tex = None;
-            self.map.line = None;
-            self.map.line_mode = false;
             return;
         };
         let sh = &mut *cx.shared;
@@ -1596,16 +1617,25 @@ impl RadarPanel {
             .unwrap_or_else(|| format!("{}", rs.color_scheme));
         let row = |ui: &mut Ui| {
             ui.horizontal(|ui| {
-                    // Cross sections need a Level II scan.
-                    if rs.nexrad_site.is_some() && rs.level2.is_some() {
+                    // Measure (and, with a Level II scan, cross section).
+                    {
                         let armed = self.map.line_mode;
-                        let tip = if armed {
-                            "Cross section: now drag a line across a storm"
-                        } else {
-                            "Cross section: click, then drag a line across a storm to see it from the side"
+                        let xsect = rs.nexrad_site.is_some() && rs.level2.is_some();
+                        let tip = match (armed, xsect) {
+                            (true, true) => "Now drag a line across a storm",
+                            (true, false) => "Now drag a line on the map",
+                            (false, true) => "Cross section and distance: click, then drag a line across a storm to see it from the side",
+                            (false, false) => "Distance and bearing: click, then drag a line on the map (click again to clear it)",
                         };
-                        if icon_button(ui, &p, ss_assets::symbols::STRAIGHTEN, Some(armed), tip).clicked() {
-                            self.map.line_mode = !armed;
+                        let shown = armed || self.map.line.is_some();
+                        if icon_button(ui, &p, ss_assets::symbols::STRAIGHTEN, Some(shown), tip).clicked() {
+                            if !armed && self.map.line.is_some() {
+                                // Clear the last line (and its cross section).
+                                self.map.line = None;
+                                self.xs_tex = None;
+                            } else {
+                                self.map.line_mode = !armed;
+                            }
                         }
                     }
                     egui::ComboBox::from_id_salt("radar_scheme")

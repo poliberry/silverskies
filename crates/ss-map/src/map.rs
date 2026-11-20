@@ -42,12 +42,24 @@ pub struct MapWidget {
     pub show_stats: bool,
     pub dark: bool,
     selection: SelectionLayer,
-    /// While set, dragging draws a line (for cross sections) instead of
-    /// panning.
+    /// While set, dragging draws a line (to measure distance and bearing,
+    /// and for cross sections) instead of panning.
     pub line_mode: bool,
     /// The last line drawn, (lon, lat) ends; drawn over the map, A to B.
     pub line: Option<((f64, f64), (f64, f64))>,
     drag_line: Option<(Pos2, Pos2)>,
+}
+
+/// "850 m", "12.4 km / 7.7 mi", "312 km / 194 mi".
+pub fn distance_label(km: f64) -> String {
+    let mi = km / 1.609_344;
+    if km < 1.0 {
+        format!("{:.0} m", km * 1000.0)
+    } else if km < 100.0 {
+        format!("{km:.1} km / {mi:.1} mi")
+    } else {
+        format!("{km:.0} km / {mi:.0} mi")
+    }
 }
 
 /// The credit line each basemap requires.
@@ -252,6 +264,30 @@ impl MapWidget {
                 egui::Stroke::new(4.0, egui::Color32::from_black_alpha(160)),
             );
             painter.line_segment([a, b], egui::Stroke::new(2.0, col));
+            // Distance and bearing, A to B.
+            let (la, lb) = (
+                self.viewport.lonlat_from_screen(a, rect),
+                self.viewport.lonlat_from_screen(b, rect),
+            );
+            let km = ss_core::geo::haversine_km(la.1, la.0, lb.1, lb.0);
+            if km > 0.05 {
+                let brg = ss_core::geo::bearing_deg(la.1, la.0, lb.1, lb.0);
+                let text = format!(
+                    "{} · {:.0}° {}",
+                    distance_label(km),
+                    brg,
+                    ss_core::weather::units::compass_8(brg)
+                );
+                let g = painter.layout_no_wrap(text, egui::FontId::monospace(11.0), col);
+                let mid = a + (b - a) / 2.0;
+                // Beside the line, not on it.
+                let n = (b - a).rot90().normalized();
+                let at = egui::Align2::CENTER_CENTER
+                    .anchor_size(mid + n * 16.0, g.size())
+                    .expand2(egui::vec2(5.0, 2.0));
+                painter.rect_filled(at, 3.0, egui::Color32::from_black_alpha(190));
+                painter.galley(at.min + egui::vec2(5.0, 2.0), g, col);
+            }
             for (p, t) in [(a, "A"), (b, "B")] {
                 painter.circle_filled(p, 8.0, egui::Color32::from_black_alpha(190));
                 painter.text(
@@ -340,5 +376,17 @@ impl MapWidget {
                 FontId::monospace(9.0),
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn labels_distances() {
+        assert_eq!(distance_label(0.85), "850 m");
+        assert_eq!(distance_label(12.4), "12.4 km / 7.7 mi");
+        assert_eq!(distance_label(312.0), "312 km / 194 mi");
     }
 }

@@ -20,7 +20,7 @@ pub use layers::{
     RangeRingLayer, RasterTileLayer, SelectionLayer, TriData, WindBarbLayer, WmsImageLayer,
 };
 pub use legend::{draw_color_legend, draw_color_legend_inline, radar_dbz_stops};
-pub use map::{attribution_for, MapResponse, MapWidget, BACKGROUND};
+pub use map::{attribution_for, distance_label, MapResponse, MapWidget, BACKGROUND};
 pub use radar_loop::{LoopClock, LoopFrameSource, RadarLoopLayer, TileUrlFn};
 pub use storm_layer::{StormLayer, StormMark, StormShape};
 pub use tiles::{TileCache, TileKey, TileState, TileStats};

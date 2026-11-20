@@ -29,26 +29,6 @@ pub fn threat_color(t: u8) -> [u8; 3] {
     }
 }
 
-/// Minutes until a cell moving at its current motion passes closest to
-/// (`lat`, `lon`), with that closest distance — `None` when it's moving away.
-pub fn closest_approach(c: &StormCell, lat: f64, lon: f64) -> Option<(f64, f64)> {
-    if c.speed_kt < 3.0 {
-        return None;
-    }
-    // Local flat-earth frame around the location, km.
-    let kx = 111.32 * lat.to_radians().cos();
-    let (x, y) = ((c.lon - lon) * kx, (c.lat - lat) * 110.57);
-    let h = c.heading_deg().to_radians();
-    let v = c.speed_kt * 1.852 / 60.0; // km per minute
-    let (vx, vy) = (h.sin() * v, h.cos() * v);
-    let t = -(x * vx + y * vy) / (vx * vx + vy * vy);
-    if t <= 0.0 {
-        return None;
-    }
-    let (cx, cy) = (x + vx * t, y + vy * t);
-    Some((t, (cx * cx + cy * cy).sqrt()))
-}
-
 fn cell_row(ui: &mut Ui, p: &ss_core::theme::Palette, c: &StormCell, lat: f64, lon: f64) {
     let km = haversine_km(lat, lon, c.lat, c.lon);
     let brg = bearing_deg(lat, lon, c.lat, c.lon);
@@ -96,7 +76,7 @@ fn cell_row(ui: &mut Ui, p: &ss_core::theme::Palette, c: &StormCell, lat: f64, l
             .size(11.5)
             .color(c32a(p.text3)),
     );
-    if let Some((mins, miss_km)) = closest_approach(c, lat, lon) {
+    if let Some((mins, miss_km)) = c.closest_approach(lat, lon) {
         if miss_km < 15.0 && mins < 120.0 {
             ui.label(
                 RichText::new(format!(
@@ -109,6 +89,39 @@ fn cell_row(ui: &mut Ui, p: &ss_core::theme::Palette, c: &StormCell, lat: f64, l
             );
         }
     }
+}
+
+fn arrival_row(ui: &mut Ui, p: &ss_core::theme::Palette, a: &ss_core::storms::Arrival) {
+    let col = threat_color(a.cell.threat());
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        egui::Frame::new()
+            .fill(c32(col))
+            .inner_margin(egui::Margin::symmetric(4, 0))
+            .show(ui, |ui| {
+                ui.label(
+                    RichText::new(ss_core::storms::eta_label(a.minutes))
+                        .monospace()
+                        .color(on(col)),
+                );
+            });
+        ui.label(RichText::new(&a.place).monospace().color(c32(p.text)));
+        ui.label(
+            RichText::new(format!(
+                "{} · {}",
+                a.cell.key(),
+                ss_core::storms::miss_label(a.miss_km)
+            ))
+            .monospace()
+            .color(c32a(p.text2)),
+        );
+    });
+    ui.label(
+        RichText::new(format!("  {}", a.cell.summary()))
+            .monospace()
+            .size(11.5)
+            .color(c32a(p.text3)),
+    );
 }
 
 fn report_row(ui: &mut Ui, p: &ss_core::theme::Palette, r: &StormReport, lat: f64, lon: f64) {
@@ -213,6 +226,20 @@ impl Panel for StormsPanel {
                     );
                 }
                 ui.add_space(4.0);
+                section(
+                    ui,
+                    &p,
+                    ss_assets::symbols::WARNING,
+                    &format!("ARRIVING ≤1 H ({})", sh.arrivals.len()),
+                    "Storms whose centres pass within 10 km of one of your saved places in the next hour, on their current motion",
+                );
+                if sh.arrivals.is_empty() {
+                    placeholder(ui, &p, "no storms heading for your places");
+                }
+                for a in sh.arrivals.iter().take(20) {
+                    arrival_row(ui, &p, a);
+                }
+                ui.add_space(6.0);
                 section(
                     ui,
                     &p,
@@ -332,46 +359,4 @@ fn section(ui: &mut Ui, p: &ss_core::theme::Palette, glyph: &str, title: &str, t
     .response
     .on_hover_text(tip);
     ui.add_space(1.0);
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn cell(lon: f64, lat: f64, from: f64, kt: f64) -> StormCell {
-        StormCell {
-            radar: "TLX".into(),
-            id: "A1".into(),
-            lon,
-            lat,
-            tvs: Tvs::None,
-            meso: 0,
-            posh: 0.0,
-            poh: 0.0,
-            max_hail_in: 0.0,
-            vil: 0.0,
-            max_dbz: 50.0,
-            max_dbz_height_kft: 0.0,
-            top_kft: 0.0,
-            motion_from_deg: from,
-            speed_kt: kt,
-            valid: String::new(),
-            source: ss_core::storms::CellSource::Nexrad,
-            area_km2: 0.0,
-        }
-    }
-
-    #[test]
-    fn approaching_cell_has_eta_receding_cell_none() {
-        // 30 km due west, moving from the west (heading east) at 30 kt.
-        let c = cell(-97.8, 35.2, 270.0, 30.0);
-        let (mins, miss) = closest_approach(&c, 35.2, -97.47).unwrap();
-        assert!(miss < 2.0, "{miss}");
-        // ~30 km at 55.6 km/h ≈ 32 min.
-        assert!((mins - 32.4).abs() < 3.0, "{mins}");
-        // Same cell moving west: going away.
-        assert!(closest_approach(&cell(-97.8, 35.2, 90.0, 30.0), 35.2, -97.47).is_none());
-        // Stationary cells have no ETA.
-        assert!(closest_approach(&cell(-97.8, 35.2, 270.0, 0.0), 35.2, -97.47).is_none());
-    }
 }
