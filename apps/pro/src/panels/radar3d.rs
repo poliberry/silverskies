@@ -371,9 +371,28 @@ pub struct Radar3dPanel {
     gl: super::gl3d::Gl3d,
     /// Satellite imagery on the terrain (the view is then kept high).
     show_imagery: bool,
+    /// What colours the radar volume (Level II scans only).
+    product: super::gl3d::Product,
+    /// When the pane first drew (to bound the wait for the site list).
+    first_seen: Option<Instant>,
+    /// The product the legend describes (last frame's).
+    legend_product: super::gl3d::Product,
 }
 
 impl Radar3dPanel {
+    /// The product to draw: the chosen one if this scan has it.
+    fn shown_product(&self, scene: &Scene) -> super::gl3d::Product {
+        let has = scene
+            .polar
+            .as_ref()
+            .is_some_and(|p| p.moment(self.product.moment()).is_some());
+        if has {
+            self.product
+        } else {
+            super::gl3d::Product::Reflectivity
+        }
+    }
+
     /// The vertical exaggeration in use: the slider's value at the overview,
     /// easing to true scale as you zoom in to the ground (like a map).
     fn effective_exag(&self) -> f32 {
@@ -410,6 +429,9 @@ impl Default for Radar3dPanel {
             lod: None,
             gl: Default::default(),
             show_imagery: false,
+            product: Default::default(),
+            legend_product: Default::default(),
+            first_seen: None,
         }
     }
 }
@@ -488,6 +510,25 @@ impl Radar3dPanel {
                     self.requested.remove(&l.id);
                 }
             }
+            if let Some(pv) = scene.and_then(|s| s.polar.as_ref()) {
+                use super::gl3d::Product;
+                let has = |p: Product| pv.moment(p.moment()).is_some();
+                egui::ComboBox::from_id_salt("radar3d_product")
+                    .width(170.0)
+                    .selected_text(self.product.label())
+                    .show_ui(ui, |ui| {
+                        for prod in Product::ALL {
+                            ui.add_enabled_ui(has(prod), |ui| {
+                                ui.selectable_value(&mut self.product, prod, prod.label());
+                            });
+                        }
+                    })
+                    .response
+                    .on_hover_text(
+                        "What colours the radar volume. Opacity always follows reflectivity, \
+                         so velocity and dual-pol show where the echoes are.",
+                    );
+            }
             ui.add_space(6.0);
             ui.label(RichText::new("≥").monospace().color(c32a(p.text3)));
             ui.spacing_mut().slider_width = 70.0;
@@ -547,7 +588,11 @@ impl Panel for Radar3dPanel {
         // Fetch: once the radar index is loaded (and, in range of the US
         // network, the site list), then every few minutes.
         let sh = &mut *cx.shared;
-        let ready = sh.weather_maps.is_some();
+        // Wait for the NEXRAD site list too (briefly), or a radar in range
+        // would be missed and the mosaic used instead.
+        let since = *self.first_seen.get_or_insert_with(Instant::now);
+        let ready = sh.weather_maps.is_some()
+            && (!sh.radar_stations.is_empty() || since.elapsed() > Duration::from_secs(15));
         let failed = sh.scene3d_errors.contains_key(&loc.id);
         let due = self
             .requested
@@ -640,6 +685,8 @@ impl Panel for Radar3dPanel {
                 ex,
                 dark,
                 min_dbz: self.min_dbz,
+                product: self.shown_product(&scene),
+                motion: storm_motion(&cx.shared.storm_cells, &scene),
                 terrain: self.show_terrain,
                 radar: self.show_radar,
                 photo: self.show_imagery,
@@ -652,6 +699,7 @@ impl Panel for Radar3dPanel {
             terrain_drawn = true;
         }
         let marks = self.draw_scene(&painter, &view, &scene, cx, dark, terrain_drawn, gpu);
+        self.legend_product = self.shown_product(&scene);
         self.overlay(&painter, rect, &view, &p);
         // Hover: the nearest marker.
         if let Some(pos) = resp.hover_pos() {
@@ -948,24 +996,54 @@ impl Radar3dPanel {
                 Color32::WHITE,
             );
         }
-        // dBZ legend.
+        // Legend for what's shown.
         let x0 = rect.left() + 10.0;
         let y = rect.bottom() - 16.0;
+        let prod = self.legend_product;
+        let (ticks, label): (Vec<f32>, &str) = match prod {
+            super::gl3d::Product::Reflectivity => {
+                ((10..=65).step_by(5).map(|d| d as f32).collect(), "dBZ")
+            }
+            super::gl3d::Product::Velocity | super::gl3d::Product::StormRelative => (
+                (-60..=60).step_by(10).map(|d| d as f32).collect(),
+                "m/s (− toward, + away)",
+            ),
+            super::gl3d::Product::Zdr => ((-2..=6).map(|d| d as f32).collect(), "dB"),
+            super::gl3d::Product::Cc => (
+                [
+                    0.5, 0.6, 0.7, 0.8, 0.85, 0.9, 0.93, 0.95, 0.97, 0.98, 0.99, 1.0,
+                ]
+                .to_vec(),
+                "CC",
+            ),
+        };
         let w = 14.0;
-        for (k, d) in (10..=65).step_by(5).enumerate() {
+        for (k, v) in ticks.iter().enumerate() {
             let r = Rect::from_min_size(pos2(x0 + k as f32 * w, y), vec2(w, 7.0));
-            let c = dbz_color(d as f32);
-            painter.rect_filled(r, 0.0, Color32::from_rgb(c.r(), c.g(), c.b()));
-            if d % 20 == 10 || d == 65 {
+            let c = prod.color(*v);
+            painter.rect_filled(r, 0.0, Color32::from_rgb(c[0], c[1], c[2]));
+            if k == 0 || k == ticks.len() - 1 || k == ticks.len() / 2 {
+                let text = if prod == super::gl3d::Product::Cc {
+                    format!("{v:.2}")
+                } else {
+                    format!("{v:.0}")
+                };
                 painter.text(
                     r.left_top() - vec2(0.0, 2.0),
                     Align2::LEFT_BOTTOM,
-                    d.to_string(),
+                    text,
                     FontId::monospace(9.5),
                     Color32::WHITE,
                 );
             }
         }
+        painter.text(
+            pos2(x0 + ticks.len() as f32 * w + 6.0, y + 4.0),
+            Align2::LEFT_CENTER,
+            label,
+            FontId::monospace(9.5),
+            Color32::from_white_alpha(200),
+        );
         let credit = if self.show_imagery {
             "Imagery: Esri, Maxar, Earthstar Geographics · Terrain: AWS Terrain Tiles · "
         } else {
@@ -980,6 +1058,31 @@ impl Radar3dPanel {
             Color32::from_white_alpha(140),
         );
     }
+}
+
+/// Mean storm motion (east, north, m/s) of the cells the scan's radar
+/// tracks, for storm-relative velocity; zero when there are none.
+fn storm_motion(cells: &[ss_core::storms::StormCell], scene: &Scene) -> [f32; 2] {
+    let site = match &scene.source {
+        Some(RadarSource::Nexrad { site, .. }) => site.as_str(),
+        _ => return [0.0; 2],
+    };
+    let short = site.get(1..).unwrap_or(site);
+    let (mut u, mut v, mut n) = (0.0f64, 0.0f64, 0.0f64);
+    for c in cells.iter().filter(|c| c.radar == short || c.radar == site) {
+        if c.speed_kt <= 0.0 {
+            continue;
+        }
+        let to = (c.motion_from_deg + 180.0).to_radians();
+        let ms = c.speed_kt * 0.514_444;
+        u += ms * to.sin();
+        v += ms * to.cos();
+        n += 1.0;
+    }
+    if n == 0.0 {
+        return [0.0; 2];
+    }
+    [(u / n) as f32, (v / n) as f32]
 }
 
 #[cfg(test)]
@@ -1039,5 +1142,33 @@ mod tests {
             [255, 255, 255],
             "extreme cores are white"
         );
+    }
+
+    #[test]
+    fn storm_motion_averages_the_radars_cells() {
+        // From the west at 20 kt: moving east.
+        let c = ss_core::storms::StormCell {
+            radar: "DAX".into(),
+            motion_from_deg: 270.0,
+            speed_kt: 20.0,
+            ..Default::default()
+        };
+        let scene = Scene {
+            lat: 0.0,
+            lon: 0.0,
+            half_km: 200.0,
+            terrain: None,
+            voxels: Vec::new(),
+            voxel_km: 1.0,
+            voxel_dz_km: 0.5,
+            source: Some(RadarSource::Nexrad {
+                site: "KDAX".into(),
+                time: String::new(),
+            }),
+            radar_xy: None,
+            polar: None,
+        };
+        let m = storm_motion(&[c], &scene);
+        assert!((m[0] - 10.29).abs() < 0.05 && m[1].abs() < 1e-3, "{m:?}");
     }
 }

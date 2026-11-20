@@ -4,8 +4,9 @@
 use serde::{Deserialize, Serialize};
 
 /// Tornado vortex signature on a cell.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum Tvs {
+    #[default]
     None,
     /// Elevated TVS (aloft only).
     Elevated,
@@ -24,7 +25,7 @@ pub enum CellSource {
 }
 
 /// One storm cell, from a NEXRAD radar or the global radar mosaic.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct StormCell {
     /// Detecting radar (e.g. `TLX`).
     pub radar: String,

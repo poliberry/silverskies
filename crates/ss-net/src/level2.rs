@@ -12,7 +12,7 @@
 use std::io::Read;
 
 use crate::{Net, NetError, Result};
-use ss_core::radar3d::{Radial, Sweep, Volume};
+use ss_core::radar3d::{Moment, MomentData, Radial, Sweep, Volume};
 
 pub const BUCKET: &str = "https://unidata-nexrad-level2.s3.amazonaws.com";
 
@@ -80,6 +80,7 @@ fn parse_m31(b: &[u8]) -> Option<Parsed> {
     let elevation = be_f32(b, 24)?;
     let count = be_u16(b, 30)? as usize;
     let mut refl = None;
+    let mut moments = Vec::new();
     let mut site = None;
     for k in 0..count.min(10) {
         let ptr = be_u32(b, 32 + 4 * k)? as usize;
@@ -92,40 +93,63 @@ fn parse_m31(b: &[u8]) -> Option<Parsed> {
                     f64::from(be_i16(b, ptr + 16)?) + f64::from(be_u16(b, ptr + 18)?),
                 ));
             }
-            b"DREF" => {
+            b"DREF" | b"DVEL" | b"DZDR" | b"DRHO" => {
                 let ngates = be_u16(b, ptr + 8)? as usize;
                 let first = f32::from(be_i16(b, ptr + 10)?) / 1000.0;
                 let spacing = f32::from(be_i16(b, ptr + 12)?) / 1000.0;
                 let word = *b.get(ptr + 19)?;
                 let scale = be_f32(b, ptr + 20)?;
                 let offset = be_f32(b, ptr + 24)?;
-                if word != 8 || scale == 0.0 {
+                if scale == 0.0 || !(word == 8 || word == 16) {
                     continue;
                 }
-                let raw = b.get(ptr + 28..ptr + 28 + ngates)?;
-                let dbz = raw
-                    .iter()
-                    // 0 = below threshold, 1 = range folded.
-                    .map(|&r| {
-                        if r < 2 {
-                            f32::NAN
-                        } else {
-                            (f32::from(r) - offset) / scale
-                        }
-                    })
-                    .collect();
-                refl = Some(Radial {
-                    azimuth_deg: azimuth,
-                    elevation_deg: elevation,
-                    first_gate_km: first,
-                    gate_km: spacing,
-                    dbz,
+                let bytes = usize::from(word / 8);
+                let raw = b.get(ptr + 28..ptr + 28 + ngates * bytes)?;
+                // 0 = below threshold, 1 = range folded.
+                let values = raw.chunks_exact(bytes).map(|c| {
+                    let r = if bytes == 1 {
+                        f32::from(c[0])
+                    } else {
+                        f32::from(u16::from_be_bytes([c[0], c[1]]))
+                    };
+                    if r < 2.0 {
+                        f32::NAN
+                    } else {
+                        (r - offset) / scale
+                    }
                 });
+                let moment = match name {
+                    b"DVEL" => Moment::Vel,
+                    b"DZDR" => Moment::Zdr,
+                    b"DRHO" => Moment::Rho,
+                    _ => Moment::Ref,
+                };
+                if moment == Moment::Ref {
+                    refl = Some((first, spacing, values.collect::<Vec<f32>>()));
+                } else {
+                    moments.push(MomentData {
+                        moment,
+                        first_gate_km: first,
+                        gate_km: spacing,
+                        values: values
+                            .map(|v| if v.is_nan() { 0 } else { moment.encode(v) })
+                            .collect(),
+                    });
+                }
             }
             _ => {}
         }
     }
-    Some((elev_num, elevation, refl?, site))
+    let (first, spacing, dbz) = refl?;
+    let radial = Radial {
+        azimuth_deg: azimuth,
+        elevation_deg: elevation,
+        first_gate_km: first,
+        gate_km: spacing,
+        dbz,
+        moments,
+    };
+    Some((elev_num, elevation, radial, site))
 }
 
 fn elevations_sum(s: &Sweep) -> f32 {
@@ -306,6 +330,26 @@ mod tests {
                 max,
                 s.radials[0].gate_km,
                 s.radials[0].first_gate_km
+            );
+            let kinds: Vec<String> = s.radials[0]
+                .moments
+                .iter()
+                .map(|m| {
+                    format!(
+                        "{:?}({})",
+                        m.moment,
+                        m.values.iter().filter(|&&b| b > 0).count()
+                    )
+                })
+                .collect();
+            eprintln!("         moments: {}", kinds.join(" "));
+        }
+        let p = ss_core::radar3d::polar_volume(&v, v.lat, v.lon);
+        for (m, d) in &p.moments {
+            let n = d.iter().filter(|&&b| b > 0).count();
+            eprintln!(
+                "  polar {m:?}: {n} gates with data over {} tilts",
+                p.sweeps.len()
             );
         }
         assert!(v.sweeps.len() >= 5);

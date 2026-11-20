@@ -31,6 +31,74 @@ pub struct Radial {
     pub gate_km: f32,
     /// dBZ per gate; `NaN` = no echo / below threshold.
     pub dbz: Vec<f32>,
+    /// The other moments this radial carries (velocity, dual-pol), encoded.
+    pub moments: Vec<MomentData>,
+}
+
+/// A Level II moment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+pub enum Moment {
+    /// Reflectivity, dBZ.
+    #[default]
+    Ref,
+    /// Radial velocity, m/s (positive away from the radar).
+    Vel,
+    /// Differential reflectivity, dB.
+    Zdr,
+    /// Correlation coefficient (ρhv), 0–1.
+    Rho,
+}
+
+impl Moment {
+    pub const ALL: [Moment; 4] = [Moment::Ref, Moment::Vel, Moment::Zdr, Moment::Rho];
+
+    /// The range of values kept, mapped onto bytes 1–255 (0 = no data).
+    pub fn range(self) -> (f32, f32) {
+        match self {
+            Moment::Ref => (-31.5, 95.5),
+            Moment::Vel => (-64.0, 64.0),
+            Moment::Zdr => (-8.0, 8.0),
+            Moment::Rho => (0.2, 1.05),
+        }
+    }
+
+    /// Encode a value as a byte (never 0).
+    pub fn encode(self, v: f32) -> u8 {
+        match self {
+            // Half-dB steps, as the radar sends them.
+            Moment::Ref => ((v + 32.0) * 2.0).round().clamp(1.0, 255.0) as u8,
+            _ => {
+                let (lo, hi) = self.range();
+                (1.0 + (v - lo) / (hi - lo) * 254.0)
+                    .round()
+                    .clamp(1.0, 255.0) as u8
+            }
+        }
+    }
+
+    /// The value of a byte (`None` for 0, no data).
+    pub fn decode(self, b: u8) -> Option<f32> {
+        if b == 0 {
+            return None;
+        }
+        Some(match self {
+            Moment::Ref => f32::from(b) / 2.0 - 32.0,
+            _ => {
+                let (lo, hi) = self.range();
+                lo + (f32::from(b) - 1.0) / 254.0 * (hi - lo)
+            }
+        })
+    }
+}
+
+/// One moment of a radial: gate geometry and encoded values
+/// ([`Moment::encode`]; 0 = no data).
+#[derive(Debug, Clone, PartialEq)]
+pub struct MomentData {
+    pub moment: Moment,
+    pub first_gate_km: f32,
+    pub gate_km: f32,
+    pub values: Vec<u8>,
 }
 
 /// One elevation tilt.
@@ -156,9 +224,25 @@ pub struct PolarVolume {
     pub radar: [f32; 3],
     pub width: usize,
     pub sweeps: Vec<PolarSweep>,
-    /// `width × AZIMUTHS` bytes per tilt, tilt after tilt: 0 = no echo,
-    /// otherwise `(dBZ + 32) × 2`.
+    /// Reflectivity: `width × AZIMUTHS` bytes per tilt, tilt after tilt:
+    /// 0 = no echo, otherwise `(dBZ + 32) × 2`.
     pub data: Vec<u8>,
+    /// Other moments on the same layout (empty where a tilt lacks them),
+    /// encoded with [`Moment::encode`].
+    pub moments: Vec<(Moment, Vec<u8>)>,
+}
+
+impl PolarVolume {
+    /// The bytes of `m` (reflectivity included), if the scan has it.
+    pub fn moment(&self, m: Moment) -> Option<&[u8]> {
+        if m == Moment::Ref {
+            return Some(&self.data);
+        }
+        self.moments
+            .iter()
+            .find(|(k, _)| *k == m)
+            .map(|(_, d)| d.as_slice())
+    }
 }
 
 /// dBZ from a [`PolarVolume`] byte (`None` for no echo).
@@ -167,8 +251,10 @@ pub fn polar_dbz(b: u8) -> Option<f32> {
 }
 
 /// Lay out `vol` for volume rendering in the scene around (`lat0`, `lon0`).
-/// Repeated tilts (SAILS/MESO re-scans of the lowest angles) keep the one
-/// with the most radials.
+/// Every cut at the same tilt (split cuts send reflectivity and dual-pol in
+/// one, velocity in another; SAILS repeats the lowest) is merged onto one
+/// layout: reflectivity and each moment from the cut with the most radials
+/// carrying it, on the reflectivity's gates.
 pub fn polar_volume(vol: &Volume, lat0: f64, lon0: f64) -> PolarVolume {
     let mut sweeps: Vec<&Sweep> = vol
         .sweeps
@@ -176,19 +262,24 @@ pub fn polar_volume(vol: &Volume, lat0: f64, lon0: f64) -> PolarVolume {
         .filter(|s| !s.radials.is_empty())
         .collect();
     sweeps.sort_by(|a, b| a.elevation_deg.total_cmp(&b.elevation_deg));
-    let mut kept: Vec<&Sweep> = Vec::new();
+    // Tilts: groups of cuts within 0.15° of each other.
+    let mut groups: Vec<Vec<&Sweep>> = Vec::new();
     for s in sweeps {
-        match kept.last_mut() {
-            Some(last) if (s.elevation_deg - last.elevation_deg).abs() < 0.15 => {
-                if s.radials.len() > last.radials.len() {
-                    *last = s;
-                }
-            }
-            _ => kept.push(s),
+        match groups.last_mut() {
+            Some(g) if (s.elevation_deg - g[0].elevation_deg).abs() < 0.15 => g.push(s),
+            _ => groups.push(vec![s]),
         }
     }
-    kept.truncate(MAX_SWEEPS);
-    let meta: Vec<PolarSweep> = kept
+    groups.truncate(MAX_SWEEPS);
+    let refs: Vec<&Sweep> = groups
+        .iter()
+        .map(|g| {
+            *g.iter()
+                .max_by_key(|s| s.radials.len())
+                .expect("group is not empty")
+        })
+        .collect();
+    let meta: Vec<PolarSweep> = refs
         .iter()
         .map(|s| {
             let r = &s.radials[0];
@@ -204,39 +295,93 @@ pub fn polar_volume(vol: &Volume, lat0: f64, lon0: f64) -> PolarVolume {
         })
         .collect();
     let width = meta.iter().map(|m| m.gates).max().unwrap_or(1);
-    let mut data = vec![0u8; width * AZIMUTHS * kept.len()];
-    for (k, s) in kept.iter().enumerate() {
-        let mut radials: Vec<&Radial> = s.radials.iter().collect();
-        radials.sort_by(|a, b| a.azimuth_deg.total_cmp(&b.azimuth_deg));
-        let az: Vec<f32> = radials
-            .iter()
-            .map(|r| r.azimuth_deg.rem_euclid(360.0))
+    let layer = width * AZIMUTHS;
+    let n = refs.len();
+    // The nearest radial to each azimuth bin (None across gaps).
+    let bins = |s: &Sweep, has: &dyn Fn(&Radial) -> bool| -> Vec<Option<usize>> {
+        let mut idx: Vec<usize> = (0..s.radials.len())
+            .filter(|&i| has(&s.radials[i]))
             .collect();
-        let layer = &mut data[k * width * AZIMUTHS..(k + 1) * width * AZIMUTHS];
-        for bin in 0..AZIMUTHS {
-            let centre = (bin as f32 + 0.5) * 360.0 / AZIMUTHS as f32;
-            // The nearest radial, around the circle.
-            let i = az.partition_point(|&a| a < centre);
-            let cand = [i % az.len(), (i + az.len() - 1) % az.len()];
-            let diff = |j: usize| {
-                let d = (az[j] - centre).abs();
-                d.min(360.0 - d)
-            };
-            let j = if diff(cand[0]) <= diff(cand[1]) {
-                cand[0]
-            } else {
-                cand[1]
-            };
-            if diff(j) > 1.5 {
-                continue;
-            }
-            let r = radials[j];
-            let row = &mut layer[bin * width..(bin + 1) * width];
-            for (g, &d) in r.dbz.iter().take(meta[k].gates).enumerate() {
+        idx.sort_by(|&a, &b| {
+            s.radials[a]
+                .azimuth_deg
+                .total_cmp(&s.radials[b].azimuth_deg)
+        });
+        let az: Vec<f32> = idx
+            .iter()
+            .map(|&i| s.radials[i].azimuth_deg.rem_euclid(360.0))
+            .collect();
+        (0..AZIMUTHS)
+            .map(|bin| {
+                if az.is_empty() {
+                    return None;
+                }
+                let centre = (bin as f32 + 0.5) * 360.0 / AZIMUTHS as f32;
+                let i = az.partition_point(|&a| a < centre);
+                let cand = [i % az.len(), (i + az.len() - 1) % az.len()];
+                let diff = |j: usize| {
+                    let d = (az[j] - centre).abs();
+                    d.min(360.0 - d)
+                };
+                let j = if diff(cand[0]) <= diff(cand[1]) {
+                    cand[0]
+                } else {
+                    cand[1]
+                };
+                (diff(j) <= 1.5).then(|| idx[j])
+            })
+            .collect()
+    };
+    let mut data = vec![0u8; layer * n];
+    for (k, s) in refs.iter().enumerate() {
+        let out = &mut data[k * layer..(k + 1) * layer];
+        for (bin, r) in bins(s, &|_| true).into_iter().enumerate() {
+            let Some(r) = r else { continue };
+            let row = &mut out[bin * width..(bin + 1) * width];
+            for (g, &d) in s.radials[r].dbz.iter().take(meta[k].gates).enumerate() {
                 if !d.is_nan() {
-                    row[g] = ((d + 32.0) * 2.0).round().clamp(1.0, 255.0) as u8;
+                    row[g] = Moment::Ref.encode(d);
                 }
             }
+        }
+    }
+    let mut moments = Vec::new();
+    for m in [Moment::Vel, Moment::Zdr, Moment::Rho] {
+        let mut out = vec![0u8; layer * n];
+        let mut any = false;
+        for (k, g) in groups.iter().enumerate() {
+            let carries = |r: &Radial| r.moments.iter().any(|d| d.moment == m);
+            let Some(s) = g
+                .iter()
+                .filter(|s| s.radials.iter().any(carries))
+                .max_by_key(|s| s.radials.iter().filter(|r| carries(r)).count())
+            else {
+                continue;
+            };
+            any = true;
+            let pm = meta[k];
+            let lay = &mut out[k * layer..(k + 1) * layer];
+            for (bin, r) in bins(s, &carries).into_iter().enumerate() {
+                let Some(r) = r else { continue };
+                let Some(d) = s.radials[r].moments.iter().find(|d| d.moment == m) else {
+                    continue;
+                };
+                let row = &mut lay[bin * width..(bin + 1) * width];
+                for (i, &v) in d.values.iter().enumerate() {
+                    if v == 0 {
+                        continue;
+                    }
+                    // Onto the reflectivity's gates.
+                    let range = d.first_gate_km + d.gate_km * i as f32;
+                    let gi = ((range - pm.first_gate_km) / pm.gate_km).round();
+                    if gi >= 0.0 && (gi as usize) < pm.gates {
+                        row[gi as usize] = v;
+                    }
+                }
+            }
+        }
+        if any {
+            moments.push((m, out));
         }
     }
     let (rx, ry) = local_km(lat0, lon0, vol.lat, vol.lon);
@@ -245,6 +390,7 @@ pub fn polar_volume(vol: &Volume, lat0: f64, lon0: f64) -> PolarVolume {
         width,
         sweeps: meta,
         data,
+        moments,
     }
 }
 
@@ -487,6 +633,7 @@ mod tests {
                     first_gate_km: 0.25,
                     gate_km: 0.25,
                     dbz,
+                    moments: Vec::new(),
                 }],
             }],
         };
@@ -513,6 +660,12 @@ mod tests {
             first_gate_km: 2.0,
             gate_km: 0.25,
             dbz: vec![f32::NAN, v, v],
+            moments: vec![MomentData {
+                moment: Moment::Vel,
+                first_gate_km: 2.0,
+                gate_km: 0.25,
+                values: vec![0, Moment::Vel.encode(-v / 2.0), Moment::Vel.encode(v / 2.0)],
+            }],
         };
         let sweep = |elev: f32, v: f32, step: f32| Sweep {
             elevation_deg: elev,
@@ -544,6 +697,29 @@ mod tests {
         let at = AZIMUTHS * 3 + 400 * 3 + 2;
         assert_eq!(polar_dbz(p.data[at]), Some(40.0));
         assert!(p.radar[0].abs() < 1e-3 && (p.radar[2] - 0.4).abs() < 1e-6);
+        // Velocity rides along on the same layout.
+        let vel = p.moment(Moment::Vel).unwrap();
+        assert_eq!(vel.len(), p.data.len());
+        let v = Moment::Vel.decode(vel[2]).unwrap();
+        assert!((v - 15.0).abs() < 0.3, "{v}");
+        assert!(p.moment(Moment::Rho).is_none());
+    }
+
+    #[test]
+    fn moments_round_trip() {
+        for (m, v) in [
+            (Moment::Ref, 42.5),
+            (Moment::Vel, -23.0),
+            (Moment::Zdr, 1.5),
+            (Moment::Rho, 0.97),
+        ] {
+            let b = m.encode(v);
+            assert!(b > 0);
+            let back = m.decode(b).unwrap();
+            let (lo, hi) = m.range();
+            assert!((back - v).abs() <= (hi - lo) / 254.0, "{m:?} {v} {back}");
+        }
+        assert_eq!(Moment::Vel.decode(0), None);
     }
 
     #[test]

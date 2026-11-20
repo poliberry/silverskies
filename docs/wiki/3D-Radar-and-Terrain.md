@@ -34,6 +34,18 @@ Terrain and imagery are worldwide everywhere.
 4. Keep the scan itself, tilt by tilt, laid out by azimuth (0.5° bins) and range, and hand it to the GPU.
 5. **Ray-march** it, in the spirit of [OpenStorm](https://github.com/JordanSchlick/OpenStorm): for every pixel a ray steps through the scene; at each step the point is turned back into the radar's own coordinates (range, azimuth and beam elevation, with the same refraction model), the two tilts around it are sampled and blended (tilts more than 3° apart each fill only their own ~1° beam, so the gaps between high tilts stay honest), and the result is coloured and accumulated front to back until the ray is opaque or hits the ground.
 
+### Products (NEXRAD only)
+
+The product menu in the toolbar colours the volume by any moment the scan carries; opacity always follows reflectivity (and the ≥ dBZ slider), so you see the product where the echoes are:
+
+- **Reflectivity** (dBZ).
+- **Velocity** (m/s): green toward the radar, red away. Not dealiased: very fast winds can fold over to the other colour.
+- **Storm-relative velocity:** velocity minus the average motion of the storm cells the radar is tracking, which makes rotation stand out.
+- **Correlation coefficient (CC):** near 1 in rain and snow; low values within a strong echo can mean hail or tornado debris.
+- **Differential reflectivity (ZDR):** large, flattened drops read high; hail and tumbling debris read near zero.
+
+Split cuts (one scan with reflectivity and dual-pol, another with velocity, at the same tilt) are merged onto one layout, and products are sampled gate by gate rather than blended.
+
 Outside NEXRAD coverage the estimated columns are gridded (2 km × 0.5 km) and ray-marched the same way. On computers without OpenGL 3, the pane falls back to drawing echoes as soft points.
 
 ## Controls

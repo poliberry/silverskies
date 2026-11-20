@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex};
 use eframe::egui_glow;
 use eframe::glow::{self, HasContext};
 use egui::Rect;
-use ss_core::radar3d::{PolarVolume, Scene, AZIMUTHS};
+use ss_core::radar3d::{Moment, PolarVolume, Scene, AZIMUTHS};
 
 use super::radar3d::{dbz_color, V3};
 use super::terrain_lod::{Leaf, LeafKey, LEAF_N};
@@ -40,6 +40,10 @@ pub struct Frame {
     pub ex: f32,
     pub dark: bool,
     pub min_dbz: f32,
+    /// What colours the echoes (opacity always follows reflectivity).
+    pub product: Product,
+    /// Storm motion (east, north, m/s), for storm-relative velocity.
+    pub motion: [f32; 2],
     pub terrain: bool,
     pub radar: bool,
     /// Drape satellite imagery (each leaf carries its own).
@@ -50,6 +54,123 @@ pub struct Frame {
     pub scene_id: String,
     /// Sky colour at the horizon, for haze.
     pub haze: [f32; 3],
+}
+
+/// The radar product shown in the volume.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Product {
+    #[default]
+    Reflectivity,
+    Velocity,
+    StormRelative,
+    Zdr,
+    Cc,
+}
+
+impl Product {
+    pub const ALL: [Product; 5] = [
+        Product::Reflectivity,
+        Product::Velocity,
+        Product::StormRelative,
+        Product::Cc,
+        Product::Zdr,
+    ];
+
+    pub fn moment(self) -> Moment {
+        match self {
+            Product::Reflectivity => Moment::Ref,
+            Product::Velocity | Product::StormRelative => Moment::Vel,
+            Product::Zdr => Moment::Zdr,
+            Product::Cc => Moment::Rho,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Product::Reflectivity => "Reflectivity",
+            Product::Velocity => "Velocity",
+            Product::StormRelative => "Storm-relative velocity",
+            Product::Zdr => "Differential reflectivity (ZDR)",
+            Product::Cc => "Correlation coefficient (CC)",
+        }
+    }
+
+    fn code(self) -> i32 {
+        match self {
+            Product::Reflectivity => 0,
+            Product::Velocity => 1,
+            Product::StormRelative => 2,
+            Product::Zdr => 3,
+            Product::Cc => 4,
+        }
+    }
+
+    /// The colour scale: (value, RGB) stops.
+    pub fn stops(self) -> &'static [(f32, [u8; 3])] {
+        match self {
+            Product::Reflectivity => &[],
+            Product::Velocity | Product::StormRelative => &[
+                (-64.0, [0x9c, 0xff, 0xb0]),
+                (-40.0, [0x00, 0xe0, 0x50]),
+                (-20.0, [0x00, 0x96, 0x2e]),
+                (-5.0, [0x1d, 0x4f, 0x2a]),
+                (0.0, [0x6a, 0x6a, 0x6a]),
+                (5.0, [0x5a, 0x1d, 0x1d]),
+                (20.0, [0xb0, 0x14, 0x14]),
+                (40.0, [0xff, 0x30, 0x30]),
+                (64.0, [0xff, 0xb4, 0xd2]),
+            ],
+            Product::Zdr => &[
+                (-4.0, [0x50, 0x50, 0x50]),
+                (-1.0, [0x9a, 0x9a, 0x9a]),
+                (0.0, [0xc8, 0xc8, 0xc8]),
+                (0.5, [0x3c, 0x3c, 0xc8]),
+                (1.0, [0x3c, 0xb4, 0xdc]),
+                (1.5, [0x3c, 0xc8, 0x5a]),
+                (2.0, [0xe6, 0xe6, 0x3c]),
+                (3.0, [0xf0, 0x96, 0x28]),
+                (4.0, [0xe6, 0x32, 0x32]),
+                (6.0, [0xe6, 0x3c, 0xdc]),
+                (8.0, [0xff, 0xff, 0xff]),
+            ],
+            Product::Cc => &[
+                (0.2, [0x14, 0x14, 0x50]),
+                (0.45, [0x28, 0x28, 0xa0]),
+                (0.65, [0x3c, 0x78, 0xdc]),
+                (0.8, [0x28, 0xc8, 0x78]),
+                (0.9, [0xe6, 0xdc, 0x28]),
+                (0.95, [0xf0, 0x8c, 0x1e]),
+                (0.98, [0xdc, 0x28, 0x28]),
+                (1.0, [0xc8, 0x3c, 0xc8]),
+                (1.05, [0xff, 0xbe, 0xff]),
+            ],
+        }
+    }
+
+    /// Colour of a value on this product's scale.
+    pub fn color(self, v: f32) -> [u8; 3] {
+        let st = self.stops();
+        let Some(first) = st.first() else {
+            let c = dbz_color(v);
+            return [c.r(), c.g(), c.b()];
+        };
+        let mut c = first.1;
+        for w in st.windows(2) {
+            if v >= w[0].0 && v < w[1].0 {
+                let t = (v - w[0].0) / (w[1].0 - w[0].0);
+                let l = |a: u8, b: u8| (f32::from(a) + (f32::from(b) - f32::from(a)) * t) as u8;
+                return [
+                    l(w[0].1[0], w[1].1[0]),
+                    l(w[0].1[1], w[1].1[1]),
+                    l(w[0].1[2], w[1].1[2]),
+                ];
+            }
+            if v >= w[1].0 {
+                c = w[1].1;
+            }
+        }
+        c
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -77,6 +198,8 @@ struct Programs {
 /// The textures for one scan.
 struct Volume {
     id: String,
+    /// The product in its second channel.
+    product: Product,
     /// Polar tilts (a 2D texture array) or the mosaic grid (3D texture).
     tex: glow::Texture,
     polar: Option<PolarMeta>,
@@ -104,6 +227,8 @@ struct Inner {
     volume: Option<Volume>,
     ground: Option<(String, glow::Texture, usize, f32)>,
     lut: Option<(i32, glow::Texture)>,
+    /// The product colour scale, by product.
+    plut: Option<(i32, glow::Texture)>,
     frame: u64,
 }
 
@@ -298,6 +423,10 @@ uniform float u_half;
 uniform float u_top;
 uniform float u_min;
 uniform int u_mode;          // 0 polar, 1 grid
+uniform int u_product;       // 0 reflectivity, 1 velocity, 2 storm-relative, 3 ZDR, 4 CC
+uniform vec2 u_prange;       // the product's encoded range
+uniform vec2 u_motion;       // storm motion, m/s east and north
+uniform sampler2D u_plut;
 uniform sampler2DArray u_polar;
 uniform sampler3D u_grid;
 uniform sampler2D u_lut;
@@ -329,14 +458,22 @@ float ground(vec2 xy) {
     return mix(mix(a, b, t.x), mix(c, d, t.x), t.y) / 1000.0;
 }
 
-// Encoded reflectivity (0 = none, else (dBZ + 32) * 2) at a tilt.
-float tilt(int k, float r, float v) {
+// Encoded reflectivity (0 = none, else (dBZ + 32) * 2) and product at a
+// tilt.
+vec2 tilt(int k, float r, float v) {
     float u = ((r - u_first[k]) / u_gate[k] + 0.5) / u_width;
-    if (u < 0.0 || u > 1.0) return 0.0;
-    return texture(u_polar, vec3(u, v, float(k))).r * 255.0;
+    if (u < 0.0 || u > 1.0) return vec2(0.0);
+    return texture(u_polar, vec3(u, v, float(k))).rg * 255.0;
 }
 
-float polar(vec3 p) {
+// Blend two samples; a product value only blends with another one.
+vec2 blend(vec2 a, vec2 b, float t) {
+    float r = mix(a.x, b.x, t);
+    float p = a.y < 0.5 ? b.y : (b.y < 0.5 ? a.y : mix(a.y, b.y, t));
+    return vec2(r, p);
+}
+
+vec2 polar(vec3 p) {
     vec3 d = p - u_radar;
     float s = length(d.xy);
     float h = d.z;
@@ -347,24 +484,24 @@ float polar(vec3 p) {
     if (az < 0.0) az += 6.2831853;
     float v = az / 6.2831853;
     int n = u_tilts;
-    if (n == 0 || e < u_elev[0] - 0.5 || e > u_elev[n - 1] + 0.5) return 0.0;
+    if (n == 0 || e < u_elev[0] - 0.5 || e > u_elev[n - 1] + 0.5) return vec2(0.0);
     int k = 0;
     for (int i = 1; i < 24; i++) {
         if (i >= n) break;
         if (e >= u_elev[i]) k = i;
     }
-    float a = tilt(k, r, v);
+    vec2 a = tilt(k, r, v);
     if (k + 1 < n && e > u_elev[k]) {
         float gap = u_elev[k + 1] - u_elev[k];
         float t = (e - u_elev[k]) / gap;
         if (gap <= 3.0) {
             // Between close tilts: blend across.
-            return mix(a, tilt(k + 1, r, v), t);
+            return blend(a, tilt(k + 1, r, v), t);
         }
         // Far apart: each tilt fills its own beam (~1°) only.
         if (e - u_elev[k] < 0.6) return a;
         if (u_elev[k + 1] - e < 0.6) return tilt(k + 1, r, v);
-        return 0.0;
+        return vec2(0.0);
     }
     return a;
 }
@@ -403,9 +540,21 @@ void main() {
         vec3 p = u_eye + dir * ts;
         vec3 q = vec3(p.xy, p.z / u_ex);
         if (q.z < ground(q.xy)) break;
-        float enc = u_mode == 0 ? polar(q) : grid(q);
-        if (enc >= enc_min) {
-            vec4 c = texture(u_lut, vec2(enc / 255.0, 0.5));
+        vec2 e = u_mode == 0 ? polar(q) : vec2(grid(q), 0.0);
+        if (e.x >= enc_min) {
+            vec4 c = texture(u_lut, vec2(e.x / 255.0, 0.5));
+            if (u_product > 0) {
+                // Colour from the product; opacity still from reflectivity.
+                if (e.y < 0.5) { t += step; continue; }
+                float val = u_prange.x + (e.y - 1.0) / 254.0 * (u_prange.y - u_prange.x);
+                if (u_product == 2) {
+                    vec2 rd = q.xy - u_radar.xy;
+                    float len = length(rd);
+                    if (len > 0.001) val -= dot(u_motion, rd / len);
+                }
+                float f = clamp((val - u_prange.x) / (u_prange.y - u_prange.x), 0.0, 1.0);
+                c.rgb = texture(u_plut, vec2(f, 0.5)).rgb;
+            }
             float a = 1.0 - exp(-c.a * step);
             acc.rgb += (1.0 - acc.a) * a * c.rgb;
             acc.a += (1.0 - acc.a) * a;
@@ -676,11 +825,12 @@ impl Inner {
     unsafe fn prepare_volume(&mut self, gl: &glow::Context, f: &Frame) -> bool {
         unsafe {
             gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
-            if self.volume.as_ref().is_none_or(|v| v.id != f.scene_id) {
+            let vid = format!("{}:{:?}", f.scene_id, f.product.moment());
+            if self.volume.as_ref().is_none_or(|v| v.id != vid) {
                 if let Some(old) = self.volume.take() {
                     gl.delete_texture(old.tex);
                 }
-                self.volume = upload_volume(gl, &f.scene, &f.scene_id);
+                self.volume = upload_volume(gl, &f.scene, &vid, f.product);
             }
             let gid = format!(
                 "{}:{}",
@@ -708,6 +858,36 @@ impl Inner {
                     self.ground = Some((gid, tex, t.n, t.cell_km));
                 }
             }
+            let code = f.product.code();
+            if self.plut.as_ref().is_none_or(|(c, _)| *c != code) {
+                if let Some((_, old)) = self.plut.take() {
+                    gl.delete_texture(old);
+                }
+                if let Ok(tex) = gl.create_texture() {
+                    let (lo, hi) = f.product.moment().range();
+                    let px: Vec<u8> = (0..256)
+                        .flat_map(|i| {
+                            let v = lo + (hi - lo) * i as f32 / 255.0;
+                            let c = f.product.color(v);
+                            [c[0], c[1], c[2], 255]
+                        })
+                        .collect();
+                    gl.bind_texture(glow::TEXTURE_2D, Some(tex));
+                    set_filter(gl, glow::TEXTURE_2D, glow::LINEAR);
+                    gl.tex_image_2d(
+                        glow::TEXTURE_2D,
+                        0,
+                        glow::RGBA8 as i32,
+                        256,
+                        1,
+                        0,
+                        glow::RGBA,
+                        glow::UNSIGNED_BYTE,
+                        glow::PixelUnpackData::Slice(Some(&px)),
+                    );
+                    self.plut = Some((code, tex));
+                }
+            }
             if self.lut.is_none() {
                 if let Ok(tex) = gl.create_texture() {
                     gl.bind_texture(glow::TEXTURE_2D, Some(tex));
@@ -728,14 +908,16 @@ impl Inner {
             }
             gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 4);
         }
-        self.volume.is_some() && self.lut.is_some()
+        self.volume.is_some() && self.lut.is_some() && self.plut.is_some()
     }
 
     unsafe fn draw_volume(&mut self, gl: &glow::Context, f: &Frame, vp: [i32; 4], aspect: f32) {
         if !unsafe { self.prepare_volume(gl, f) } {
             return;
         }
-        let (Some(p), Some(vol), Some((_, lut))) = (&self.progs, &self.volume, &self.lut) else {
+        let (Some(p), Some(vol), Some((_, lut)), Some((_, plut))) =
+            (&self.progs, &self.volume, &self.lut, &self.plut)
+        else {
             return;
         };
         let prog = p.volume;
@@ -772,6 +954,18 @@ impl Inner {
             gl.uniform_1_i32(u("u_grid").as_ref(), 1);
             gl.uniform_1_i32(u("u_lut").as_ref(), 2);
             gl.uniform_1_i32(u("u_ground").as_ref(), 3);
+            gl.uniform_1_i32(u("u_plut").as_ref(), 4);
+            let product = if vol.polar.is_some() {
+                vol.product
+            } else {
+                Product::Reflectivity
+            };
+            gl.uniform_1_i32(u("u_product").as_ref(), product.code());
+            let (lo, hi) = product.moment().range();
+            gl.uniform_2_f32(u("u_prange").as_ref(), lo, hi);
+            gl.uniform_2_f32(u("u_motion").as_ref(), f.motion[0], f.motion[1]);
+            gl.active_texture(glow::TEXTURE4);
+            gl.bind_texture(glow::TEXTURE_2D, Some(*plut));
             if let Some(pm) = &vol.polar {
                 gl.uniform_1_i32(u("u_mode").as_ref(), 0);
                 gl.active_texture(glow::TEXTURE0);
@@ -809,6 +1003,7 @@ impl Inner {
             }
             gl.draw_arrays(glow::TRIANGLES, 0, 3);
             for unit in [
+                glow::TEXTURE4,
                 glow::TEXTURE3,
                 glow::TEXTURE2,
                 glow::TEXTURE1,
@@ -858,7 +1053,12 @@ unsafe fn set_filter(gl: &glow::Context, target: u32, filter: u32) {
     }
 }
 
-unsafe fn upload_volume(gl: &glow::Context, scene: &Scene, id: &str) -> Option<Volume> {
+unsafe fn upload_volume(
+    gl: &glow::Context,
+    scene: &Scene,
+    id: &str,
+    product: Product,
+) -> Option<Volume> {
     unsafe {
         let tex = gl.create_texture().ok()?;
         if let Some(p) = scene.polar.as_ref().filter(|p| !p.sweeps.is_empty()) {
@@ -867,31 +1067,47 @@ unsafe fn upload_volume(gl: &glow::Context, scene: &Scene, id: &str) -> Option<V
                 width,
                 sweeps,
                 data,
+                ..
             } = p;
+            // Reflectivity and the product, side by side; a product is
+            // sampled gate by gate (blending velocities would invent values).
+            let second = p.moment(product.moment()).unwrap_or(data);
+            let n = sweeps.len().min(MAX_TILTS);
+            let len = width * AZIMUTHS * n;
+            let mut rg = Vec::with_capacity(len * 2);
+            for (a, b) in data[..len].iter().zip(&second[..len]) {
+                rg.push(*a);
+                rg.push(*b);
+            }
             gl.bind_texture(glow::TEXTURE_2D_ARRAY, Some(tex));
-            set_filter(gl, glow::TEXTURE_2D_ARRAY, glow::LINEAR);
+            let filter = if product == Product::Reflectivity {
+                glow::LINEAR
+            } else {
+                glow::NEAREST
+            };
+            set_filter(gl, glow::TEXTURE_2D_ARRAY, filter);
             // Azimuth wraps around north.
             gl.tex_parameter_i32(
                 glow::TEXTURE_2D_ARRAY,
                 glow::TEXTURE_WRAP_T,
                 glow::REPEAT as i32,
             );
-            let n = sweeps.len().min(MAX_TILTS);
             gl.tex_image_3d(
                 glow::TEXTURE_2D_ARRAY,
                 0,
-                glow::R8 as i32,
+                glow::RG8 as i32,
                 *width as i32,
                 AZIMUTHS as i32,
                 n as i32,
                 0,
-                glow::RED,
+                glow::RG,
                 glow::UNSIGNED_BYTE,
-                glow::PixelUnpackData::Slice(Some(&data[..width * AZIMUTHS * n])),
+                glow::PixelUnpackData::Slice(Some(&rg)),
             );
             let s = &sweeps[..n];
             return Some(Volume {
                 id: id.to_string(),
+                product,
                 tex,
                 polar: Some(PolarMeta {
                     radar: *radar,
@@ -938,6 +1154,7 @@ unsafe fn upload_volume(gl: &glow::Context, scene: &Scene, id: &str) -> Option<V
         );
         Some(Volume {
             id: id.to_string(),
+            product: Product::Reflectivity,
             tex,
             polar: None,
             grid: Some(GridMeta {
@@ -1037,6 +1254,8 @@ mod tests {
             ex: 1.0,
             dark: true,
             min_dbz: 10.0,
+            product: Product::Reflectivity,
+            motion: [0.0; 2],
             terrain: true,
             radar: true,
             photo: false,
