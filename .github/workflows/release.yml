@@ -205,7 +205,7 @@ jobs:
           Package: $APP_BIN
           Version: ${VERSION}-${SS_BUILD}
           Architecture: amd64
-          Depends: libspeechd2
+          Depends: libspeechd2, libasound2 | libasound2t64
           Recommends: espeak-ng
           Maintainer: Silver Skies <e993372@staff.poliberry.com>
           Description: $DEB_DESC
