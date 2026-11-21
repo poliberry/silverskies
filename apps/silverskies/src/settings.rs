@@ -163,6 +163,40 @@ fn appearance(ui: &mut Ui, app: &mut App, ch: &mut Changes) {
                 });
             ui.end_row();
 
+            row_label(ui, app, "Color from");
+            ui.horizontal(|ui| {
+                use crate::prefs::ColorSource;
+                for (v, l) in [
+                    (ColorSource::Weather, "The weather"),
+                    (ColorSource::System, "System accent color"),
+                ] {
+                    ch.prefs |= ui
+                        .selectable_value(&mut app.prefs.color_source, v, l)
+                        .changed();
+                }
+            });
+            ui.end_row();
+
+            row_label(ui, app, "Temperature card");
+            ui.horizontal(|ui| {
+                use crate::prefs::HeroStyle;
+                for (v, l) in [
+                    (HeroStyle::Sky, "Animated sky"),
+                    (HeroStyle::Tonal, "Plain"),
+                ] {
+                    ch.prefs |= ui
+                        .selectable_value(&mut app.prefs.hero_style, v, l)
+                        .changed();
+                }
+            });
+            ui.end_row();
+
+            row_label(ui, app, "Background");
+            ch.prefs |= ui
+                .checkbox(&mut app.prefs.bing_wallpaper, "Bing picture of the day")
+                .changed();
+            ui.end_row();
+
             row_label(ui, app, "Top glow");
             ch.config |= ui
                 .checkbox(
@@ -445,6 +479,45 @@ fn developer(ui: &mut Ui, app: &mut App) {
                 }
             });
             ui.data_mut(|d| d.insert_temp(id, pick));
+            ui.add_space(8.0);
+            ui.label(
+                RichText::new("Preview the temperature card's sky for another condition (not saved).")
+                    .size(12.5)
+                    .color(c32a(p.text2)),
+            );
+            ui.horizontal(|ui| {
+                const SKIES: [(u8, &str); 8] = [
+                    (0, "Clear"),
+                    (2, "Partly cloudy"),
+                    (3, "Overcast"),
+                    (45, "Fog"),
+                    (53, "Drizzle"),
+                    (63, "Rain"),
+                    (73, "Snow"),
+                    (95, "Thunderstorm"),
+                ];
+                let (mut code, mut day) = app.demo_sky.unwrap_or((0, true));
+                let name = SKIES.iter().find(|(c, _)| *c == code).map_or("—", |s| s.1);
+                let before = (code, day);
+                egui::ComboBox::from_id_salt("demo_sky")
+                    .selected_text(if app.demo_sky.is_some() { name } else { "Real weather" })
+                    .width(160.0)
+                    .show_ui(ui, |ui| {
+                        for (c, n) in SKIES {
+                            ui.selectable_value(&mut code, c, n);
+                        }
+                    });
+                ui.checkbox(&mut day, "Day");
+                if (code, day) != before || (app.demo_sky.is_none() && (code, day) != (0, true)) {
+                    app.demo_sky = Some((code, day));
+                }
+                if ui
+                    .add_enabled(app.demo_sky.is_some(), egui::Button::new("Real weather"))
+                    .clicked()
+                {
+                    app.demo_sky = None;
+                }
+            });
         });
 }
 

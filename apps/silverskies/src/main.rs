@@ -4,8 +4,10 @@
 //! and keywords, a simple radar loop and official WMO alerts. AI summaries
 //! and answers are optional (bring your own Anthropic API key).
 
+mod accent;
 mod ai;
 mod app;
+mod easter;
 mod m3;
 mod menu;
 mod motion;
@@ -14,6 +16,7 @@ mod radar;
 mod search;
 mod searchbar;
 mod settings;
+mod sky;
 mod summary;
 mod theme;
 mod views;

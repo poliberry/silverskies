@@ -14,7 +14,7 @@ The colour scheme is generated from the sky: the accent follows the current cond
 
 From top to bottom:
 
-- **Now:** the current temperature, condition, feels-like, today's high and low, and the weather icon on an animated shape.
+- **Now:** the current temperature, condition, feels-like, today's high and low, and the weather icon on an animated shape, over an **animated sky** for the weather: a blue or night gradient with the sun's glow or a moon and twinkling stars when it's clear, drifting clouds, falling rain, drizzle or snow, fog banks, and flashes of lightning in a thunderstorm. (Settings → Appearance → Temperature card: *Plain* for the tonal colour instead; with reduced motion it holds still.)
 - **Summary:** a plain-language summary written on your computer from the forecast (no AI needed), with highlights such as rain timing. With AI turned on, **Summarize** adds an AI-written summary underneath.
 - **Stat tiles:** humidity, wind, wind direction, precipitation in the last hour.
 - **Hourly forecast:** the next 24 hours as pills (temperature, icon, chance of rain); "Now" is filled.
@@ -61,11 +61,11 @@ Press **Alt** to reveal the menu bar (File, Edit, View, Help); Alt or Esc hides 
 ## Settings
 
 - **Units and time:** °F/°C (with mph or km/h), 12- or 24-hour clock.
-- **Appearance:** light, dark or follow the system; colour theme ("Match the sky" or a fixed palette); **motion** (animations can be reduced).
+- **Appearance:** light, dark or follow the system; colour theme ("Match the sky" or a fixed palette); **colour from** the weather (the default) or your **system accent colour** (Windows' accent colour, macOS's accent, GNOME's accent colour, KDE's accent; checked every minute, so changing it in your system settings follows); the temperature card (animated sky or plain); **background**: Bing's picture of the day behind the app (downloaded once a day, credited at the foot of the sidebar); **motion** (animations can be reduced).
 - **Weather:** the forecast source — Open-Meteo (default, free, no key) or AccuWeather (needs your API key; see [Data sources](Data-Sources)) — and the refresh interval.
 - **AI:** optional; see [AI assistant](AI-Assistant). You can also have an AI summary written automatically when a forecast loads.
 - **Updates:** automatic checks on or off, check now, install.
-- **Developer:** add demo alerts to see how alerts look (never saved).
+- **Developer:** add demo alerts to see how alerts look, and preview the temperature card's sky for any condition, day or night (never saved).
 
 Settings are saved as you change them, in the folder shown at the bottom of the dialog (see [Settings and files](Settings-and-Files)).
 

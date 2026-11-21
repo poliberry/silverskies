@@ -19,6 +19,13 @@ pub struct Prefs {
     pub reduce_motion: bool,
     /// Satellite imagery under the radar instead of the grey map.
     pub radar_imagery: bool,
+    /// The temperature card: an animated sky for the weather, or the plain
+    /// tonal colour.
+    pub hero_style: HeroStyle,
+    /// Bing's picture of the day behind the app.
+    pub bing_wallpaper: bool,
+    /// What colours the app: the weather, or the system's accent colour.
+    pub color_source: ColorSource,
     // --- legacy (pre-multi-provider) fields, read once for migration ---
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ai_enabled: Option<bool>,
@@ -26,6 +33,24 @@ pub struct Prefs {
     pub anthropic_api_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ai_model: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum HeroStyle {
+    #[default]
+    Sky,
+    Tonal,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ColorSource {
+    /// Seeded by the current weather (the default).
+    #[default]
+    Weather,
+    /// Seeded by the operating system's accent colour.
+    System,
 }
 
 impl Prefs {

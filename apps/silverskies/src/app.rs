@@ -118,6 +118,18 @@ pub struct App {
     pub notice: Option<(String, Instant)>,
     /// Locally generated alerts from Settings → Developer (never persisted).
     pub demo_alerts: Vec<Alert>,
+    /// Logo clicks, the spin they started (time it began, turns), and
+    /// whether the easter egg is on (for good, until the app closes).
+    logo_clicks: u32,
+    logo_spin: (f64, f32),
+    easter: Option<egui::TextureHandle>,
+    /// Bing's picture of the day (texture, caption), and the day it was
+    /// asked for.
+    pub wallpaper: Option<(egui::TextureHandle, String)>,
+    wallpaper_day: Option<chrono::NaiveDate>,
+    /// Developer preview: show the temperature card's sky for this WMO
+    /// code and day/night instead of the real weather (never saved).
+    pub demo_sky: Option<(u8, bool)>,
     /// Updates from GitHub Releases.
     pub updater: ss_update::Updater,
     /// The "update available" card was dismissed for this session.
@@ -205,6 +217,16 @@ impl App {
             locating: false,
             notice: None,
             demo_alerts: Vec::new(),
+            wallpaper: None,
+            wallpaper_day: None,
+            logo_clicks: 0,
+            logo_spin: (0.0, 0.0),
+            easter: None,
+            // `SS_DEMO_SKY=95,0` (code, 1 = day) for testing.
+            demo_sky: std::env::var("SS_DEMO_SKY").ok().and_then(|v| {
+                let (c, d) = v.split_once(',')?;
+                Some((c.trim().parse().ok()?, d.trim() != "0"))
+            }),
             updater: ss_update::Updater::new(ss_update::App::Simple),
             update_card_dismissed: false,
             refresh_due: None,
@@ -593,6 +615,11 @@ impl App {
                 )
             })
             .unwrap_or([0x8a, 0x64, 0xff]);
+        // Or the system's accent colour, when chosen (and known).
+        let accent = match self.prefs.color_source {
+            crate::prefs::ColorSource::System => crate::accent::get().unwrap_or(accent),
+            crate::prefs::ColorSource::Weather => accent,
+        };
         let p = theme::simple_palette(&self.config, accent, system_dark);
         if p != self.palette {
             self.palette = p;
@@ -975,6 +1002,18 @@ impl App {
                         self.save_locations();
                     }
                 }
+                Event::Wallpaper(r) => match r {
+                    Ok((rgba, size, caption)) => {
+                        let img = egui::ColorImage::from_rgba_unmultiplied(size, &rgba);
+                        let tex = self.ctx.load_texture(
+                            "bing-wallpaper",
+                            img,
+                            egui::TextureOptions::LINEAR,
+                        );
+                        self.wallpaper = Some((tex, caption));
+                    }
+                    Err(e) => tracing::warn!("Bing wallpaper: {e}"),
+                },
                 Event::Maps(r) => match r {
                     Ok(m) => self.maps = Some(m),
                     Err(e) => tracing::warn!("weather maps: {e}"),
@@ -1027,8 +1066,39 @@ impl App {
                 Layout::top_down(Align::Min),
                 |ui| {
                     ui.spacing_mut().item_spacing.y = 0.0;
-                    let logo = theme::logomark(ui, &p, 36.0);
-                    ui.add(logo);
+                    // Each click spins the logo a full turn (and ten of them
+                    // do something else).
+                    let now_t = ui.input(|i| i.time);
+                    let (t0, turns) = self.logo_spin;
+                    let k = ((now_t - t0) / 0.6).clamp(0.0, 1.0) as f32;
+                    let ease = 1.0 - (1.0 - k).powi(3);
+                    let angle = (turns - 1.0 + ease) * std::f32::consts::TAU;
+                    if k < 1.0 {
+                        ui.ctx().request_repaint();
+                    }
+                    let logo = theme::logomark(ui, &p, 36.0)
+                        .rotate(
+                            if turns > 0.0 { angle } else { 0.0 },
+                            egui::Vec2::splat(0.5),
+                        )
+                        .sense(egui::Sense::click());
+                    if ui.add(logo).clicked() {
+                        self.logo_spin = (now_t, turns.max(0.0).floor() + 1.0);
+                        self.logo_clicks += 1;
+                        if self.logo_clicks == crate::easter::CLICKS && self.easter.is_none() {
+                            if let Ok(img) = image::load_from_memory(crate::easter::IMAGE) {
+                                let rgba = img.to_rgba8();
+                                let size = [rgba.width() as usize, rgba.height() as usize];
+                                let ci = egui::ColorImage::from_rgba_unmultiplied(size, &rgba);
+                                self.easter = Some(ui.ctx().load_texture(
+                                    "easter-egg",
+                                    ci,
+                                    egui::TextureOptions::LINEAR,
+                                ));
+                            }
+                            crate::easter::play_forever(crate::easter::song(self.store.dir()));
+                        }
+                    }
                     let stamp = self
                         .last_refresh
                         .map(|t| {
@@ -1182,6 +1252,62 @@ impl eframe::App for App {
         self.update_palette();
         crate::motion::set_reduced(self.prefs.reduce_motion);
         let p = self.palette;
+        // Bing's picture of the day behind everything (asked for once a
+        // day), under a scrim of the background colour so text stays clear.
+        let wallpaper_on = self.prefs.bing_wallpaper;
+        if wallpaper_on {
+            let today = chrono::Local::now().date_naive();
+            if self.wallpaper_day != Some(today) {
+                self.wallpaper_day = Some(today);
+                self.worker.bing_wallpaper(self.store.dir().to_path_buf());
+            }
+        }
+        let wallpaper = self.wallpaper.as_ref().filter(|_| wallpaper_on);
+        let panel_fill = if let Some(tex) = &self.easter {
+            // The easter egg: the picture behind everything, everything else
+            // at 40%.
+            let screen = ui.ctx().content_rect();
+            let painter = ui.ctx().layer_painter(egui::LayerId::background());
+            let [iw, ih] = tex.size();
+            let scale = (screen.width() / iw as f32).max(screen.height() / ih as f32);
+            let (u, v) = (
+                screen.width() / (iw as f32 * scale),
+                screen.height() / (ih as f32 * scale),
+            );
+            let uv = egui::Rect::from_center_size(egui::pos2(0.5, 0.5), egui::vec2(u, v));
+            painter.image(tex.id(), screen, uv, egui::Color32::WHITE);
+            ui.multiply_opacity(0.4);
+            egui::Color32::TRANSPARENT
+        } else if let Some((tex, _)) = wallpaper {
+            let screen = ui.ctx().content_rect();
+            let painter = ui.ctx().layer_painter(egui::LayerId::background());
+            let [iw, ih] = tex.size();
+            // Cover: fill the window, cropping the picture's overflow.
+            let scale = (screen.width() / iw as f32).max(screen.height() / ih as f32);
+            let (u, v) = (
+                screen.width() / (iw as f32 * scale),
+                screen.height() / (ih as f32 * scale),
+            );
+            let uv = egui::Rect::from_center_size(egui::pos2(0.5, 0.5), egui::vec2(u, v));
+            painter.image(tex.id(), screen, uv, egui::Color32::WHITE);
+            let scrim = if theme::is_dark(&p) { 150 } else { 125 };
+            painter.rect_filled(screen, 0.0, theme::alpha(p.bg, scrim));
+            // The photo's credit, at the foot of the sidebar.
+            if let Some((_, caption)) = wallpaper {
+                let font = egui::FontId::proportional(11.0);
+                let g = painter.layout(
+                    format!("Photo: Bing · {caption}"),
+                    font,
+                    theme::c32a(p.text2),
+                    SIDEBAR_W - 40.0,
+                );
+                let at = screen.left_bottom() + egui::vec2(20.0, -10.0 - g.size().y);
+                painter.galley(at, g, egui::Color32::WHITE);
+            }
+            egui::Color32::TRANSPARENT
+        } else {
+            c32(p.bg)
+        };
         let mut actions: Vec<Action> = Vec::new();
 
         crate::menu::shortcuts(ui.ctx(), self, &mut actions);
@@ -1205,7 +1331,7 @@ impl eframe::App for App {
             .show_separator_line(false)
             .frame(
                 egui::Frame::NONE
-                    .fill(c32(p.bg))
+                    .fill(panel_fill)
                     .inner_margin(Margin::symmetric(20, 10)),
             )
             .show(ui, |ui| self.top_bar(ui, &mut actions));
@@ -1233,7 +1359,7 @@ impl eframe::App for App {
             .exact_size(SIDEBAR_W)
             .resizable(false)
             .show_separator_line(false)
-            .frame(egui::Frame::NONE.fill(c32(p.bg)).inner_margin(Margin {
+            .frame(egui::Frame::NONE.fill(panel_fill).inner_margin(Margin {
                 left: 20,
                 right: 10,
                 top: 16,
@@ -1242,7 +1368,7 @@ impl eframe::App for App {
             .show(ui, |ui| crate::views::places(ui, self, &mut actions));
 
         egui::CentralPanel::default()
-            .frame(egui::Frame::NONE.fill(c32(p.bg)).inner_margin(Margin {
+            .frame(egui::Frame::NONE.fill(panel_fill).inner_margin(Margin {
                 left: 10,
                 right: 20,
                 top: 14,
@@ -1281,7 +1407,7 @@ impl eframe::App for App {
                         .max_rect(area)
                         .layout(Layout::top_down(Align::Min)),
                 );
-                content.set_opacity(o);
+                content.multiply_opacity(o);
                 let ui = &mut content;
                 match self.tab {
                     Tab::Forecast => crate::views::forecast(ui, self, &mut actions),

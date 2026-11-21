@@ -3932,6 +3932,7 @@ dependencies = [
  "image",
  "parking_lot 0.12.5",
  "reqwest",
+ "rodio",
  "serde",
  "serde_json",
  "ss-ai",

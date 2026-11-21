@@ -786,7 +786,7 @@ pub fn forecast(ui: &mut Ui, app: &mut App, actions: &mut Vec<Action>) {
                                 .max_rect(shown)
                                 .layout(Layout::top_down(Align::Min)),
                         );
-                        tile.set_opacity(op);
+                        tile.multiply_opacity(op);
                         draw_cell(
                             &mut tile, app, &p, &loc.label, &w, &alerts, now, c, shown, actions,
                         );
@@ -853,8 +853,31 @@ fn draw_cell(
     let tf = app.config.time_format;
     let cur = &w.current;
     match c {
+        Cell::Hero if app.prefs.hero_style == crate::prefs::HeroStyle::Sky => {
+            // The animated sky (still with reduced motion).
+            let t = if app.prefs.reduce_motion {
+                12.0
+            } else {
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_millis(33));
+                ui.input(|i| i.time)
+            };
+            let (code, day) = app.demo_sky.unwrap_or((cur.weather_code, cur.is_day));
+            crate::sky::paint(
+                ui.ctx(),
+                ui.painter(),
+                rect,
+                RADIUS as f32,
+                i32::from(code),
+                day,
+                t,
+            );
+            cell(ui, rect, Color32::TRANSPARENT, "hero", |ui| {
+                hero(ui, p, &s, place, w, units, now, tf, true)
+            })
+        }
         Cell::Hero => cell(ui, rect, s.primary_container, "hero", |ui| {
-            hero(ui, p, &s, place, w, units, now, tf)
+            hero(ui, p, &s, place, w, units, now, tf, false)
         }),
         Cell::Summary => cell(ui, rect, s.surface_container, "summary", |ui| {
             summary_tile(ui, app, p, &s, w, alerts, now, actions)
@@ -1005,10 +1028,16 @@ fn hero(
     units: UnitPref,
     now: chrono::NaiveDateTime,
     tf: TimeFormat,
+    on_sky: bool,
 ) {
     let rect = ui.max_rect();
     let cur = &w.current;
-    let ink = s.on_primary_container;
+    // White on the animated sky; the scheme's ink on the tonal card.
+    let ink = if on_sky {
+        Color32::WHITE
+    } else {
+        s.on_primary_container
+    };
     let soft = ink.gamma_multiply(0.78);
 
     // The weather icon on layered expressive shapes, right-hand side.
@@ -1040,7 +1069,11 @@ fn hero(
         size * 0.58 * grow,
         9,
         0.35 * turn,
-        s.surface_container_low,
+        if on_sky {
+            Color32::from_white_alpha(46)
+        } else {
+            s.surface_container_low
+        },
     );
     icon(
         ui,

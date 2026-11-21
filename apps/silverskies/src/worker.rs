@@ -30,6 +30,8 @@ pub enum Event {
         label: String,
     },
     Maps(Result<WeatherMaps, String>),
+    /// Bing's picture of the day: RGBA pixels, size, and its caption.
+    Wallpaper(Result<(Vec<u8>, [usize; 2], String), String>),
     Ai {
         /// Which request this answers (see `App::ai_seq`).
         seq: u64,
@@ -131,6 +133,14 @@ impl Worker {
         });
     }
 
+    /// Bing's picture of the day, kept in `dir` (one file per day) so it
+    /// downloads once.
+    pub fn bing_wallpaper(&self, dir: std::path::PathBuf) {
+        self.spawn(move |net, _| async move {
+            Event::Wallpaper(bing_wallpaper(&net, &dir).await.map_err(|e| e.to_string()))
+        });
+    }
+
     pub fn weather_maps(&self) {
         self.spawn(move |net, _| async move {
             Event::Maps(net.weather_maps().await.map_err(|e| e.to_string()))
@@ -150,6 +160,75 @@ impl Worker {
 
 /// Keep alerts whose area covers the point (or that carry no geometry, so
 /// can't be ruled out), classified, de-duplicated and most severe first.
+const BING_INDEX: &str = "https://www.bing.com/HPImageArchive.aspx?format=js&idx=0&n=1&mkt=en-US";
+
+/// The URL, caption and date of Bing's picture of the day.
+pub fn parse_bing(json: &str) -> Option<(String, String, String)> {
+    let v: serde_json::Value = serde_json::from_str(json).ok()?;
+    let img = v.get("images")?.get(0)?;
+    let url = img.get("url")?.as_str()?;
+    let url = if url.starts_with("http") {
+        url.to_string()
+    } else {
+        format!("https://www.bing.com{url}")
+    };
+    let caption = img
+        .get("copyright")
+        .and_then(|c| c.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let date = img
+        .get("startdate")
+        .and_then(|c| c.as_str())
+        .unwrap_or("today")
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .collect();
+    Some((url, caption, date))
+}
+
+async fn bing_wallpaper(
+    net: &Net,
+    dir: &std::path::Path,
+) -> Result<(Vec<u8>, [usize; 2], String), String> {
+    let json = net
+        .get_text(BING_INDEX, None)
+        .await
+        .map_err(|e| e.to_string())?;
+    let (url, caption, date) = parse_bing(&json).ok_or("no picture of the day")?;
+    let file = dir.join(format!("bing-{date}.jpg"));
+    let bytes = match std::fs::read(&file) {
+        Ok(b) => b,
+        Err(_) => {
+            let b = net.get_bytes(&url, None).await.map_err(|e| e.to_string())?;
+            // Keep only today's picture.
+            if let Ok(rd) = std::fs::read_dir(dir) {
+                for e in rd.flatten() {
+                    let n = e.file_name().to_string_lossy().to_string();
+                    if n.starts_with("bing-") && n.ends_with(".jpg") {
+                        let _ = std::fs::remove_file(e.path());
+                    }
+                }
+            }
+            let _ = std::fs::write(&file, &b);
+            b
+        }
+    };
+    tokio::task::spawn_blocking(move || {
+        let img = image::load_from_memory(&bytes).map_err(|e| e.to_string())?;
+        let img = if img.width() > 2560 {
+            img.resize(2560, 2560, image::imageops::FilterType::Triangle)
+        } else {
+            img
+        };
+        let rgba = img.to_rgba8();
+        let size = [rgba.width() as usize, rgba.height() as usize];
+        Ok((rgba.into_raw(), size, caption))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 pub fn alerts_for_point(all: Vec<Alert>, lat: f64, lon: f64) -> Vec<Alert> {
     let mut v: Vec<Alert> = all
         .into_iter()
@@ -176,6 +255,18 @@ pub fn alerts_for_point(all: Vec<Alert>, lat: f64, lon: f64) -> Vec<Alert> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_the_bing_index() {
+        let j = r#"{"images":[{"startdate":"20261121","url":"/th?id=OHR.Owl_EN-US123_1920x1080.jpg&rf=x&pid=hp","copyright":"An owl (© Someone)"}]}"#;
+        let (u, c, d) = parse_bing(j).unwrap();
+        assert_eq!(
+            u,
+            "https://www.bing.com/th?id=OHR.Owl_EN-US123_1920x1080.jpg&rf=x&pid=hp"
+        );
+        assert_eq!((c.as_str(), d.as_str()), ("An owl (© Someone)", "20261121"));
+        assert!(parse_bing("{}").is_none());
+    }
     use ss_core::{AlertSource, Geometry, Severity};
 
     fn alert(id: &str, event: &str, geometry: Option<Geometry>) -> Alert {
