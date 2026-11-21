@@ -47,7 +47,7 @@ The product menu in the toolbar colours the volume by any moment the scan carrie
 
 Split cuts (one scan with reflectivity and dual-pol, another with velocity, at the same tilt) are merged onto one layout, and products are sampled gate by gate rather than blended.
 
-Outside NEXRAD coverage the estimated columns are gridded (2 km × 0.5 km) and ray-marched the same way. On computers without OpenGL 3, the pane falls back to drawing echoes as soft points.
+Outside NEXRAD coverage the estimated columns are gridded (2 km × 0.5 km) and ray-marched the same way. In a big pane (an undocked or maximised window, or a high-DPI screen) the ray-march runs on at most about 0.36 million pixels and is scaled up to fit, so it costs the same as in a docked pane. On computers without OpenGL 3, the pane falls back to drawing echoes as soft points.
 
 ## Controls
 

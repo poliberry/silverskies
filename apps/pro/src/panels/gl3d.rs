@@ -88,8 +88,25 @@ struct GpuLeaf {
 struct Programs {
     terrain: glow::Program,
     volume: glow::Program,
+    /// Copies the reduced-size volume image onto the pane.
+    blit: glow::Program,
     vao: glow::VertexArray,
 }
+
+/// The ray-march runs on at most this many pixels; a bigger pane (an
+/// undocked or maximised window) gets it scaled up, so its cost stays
+/// that of a docked pane.
+const MAX_VOLUME_PIXELS: f32 = 360_000.0;
+
+const BLIT_FS: &str = r#"
+uniform vec4 u_viewport;
+uniform sampler2D u_tex;
+out vec4 frag;
+void main() {
+    vec2 uv = (gl_FragCoord.xy - u_viewport.xy) / u_viewport.zw;
+    frag = texture(u_tex, uv);
+}
+"#;
 
 /// The textures for one scan.
 struct Volume {
@@ -125,6 +142,9 @@ struct Inner {
     lut: Option<(i32, glow::Texture)>,
     /// The product colour scale, by product.
     plut: Option<(i32, glow::Texture)>,
+    /// Off-screen target for the reduced-size ray-march: (fbo, colour
+    /// texture, width, height).
+    target: Option<(glow::Framebuffer, glow::Texture, i32, i32)>,
     frame: u64,
 }
 
@@ -535,10 +555,12 @@ impl Inner {
         unsafe {
             let terrain = program(gl, &head, TERRAIN_VS, TERRAIN_FS)?;
             let volume = program(gl, &head, VOLUME_VS, VOLUME_FS)?;
+            let blit = program(gl, &head, VOLUME_VS, BLIT_FS)?;
             let vao = gl.create_vertex_array()?;
             self.progs = Some(Programs {
                 terrain,
                 volume,
+                blit,
                 vao,
             });
         }
@@ -568,6 +590,9 @@ impl Inner {
         }
         let vp = info.viewport_in_pixels();
         let clip = info.clip_rect_in_pixels();
+        // `SS_GL3D_TIMING=1`: log how long each frame takes (testing).
+        let timing = std::env::var_os("SS_GL3D_TIMING").is_some();
+        let t0 = std::time::Instant::now();
         let aspect = vp.width_px as f32 / vp.height_px.max(1) as f32;
         unsafe {
             gl.enable(glow::SCISSOR_TEST);
@@ -584,12 +609,21 @@ impl Inner {
                 self.draw_terrain(painter, f, aspect);
             }
             if f.radar {
-                self.draw_volume(
-                    gl,
-                    f,
-                    [vp.left_px, vp.from_bottom_px, vp.width_px, vp.height_px],
-                    aspect,
-                );
+                let full = [vp.left_px, vp.from_bottom_px, vp.width_px, vp.height_px];
+                let px = (vp.width_px * vp.height_px) as f32;
+                // `SS_GL3D_MAX_PX` overrides the cap (testing).
+                let cap = std::env::var("SS_GL3D_MAX_PX")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(MAX_VOLUME_PIXELS);
+                let scale = (cap / px.max(1.0)).sqrt();
+                if scale >= 0.95 {
+                    self.draw_volume(gl, f, full, aspect);
+                } else {
+                    let w = ((vp.width_px as f32 * scale) as i32).max(1);
+                    let h = ((vp.height_px as f32 * scale) as i32).max(1);
+                    self.draw_volume_scaled(gl, f, full, [w, h], aspect, &clip);
+                }
             }
             gl.depth_mask(true);
             gl.disable(glow::DEPTH_TEST);
@@ -597,6 +631,15 @@ impl Inner {
             gl.bind_buffer(glow::ARRAY_BUFFER, None);
             gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, None);
             gl.active_texture(glow::TEXTURE0);
+            if timing {
+                gl.finish();
+                tracing::info!(
+                    "3D frame {}x{}: {:.1} ms",
+                    vp.width_px,
+                    vp.height_px,
+                    t0.elapsed().as_secs_f64() * 1000.0
+                );
+            }
         }
         self.evict(gl);
     }
@@ -805,6 +848,111 @@ impl Inner {
             gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 4);
         }
         self.volume.is_some() && self.lut.is_some() && self.plut.is_some()
+    }
+
+    /// Ray-march into a `size` image off screen, then scale it onto `vp`.
+    unsafe fn draw_volume_scaled(
+        &mut self,
+        gl: &glow::Context,
+        f: &Frame,
+        vp: [i32; 4],
+        size: [i32; 2],
+        aspect: f32,
+        clip: &egui::epaint::ViewportInPixels,
+    ) {
+        unsafe {
+            // (Re)make the target at this size.
+            if self.target.is_none_or(|t| (t.2, t.3) != (size[0], size[1])) {
+                if let Some((fb, tex, _, _)) = self.target.take() {
+                    gl.delete_framebuffer(fb);
+                    gl.delete_texture(tex);
+                }
+                let (Ok(fb), Ok(tex)) = (gl.create_framebuffer(), gl.create_texture()) else {
+                    return;
+                };
+                gl.bind_texture(glow::TEXTURE_2D, Some(tex));
+                gl.tex_image_2d(
+                    glow::TEXTURE_2D,
+                    0,
+                    glow::RGBA8 as i32,
+                    size[0],
+                    size[1],
+                    0,
+                    glow::RGBA,
+                    glow::UNSIGNED_BYTE,
+                    glow::PixelUnpackData::Slice(None),
+                );
+                for (k, v) in [
+                    (glow::TEXTURE_MIN_FILTER, glow::LINEAR),
+                    (glow::TEXTURE_MAG_FILTER, glow::LINEAR),
+                    (glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE),
+                    (glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE),
+                ] {
+                    gl.tex_parameter_i32(glow::TEXTURE_2D, k, v as i32);
+                }
+                gl.bind_texture(glow::TEXTURE_2D, None);
+                let prev = gl.get_parameter_framebuffer(glow::FRAMEBUFFER_BINDING);
+                gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fb));
+                gl.framebuffer_texture_2d(
+                    glow::FRAMEBUFFER,
+                    glow::COLOR_ATTACHMENT0,
+                    glow::TEXTURE_2D,
+                    Some(tex),
+                    0,
+                );
+                let ok =
+                    gl.check_framebuffer_status(glow::FRAMEBUFFER) == glow::FRAMEBUFFER_COMPLETE;
+                gl.bind_framebuffer(glow::FRAMEBUFFER, prev);
+                if !ok {
+                    gl.delete_framebuffer(fb);
+                    gl.delete_texture(tex);
+                    // Can't render off screen here: full size it is.
+                    self.draw_volume(gl, f, vp, aspect);
+                    return;
+                }
+                self.target = Some((fb, tex, size[0], size[1]));
+            }
+            let Some((fb, tex, _, _)) = self.target else {
+                return;
+            };
+            // March into the small image.
+            let prev = gl.get_parameter_framebuffer(glow::FRAMEBUFFER_BINDING);
+            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fb));
+            gl.disable(glow::SCISSOR_TEST);
+            gl.viewport(0, 0, size[0], size[1]);
+            gl.clear_color(0.0, 0.0, 0.0, 0.0);
+            gl.clear(glow::COLOR_BUFFER_BIT);
+            self.draw_volume(gl, f, [0, 0, size[0], size[1]], aspect);
+            // And scale it onto the pane.
+            gl.bind_framebuffer(glow::FRAMEBUFFER, prev);
+            gl.viewport(vp[0], vp[1], vp[2], vp[3]);
+            gl.enable(glow::SCISSOR_TEST);
+            gl.scissor(
+                clip.left_px,
+                clip.from_bottom_px,
+                clip.width_px,
+                clip.height_px,
+            );
+            let Some(p) = &self.progs else { return };
+            gl.use_program(Some(p.blit));
+            gl.bind_vertex_array(Some(p.vao));
+            gl.disable(glow::DEPTH_TEST);
+            gl.enable(glow::BLEND);
+            gl.blend_func(glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
+            let u = |n: &str| gl.get_uniform_location(p.blit, n);
+            gl.uniform_4_f32(
+                u("u_viewport").as_ref(),
+                vp[0] as f32,
+                vp[1] as f32,
+                vp[2] as f32,
+                vp[3] as f32,
+            );
+            gl.uniform_1_i32(u("u_tex").as_ref(), 0);
+            gl.active_texture(glow::TEXTURE0);
+            gl.bind_texture(glow::TEXTURE_2D, Some(tex));
+            gl.draw_arrays(glow::TRIANGLES, 0, 3);
+            gl.bind_texture(glow::TEXTURE_2D, None);
+        }
     }
 
     unsafe fn draw_volume(&mut self, gl: &glow::Context, f: &Frame, vp: [i32; 4], aspect: f32) {
